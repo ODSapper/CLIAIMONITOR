@@ -146,6 +146,18 @@ body {
     opacity: 0.5;
 }
 
+.btn-small {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    margin-left: 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+}
+
+.btn-small:hover {
+    background: var(--border-color);
+}
+
 /* Main Layout */
 .main-content {
     display: grid;

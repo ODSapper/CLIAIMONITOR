@@ -77,6 +77,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/agents/spawn", s.handleSpawnAgent).Methods("POST")
 	api.HandleFunc("/agents/{id}/stop", s.handleStopAgent).Methods("POST")
 	api.HandleFunc("/human-input/{id}", s.handleAnswerHumanInput).Methods("POST")
+	api.HandleFunc("/alerts/clear", s.handleClearAllAlerts).Methods("POST")
 	api.HandleFunc("/alerts/{id}/ack", s.handleAcknowledgeAlert).Methods("POST")
 	api.HandleFunc("/thresholds", s.handleUpdateThresholds).Methods("PUT")
 	api.HandleFunc("/metrics/reset", s.handleResetMetrics).Methods("POST")

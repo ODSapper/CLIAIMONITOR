@@ -197,6 +197,14 @@ func (s *Server) handleAcknowledgeAlert(w http.ResponseWriter, r *http.Request) 
 	s.respondJSON(w, map[string]bool{"success": true})
 }
 
+// handleClearAllAlerts clears all alerts
+func (s *Server) handleClearAllAlerts(w http.ResponseWriter, r *http.Request) {
+	s.store.ClearAllAlerts()
+	s.broadcastState()
+
+	s.respondJSON(w, map[string]bool{"success": true})
+}
+
 // handleUpdateThresholds updates alert thresholds
 func (s *Server) handleUpdateThresholds(w http.ResponseWriter, r *http.Request) {
 	var thresholds types.AlertThresholds

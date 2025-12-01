@@ -184,6 +184,14 @@ class Dashboard {
         }
     }
 
+    async clearAllAlerts() {
+        try {
+            await fetch('/api/alerts/clear', { method: 'POST' });
+        } catch (error) {
+            console.error('Failed to clear alerts:', error);
+        }
+    }
+
     async saveThresholds(thresholds) {
         try {
             await fetch('/api/thresholds', {
@@ -251,6 +259,13 @@ class Dashboard {
         document.getElementById('reset-metrics').addEventListener('click', () => {
             if (confirm('Reset all metrics history?')) {
                 this.resetMetrics();
+            }
+        });
+
+        // Clear all alerts
+        document.getElementById('clear-alerts-btn').addEventListener('click', () => {
+            if (confirm('Clear all alerts?')) {
+                this.clearAllAlerts();
             }
         });
 

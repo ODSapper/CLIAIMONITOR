@@ -41,6 +41,7 @@ type Store interface {
 	// Alert operations
 	AddAlert(alert *types.Alert)
 	AcknowledgeAlert(id string)
+	ClearAllAlerts()
 	GetActiveAlerts() []*types.Alert
 
 	// Activity log
@@ -339,6 +340,16 @@ func (s *JSONStore) AcknowledgeAlert(id string) {
 			alert.Acknowledged = true
 			break
 		}
+	}
+	s.mu.Unlock()
+	s.scheduleSave()
+}
+
+// ClearAllAlerts marks all alerts as acknowledged
+func (s *JSONStore) ClearAllAlerts() {
+	s.mu.Lock()
+	for _, alert := range s.state.Alerts {
+		alert.Acknowledged = true
 	}
 	s.mu.Unlock()
 	s.scheduleSave()
