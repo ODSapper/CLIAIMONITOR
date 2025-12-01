@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/CLIAIMONITOR/internal/types"
 )
@@ -214,19 +213,12 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	pid := cmd.Process.Pid
 
 	// Don't wait - let it run independently
+	// The launcher script spawns a detached Windows Terminal process and exits,
+	// so we don't track the launcher PID. Agent registration happens via MCP.
 	go cmd.Wait()
 
-	// Brief delay to allow process to initialize or fail immediately
-	time.Sleep(500 * time.Millisecond)
-
-	// Verify the process is still running
-	if !s.IsAgentRunning(pid) {
-		return 0, fmt.Errorf("agent process exited immediately after spawn")
-	}
-
-	s.mu.Lock()
-	s.runningAgents[agentID] = pid
-	s.mu.Unlock()
+	// Note: We can't reliably track the agent PID since it runs in Windows Terminal.
+	// Agents register themselves via MCP when they connect.
 
 	return pid, nil
 }
