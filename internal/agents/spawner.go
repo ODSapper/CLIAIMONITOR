@@ -52,6 +52,7 @@ type MCPConfig struct {
 
 // MCPServerConfig defines an MCP server connection
 type MCPServerConfig struct {
+	Type    string            `json:"type"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers,omitempty"`
 }
@@ -61,7 +62,8 @@ func (s *ProcessSpawner) createMCPConfig(agentID string) (string, error) {
 	config := MCPConfig{
 		MCPServers: map[string]MCPServerConfig{
 			"cliaimonitor": {
-				URL: s.mcpServerURL,
+				Type: "sse",
+				URL:  s.mcpServerURL,
 				Headers: map[string]string{
 					"X-Agent-ID": agentID,
 				},
