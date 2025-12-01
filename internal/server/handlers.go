@@ -64,12 +64,6 @@ func (s *Server) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 
 // handleSpawnAgent spawns a new agent
 func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
-	// Check supervisor is connected
-	if !s.store.IsSupervisorConnected() {
-		s.respondError(w, http.StatusServiceUnavailable, "Supervisor not connected")
-		return
-	}
-
 	var req struct {
 		ConfigName  string `json:"config_name"`
 		ProjectPath string `json:"project_path"`
