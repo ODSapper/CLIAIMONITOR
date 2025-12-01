@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
+	"github.com/CLIAIMONITOR/internal/handlers"
 	"github.com/CLIAIMONITOR/internal/mcp"
 	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/metrics"
@@ -104,6 +105,10 @@ func (s *Server) setupRoutes() {
 	// Notification API routes
 	api.HandleFunc("/notifications/banner", s.handleGetBanner).Methods("GET")
 	api.HandleFunc("/notifications/banner/clear", s.handleClearBanner).Methods("POST")
+
+	// Supervisor API routes
+	supervisorHandler := handlers.NewSupervisorHandler(s.memDB)
+	supervisorHandler.RegisterRoutes(api)
 
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
