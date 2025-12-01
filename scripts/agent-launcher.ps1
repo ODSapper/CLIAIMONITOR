@@ -73,12 +73,13 @@ $wtPath = Get-Command "wt.exe" -ErrorAction SilentlyContinue
 
 if ($wtPath) {
     # Launch in Windows Terminal with new tab
+    # Quote paths with spaces for proper parsing
     $wtArgs = @(
         "new-tab",
-        "--title", $AgentID,
+        "--title", "`"$AgentID`"",
         "--tabColor", $Color,
-        "-d", $ProjectPath,
-        "powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", $tempScript
+        "-d", "`"$ProjectPath`"",
+        "powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$tempScript`""
     )
 
     Start-Process "wt.exe" -ArgumentList $wtArgs
@@ -90,7 +91,7 @@ if ($wtPath) {
     Start-Process "powershell.exe" -ArgumentList @(
         "-NoExit",
         "-ExecutionPolicy", "Bypass",
-        "-File", $tempScript
+        "-File", "`"$tempScript`""
     ) -WorkingDirectory $ProjectPath
 
     Write-Host "Agent $AgentID launched in PowerShell" -ForegroundColor Green
