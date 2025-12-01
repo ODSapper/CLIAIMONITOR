@@ -199,16 +199,22 @@ func TestStoreAgentLearning(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
+	// Create a repo first for foreign key constraint
+	repo, err := db.DiscoverRepo(".")
+	if err != nil {
+		t.Fatalf("DiscoverRepo failed: %v", err)
+	}
+
 	learning := &AgentLearning{
 		AgentID:   "coder001",
 		AgentType: "coder",
 		Category:  "solution",
 		Title:     "How to handle port conflicts",
 		Content:   "Use instance management with PID files",
-		RepoID:    "test-repo",
+		RepoID:    repo.ID,
 	}
 
-	err := db.StoreAgentLearning(learning)
+	err = db.StoreAgentLearning(learning)
 	if err != nil {
 		t.Fatalf("StoreAgentLearning failed: %v", err)
 	}
@@ -272,14 +278,20 @@ func TestStoreContextSummary(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
+	// Create a repo first for foreign key constraint
+	repo, err := db.DiscoverRepo(".")
+	if err != nil {
+		t.Fatalf("DiscoverRepo failed: %v", err)
+	}
+
 	summary := &ContextSummary{
 		SessionID: "session-123",
 		AgentID:   "coder001",
 		Summary:   "Implemented port conflict resolution",
-		RepoID:    "test-repo",
+		RepoID:    repo.ID,
 	}
 
-	err := db.StoreContextSummary(summary)
+	err = db.StoreContextSummary(summary)
 	if err != nil {
 		t.Fatalf("StoreContextSummary failed: %v", err)
 	}
@@ -323,16 +335,22 @@ func TestCreateTask(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
+	// Create a repo first for foreign key constraint
+	repo, err := db.DiscoverRepo(".")
+	if err != nil {
+		t.Fatalf("DiscoverRepo failed: %v", err)
+	}
+
 	task := &WorkflowTask{
 		ID:         "MAH-123",
-		RepoID:     "test-repo",
+		RepoID:     repo.ID,
 		SourceFile: "workflow.yaml",
 		Title:      "Implement feature X",
 		Priority:   "high",
 		Status:     "pending",
 	}
 
-	err := db.CreateTask(task)
+	err = db.CreateTask(task)
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
@@ -352,9 +370,15 @@ func TestUpdateTaskStatus(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
+	// Create a repo first for foreign key constraint
+	repo, err := db.DiscoverRepo(".")
+	if err != nil {
+		t.Fatalf("DiscoverRepo failed: %v", err)
+	}
+
 	task := &WorkflowTask{
 		ID:         "MAH-124",
-		RepoID:     "test-repo",
+		RepoID:     repo.ID,
 		SourceFile: "workflow.yaml",
 		Title:      "Test task",
 		Status:     "pending",
@@ -365,7 +389,7 @@ func TestUpdateTaskStatus(t *testing.T) {
 	}
 
 	// Update status
-	err := db.UpdateTaskStatus("MAH-124", "in_progress", "coder001")
+	err = db.UpdateTaskStatus("MAH-124", "in_progress", "coder001")
 	if err != nil {
 		t.Fatalf("UpdateTaskStatus failed: %v", err)
 	}
@@ -389,11 +413,17 @@ func TestGetTasks(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Create multiple tasks
+	// Create a repo first for foreign key constraint
+	repo, err := db.DiscoverRepo(".")
+	if err != nil {
+		t.Fatalf("DiscoverRepo failed: %v", err)
+	}
+
+	// Create multiple tasks (all using the same repo for simplicity)
 	tasks := []*WorkflowTask{
-		{ID: "MAH-125", RepoID: "repo1", SourceFile: "w1.yaml", Title: "Task 1", Status: "pending"},
-		{ID: "MAH-126", RepoID: "repo1", SourceFile: "w1.yaml", Title: "Task 2", Status: "in_progress", AssignedAgentID: "coder001"},
-		{ID: "MAH-127", RepoID: "repo2", SourceFile: "w2.yaml", Title: "Task 3", Status: "completed"},
+		{ID: "MAH-125", RepoID: repo.ID, SourceFile: "w1.yaml", Title: "Task 1", Status: "pending"},
+		{ID: "MAH-126", RepoID: repo.ID, SourceFile: "w1.yaml", Title: "Task 2", Status: "in_progress", AssignedAgentID: "coder001"},
+		{ID: "MAH-127", RepoID: repo.ID, SourceFile: "w2.yaml", Title: "Task 3", Status: "completed"},
 	}
 
 	for _, task := range tasks {
@@ -413,13 +443,13 @@ func TestGetTasks(t *testing.T) {
 	}
 
 	// Filter by repo
-	repo1Tasks, err := db.GetTasks(TaskFilter{RepoID: "repo1"})
+	repoTasks, err := db.GetTasks(TaskFilter{RepoID: repo.ID})
 	if err != nil {
 		t.Fatalf("GetTasks with repo filter failed: %v", err)
 	}
 
-	if len(repo1Tasks) != 2 {
-		t.Errorf("Expected 2 repo1 tasks, got %d", len(repo1Tasks))
+	if len(repoTasks) != 3 {
+		t.Errorf("Expected 3 repo tasks, got %d", len(repoTasks))
 	}
 
 	// Filter by status
@@ -490,13 +520,19 @@ func TestCreateDeployment(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
+	// Create a repo first for foreign key constraint
+	repo, err := db.DiscoverRepo(".")
+	if err != nil {
+		t.Fatalf("DiscoverRepo failed: %v", err)
+	}
+
 	deployment := &Deployment{
-		RepoID:         "test-repo",
+		RepoID:         repo.ID,
 		DeploymentPlan: `{"agents": ["coder", "tester"]}`,
 		Status:         "proposed",
 	}
 
-	err := db.CreateDeployment(deployment)
+	err = db.CreateDeployment(deployment)
 	if err != nil {
 		t.Fatalf("CreateDeployment failed: %v", err)
 	}
@@ -520,8 +556,14 @@ func TestUpdateDeploymentStatus(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
+	// Create a repo first for foreign key constraint
+	repo, err := db.DiscoverRepo(".")
+	if err != nil {
+		t.Fatalf("DiscoverRepo failed: %v", err)
+	}
+
 	deployment := &Deployment{
-		RepoID:         "test-repo",
+		RepoID:         repo.ID,
 		DeploymentPlan: "{}",
 		Status:         "proposed",
 	}
@@ -531,7 +573,7 @@ func TestUpdateDeploymentStatus(t *testing.T) {
 	}
 
 	// Update to approved
-	err := db.UpdateDeploymentStatus(deployment.ID, "approved")
+	err = db.UpdateDeploymentStatus(deployment.ID, "approved")
 	if err != nil {
 		t.Fatalf("UpdateDeploymentStatus failed: %v", err)
 	}
