@@ -59,7 +59,10 @@
                             <option value="OpusPurple">OpusPurple (Code Auditor)</option>
                             <option value="OpusRed">OpusRed (Security)</option>
                         </select>
-                        <input type="text" id="project-path" placeholder="Project path (optional)">
+                        <select id="project-select">
+                            <option value="">Select project...</option>
+                            <!-- Projects populated by JS -->
+                        </select>
                         <button id="spawn-btn" class="btn btn-success" disabled>Spawn</button>
                     </div>
                 </section>

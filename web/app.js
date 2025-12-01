@@ -16,6 +16,7 @@ class Dashboard {
         this.bindEvents();
         this.connectWebSocket();
         this.loadInitialState();
+        this.loadProjects();
     }
 
     // WebSocket Connection
@@ -128,6 +129,23 @@ class Dashboard {
         }
     }
 
+    async loadProjects() {
+        try {
+            const response = await fetch('/api/projects');
+            const data = await response.json();
+            this.projects = data.projects || [];
+            this.renderProjectsDropdown();
+        } catch (error) {
+            console.error('Failed to load projects:', error);
+        }
+    }
+
+    renderProjectsDropdown() {
+        const select = document.getElementById('project-select');
+        select.innerHTML = '<option value="">Select project...</option>' +
+            this.projects.map(p => `<option value="${this.escapeHtml(p.path)}" title="${this.escapeHtml(p.description)}">${this.escapeHtml(p.name)}${p.has_claude_md ? ' (CLAUDE.md)' : ''}</option>`).join('');
+    }
+
     async spawnAgent(configName, projectPath) {
         try {
             const response = await fetch('/api/agents/spawn', {
@@ -215,15 +233,20 @@ class Dashboard {
         // Spawn agent
         document.getElementById('spawn-btn').addEventListener('click', () => {
             const configName = document.getElementById('agent-type-select').value;
-            const projectPath = document.getElementById('project-path').value;
-            if (configName) {
+            const projectPath = document.getElementById('project-select').value;
+            if (configName && projectPath) {
                 this.spawnAgent(configName, projectPath);
             }
         });
 
         // Agent type select
-        document.getElementById('agent-type-select').addEventListener('change', (e) => {
-            document.getElementById('spawn-btn').disabled = !e.target.value || !this.state?.supervisor_connected;
+        document.getElementById('agent-type-select').addEventListener('change', () => {
+            this.updateSpawnButton();
+        });
+
+        // Project select
+        document.getElementById('project-select').addEventListener('change', () => {
+            this.updateSpawnButton();
         });
 
         // Save thresholds
@@ -445,8 +468,9 @@ class Dashboard {
 
     updateSpawnButton() {
         const btn = document.getElementById('spawn-btn');
-        const select = document.getElementById('agent-type-select');
-        btn.disabled = !select.value || !this.state?.supervisor_connected;
+        const agentSelect = document.getElementById('agent-type-select');
+        const projectSelect = document.getElementById('project-select');
+        btn.disabled = !agentSelect.value || !projectSelect.value || !this.state?.supervisor_connected;
     }
 
     // Utilities

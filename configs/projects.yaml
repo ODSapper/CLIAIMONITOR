@@ -1,0 +1,32 @@
+# Project Registry for CLIAIMONITOR
+# Defines known projects and auto-discovery settings
+
+# Parent directory to scan for auto-discovery
+# Any subdirectory with a CLAUDE.md file will be added as a project
+scan_path: "C:\\Users\\Admin\\Documents\\VS Projects"
+
+# Explicitly defined projects (always included, take precedence over auto-discovered)
+projects:
+  - name: MAH
+    path: "C:\\Users\\Admin\\Documents\\VS Projects\\MAH"
+    description: "Hosting platform (WHMCS/cPanel replacement)"
+
+  - name: MSS
+    path: "C:\\Users\\Admin\\Documents\\VS Projects\\MSS"
+    description: "Firewall and IPS (CSF/LFD replacement)"
+
+  - name: mss-ai
+    path: "C:\\Users\\Admin\\Documents\\VS Projects\\mss-ai"
+    description: "AI-powered multi-agent system"
+
+  - name: mss-suite
+    path: "C:\\Users\\Admin\\Documents\\VS Projects\\mss-suite"
+    description: "Unified installer for MSS ecosystem"
+
+  - name: planner
+    path: "C:\\Users\\Admin\\Documents\\VS Projects\\planner"
+    description: "Central planning hub for Magnolia ecosystem"
+
+  - name: CLIAIMONITOR
+    path: "C:\\Users\\Admin\\Documents\\VS Projects\\CLIAIMONITOR"
+    description: "Agent coordinator and dashboard"

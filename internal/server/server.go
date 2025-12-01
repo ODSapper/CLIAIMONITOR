@@ -23,13 +23,14 @@ type Server struct {
 	hub        *Hub
 
 	// Dependencies
-	store    *persistence.JSONStore
-	spawner  *agents.ProcessSpawner
-	mcp      *mcp.Server
-	metrics  *metrics.MetricsCollector
-	alerts   *metrics.AlertChecker
-	config   *types.TeamsConfig
-	basePath string
+	store          *persistence.JSONStore
+	spawner        *agents.ProcessSpawner
+	mcp            *mcp.Server
+	metrics        *metrics.MetricsCollector
+	alerts         *metrics.AlertChecker
+	config         *types.TeamsConfig
+	projectsConfig *types.ProjectsConfig
+	basePath       string
 
 	// Background tasks
 	stopChan chan struct{}
@@ -43,18 +44,20 @@ func NewServer(
 	metricsCollector *metrics.MetricsCollector,
 	alertEngine *metrics.AlertChecker,
 	config *types.TeamsConfig,
+	projectsConfig *types.ProjectsConfig,
 	basePath string,
 ) *Server {
 	s := &Server{
-		hub:      NewHub(),
-		store:    store,
-		spawner:  spawner,
-		mcp:      mcpServer,
-		metrics:  metricsCollector,
-		alerts:   alertEngine,
-		config:   config,
-		basePath: basePath,
-		stopChan: make(chan struct{}),
+		hub:            NewHub(),
+		store:          store,
+		spawner:        spawner,
+		mcp:            mcpServer,
+		metrics:        metricsCollector,
+		alerts:         alertEngine,
+		config:         config,
+		projectsConfig: projectsConfig,
+		basePath:       basePath,
+		stopChan:       make(chan struct{}),
 	}
 
 	s.setupRoutes()
@@ -70,6 +73,7 @@ func (s *Server) setupRoutes() {
 	// API routes
 	api := s.router.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/state", s.handleGetState).Methods("GET")
+	api.HandleFunc("/projects", s.handleGetProjects).Methods("GET")
 	api.HandleFunc("/agents/spawn", s.handleSpawnAgent).Methods("POST")
 	api.HandleFunc("/agents/{id}/stop", s.handleStopAgent).Methods("POST")
 	api.HandleFunc("/human-input/{id}", s.handleAnswerHumanInput).Methods("POST")

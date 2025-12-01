@@ -22,6 +22,7 @@ func main() {
 	// Parse command line flags
 	port := flag.Int("port", 3000, "HTTP server port")
 	configPath := flag.String("config", "configs/teams.yaml", "Team configuration file")
+	projectsPath := flag.String("projects", "configs/projects.yaml", "Projects configuration file")
 	statePath := flag.String("state", "data/state.json", "State persistence file")
 	noSupervisor := flag.Bool("no-supervisor", false, "Don't auto-spawn supervisor")
 	mcpHost := flag.String("mcp-host", "localhost", "MCP server hostname (for agents to connect)")
@@ -38,6 +39,9 @@ func main() {
 	if !filepath.IsAbs(*configPath) {
 		*configPath = filepath.Join(basePath, *configPath)
 	}
+	if !filepath.IsAbs(*projectsPath) {
+		*projectsPath = filepath.Join(basePath, *projectsPath)
+	}
 	if !filepath.IsAbs(*statePath) {
 		*statePath = filepath.Join(basePath, *statePath)
 	}
@@ -47,6 +51,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Load projects configuration
+	projectsConfig, err := agents.LoadProjectsConfig(*projectsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to load projects config: %v\n", err)
+		// Use empty config if file doesn't exist
+		projectsConfig = &types.ProjectsConfig{}
 	}
 
 	printBanner()
@@ -77,6 +89,7 @@ func main() {
 		metricsCollector,
 		alertEngine,
 		config,
+		projectsConfig,
 		basePath,
 	)
 

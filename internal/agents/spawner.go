@@ -57,15 +57,17 @@ type MCPServerConfig struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
-// createMCPConfig creates agent-specific MCP config file
-func (s *ProcessSpawner) createMCPConfig(agentID string) (string, error) {
+// createMCPConfig creates agent-specific MCP config file with project context
+func (s *ProcessSpawner) createMCPConfig(agentID string, projectPath string, accessLevel types.AccessLevel) (string, error) {
 	config := MCPConfig{
 		MCPServers: map[string]MCPServerConfig{
 			"cliaimonitor": {
 				Type: "sse",
 				URL:  s.mcpServerURL,
 				Headers: map[string]string{
-					"X-Agent-ID": agentID,
+					"X-Agent-ID":     agentID,
+					"X-Project-Path": projectPath,
+					"X-Access-Level": string(accessLevel),
 				},
 			},
 		},
@@ -90,8 +92,8 @@ func (s *ProcessSpawner) createMCPConfig(agentID string) (string, error) {
 	return configPath, nil
 }
 
-// createSystemPrompt creates agent-specific system prompt
-func (s *ProcessSpawner) createSystemPrompt(agentID string, role types.AgentRole) (string, error) {
+// createSystemPrompt creates agent-specific system prompt with project context
+func (s *ProcessSpawner) createSystemPrompt(agentID string, role types.AgentRole, projectPath string, projectName string) (string, error) {
 	// Read base prompt for role
 	promptFile := GetPromptFilename(role)
 	basePath := filepath.Join(s.promptsPath, promptFile)
@@ -103,6 +105,18 @@ func (s *ProcessSpawner) createSystemPrompt(agentID string, role types.AgentRole
 
 	// Replace placeholder with actual agent ID
 	prompt := strings.ReplaceAll(string(data), "{{AGENT_ID}}", agentID)
+
+	// Add project context section
+	projectContext := s.buildProjectContext(projectPath, projectName, role)
+	prompt = strings.ReplaceAll(prompt, "{{PROJECT_CONTEXT}}", projectContext)
+	prompt = strings.ReplaceAll(prompt, "{{PROJECT_NAME}}", projectName)
+	prompt = strings.ReplaceAll(prompt, "{{PROJECT_PATH}}", projectPath)
+	prompt = strings.ReplaceAll(prompt, "{{ACCESS_RULES}}", s.getAccessRules(role, projectPath))
+
+	// If placeholders weren't in template, append project context
+	if !strings.Contains(string(data), "{{PROJECT_CONTEXT}}") && projectContext != "" {
+		prompt += "\n\n" + projectContext
+	}
 
 	// Write agent-specific prompt
 	activeDir := filepath.Join(s.promptsPath, "active")
@@ -119,16 +133,58 @@ func (s *ProcessSpawner) createSystemPrompt(agentID string, role types.AgentRole
 	return outPath, nil
 }
 
+// buildProjectContext builds the project context section for prompts
+func (s *ProcessSpawner) buildProjectContext(projectPath string, projectName string, role types.AgentRole) string {
+	var sb strings.Builder
+
+	sb.WriteString("# Project Context\n\n")
+	sb.WriteString(fmt.Sprintf("You are working on: **%s**\n", projectName))
+	sb.WriteString(fmt.Sprintf("Project path: `%s`\n\n", projectPath))
+
+	// Try to read CLAUDE.md from the project
+	claudeMD, err := ReadClaudeMD(projectPath)
+	if err == nil && claudeMD != "" {
+		sb.WriteString("## Project Instructions (from CLAUDE.md)\n\n")
+		sb.WriteString(claudeMD)
+		sb.WriteString("\n\n")
+	}
+
+	// Add access rules
+	sb.WriteString("## Access Rules\n\n")
+	sb.WriteString(s.getAccessRules(role, projectPath))
+
+	return sb.String()
+}
+
+// getAccessRules returns the access rules text for a role
+func (s *ProcessSpawner) getAccessRules(role types.AgentRole, projectPath string) string {
+	switch role {
+	case types.RoleCodeAuditor, types.RoleSecurity:
+		return fmt.Sprintf("You may read files from any project in the Magnolia ecosystem for review purposes. You may only WRITE files within `%s`.", projectPath)
+	case types.RoleSupervisor:
+		return "You may read files from all projects. You should not write code files directly."
+	default:
+		// Go Developer, Engineer - strict isolation
+		return fmt.Sprintf("You may ONLY read and write files within `%s`. Do not access other repositories.", projectPath)
+	}
+}
+
 // SpawnAgent launches a team agent in Windows Terminal
 func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, projectPath string) (int, error) {
-	// Create MCP config for this agent
-	mcpConfigPath, err := s.createMCPConfig(agentID)
+	// Derive project name from path
+	projectName := filepath.Base(projectPath)
+
+	// Get access level for this role
+	accessLevel := types.GetAccessLevelForRole(config.Role)
+
+	// Create MCP config for this agent with project context
+	mcpConfigPath, err := s.createMCPConfig(agentID, projectPath, accessLevel)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create MCP config: %w", err)
 	}
 
-	// Create system prompt for this agent
-	promptPath, err := s.createSystemPrompt(agentID, config.Role)
+	// Create system prompt for this agent with project context
+	promptPath, err := s.createSystemPrompt(agentID, config.Role, projectPath, projectName)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create system prompt: %w", err)
 	}

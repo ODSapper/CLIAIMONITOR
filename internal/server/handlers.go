@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/CLIAIMONITOR/internal/agents"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -46,6 +47,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 	state := s.store.GetState()
 	s.respondJSON(w, state)
+}
+
+// handleGetProjects returns available projects for spawning agents
+func (s *Server) handleGetProjects(w http.ResponseWriter, r *http.Request) {
+	projects, err := agents.GetAllProjects(s.projectsConfig)
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, "Failed to load projects")
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"projects": projects,
+	})
 }
 
 // handleSpawnAgent spawns a new agent
