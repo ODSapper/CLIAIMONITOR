@@ -201,53 +201,6 @@ func TestCheckAgentStatusBlocked(t *testing.T) {
 	}
 }
 
-func TestCheckHumanCheckin(t *testing.T) {
-	thresholds := types.AlertThresholds{
-		HumanCheckinSeconds: 1, // 1 second for testing
-	}
-	engine := NewAlertEngine(thresholds)
-
-	// Last checkin was 2 seconds ago
-	lastCheckin := time.Now().Add(-2 * time.Second)
-	alert := engine.CheckHumanCheckin(lastCheckin)
-
-	if alert == nil {
-		t.Fatal("expected human_checkin alert")
-	}
-	if alert.Type != "human_checkin" {
-		t.Errorf("alert.Type = %q, want %q", alert.Type, "human_checkin")
-	}
-}
-
-func TestCheckHumanCheckinNoAlertWhenRecent(t *testing.T) {
-	thresholds := types.AlertThresholds{
-		HumanCheckinSeconds: 3600, // 1 hour
-	}
-	engine := NewAlertEngine(thresholds)
-
-	// Last checkin was just now
-	lastCheckin := time.Now()
-	alert := engine.CheckHumanCheckin(lastCheckin)
-
-	if alert != nil {
-		t.Error("should not alert when checkin is recent")
-	}
-}
-
-func TestCheckHumanCheckinDisabled(t *testing.T) {
-	thresholds := types.AlertThresholds{
-		HumanCheckinSeconds: 0, // Disabled
-	}
-	engine := NewAlertEngine(thresholds)
-
-	lastCheckin := time.Now().Add(-24 * time.Hour)
-	alert := engine.CheckHumanCheckin(lastCheckin)
-
-	if alert != nil {
-		t.Error("should not alert when threshold is 0")
-	}
-}
-
 func TestCheckEscalationQueue(t *testing.T) {
 	thresholds := types.AlertThresholds{
 		EscalationQueueMax: 5,

@@ -19,25 +19,26 @@
                 <button id="mute-toggle" class="btn btn-icon" title="Toggle Sound">
                     🔔
                 </button>
-                <button id="checkin-btn" class="btn btn-primary">Check In</button>
             </div>
         </header>
+
+        <!-- Activity Log (Top) -->
+        <section class="panel activity-panel">
+            <h2>
+                Activity Log
+                <select id="activity-filter">
+                    <option value="">All Agents</option>
+                </select>
+            </h2>
+            <div id="activity-log" class="activity-log">
+                <!-- Activity entries populated by JS -->
+            </div>
+        </section>
 
         <!-- Main Content -->
         <main class="main-content">
             <!-- Left Column -->
             <div class="left-column">
-                <!-- Supervisor Status -->
-                <section class="panel supervisor-panel">
-                    <h2>Supervisor</h2>
-                    <div id="supervisor-status" class="supervisor-status">
-                        <div class="supervisor-indicator waiting">
-                            <span class="spinner"></span>
-                            <span>Waiting for Supervisor...</span>
-                        </div>
-                    </div>
-                </section>
-
                 <!-- Team Agents -->
                 <section class="panel agents-panel">
                     <h2>Team Agents</h2>
@@ -58,6 +59,13 @@
                             <option value="OpusGreen">OpusGreen (Go Developer)</option>
                             <option value="OpusPurple">OpusPurple (Code Auditor)</option>
                             <option value="OpusRed">OpusRed (Security)</option>
+                        </select>
+                        <select id="agent-count-select">
+                            <option value="1">1 Agent</option>
+                            <option value="2">2 Agents</option>
+                            <option value="3">3 Agents</option>
+                            <option value="4">4 Agents</option>
+                            <option value="5">5 Agents</option>
                         </select>
                         <select id="project-select">
                             <option value="">Select project...</option>
@@ -112,10 +120,6 @@
                             <label>Consecutive Rejects:</label>
                             <input type="number" id="threshold-rejects" min="0" value="3">
                         </div>
-                        <div class="threshold-row">
-                            <label>Human Check-in (sec):</label>
-                            <input type="number" id="threshold-checkin" min="0" value="1800">
-                        </div>
                         <div class="threshold-actions">
                             <button id="save-thresholds" class="btn btn-primary">Save Thresholds</button>
                             <button id="reset-metrics" class="btn btn-warning">Reset History</button>
@@ -124,19 +128,6 @@
                 </section>
             </div>
         </main>
-
-        <!-- Activity Log (Bottom) -->
-        <section class="panel activity-panel">
-            <h2>
-                Activity Log
-                <select id="activity-filter">
-                    <option value="">All Agents</option>
-                </select>
-            </h2>
-            <div id="activity-log" class="activity-log">
-                <!-- Activity entries populated by JS -->
-            </div>
-        </section>
     </div>
 
     <script src="/app.js"></script>

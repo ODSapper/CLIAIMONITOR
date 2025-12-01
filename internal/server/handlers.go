@@ -233,14 +233,6 @@ func (s *Server) handleResetMetrics(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, map[string]bool{"success": true})
 }
 
-// handleCheckin records human check-in
-func (s *Server) handleCheckin(w http.ResponseWriter, r *http.Request) {
-	s.store.RecordHumanCheckin()
-	s.broadcastState()
-
-	s.respondJSON(w, map[string]bool{"success": true})
-}
-
 // Helper functions
 func (s *Server) respondJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")

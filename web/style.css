@@ -191,54 +191,6 @@ body {
     display: none;
 }
 
-/* Supervisor Panel */
-.supervisor-panel {
-    border: 2px solid #ffd700;
-}
-
-.supervisor-status {
-    padding: 1rem;
-    background: rgba(255, 215, 0, 0.1);
-    border-radius: 6px;
-}
-
-.supervisor-indicator {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.supervisor-indicator.waiting {
-    color: var(--accent-yellow);
-}
-
-.supervisor-indicator.connected {
-    color: var(--accent-green);
-}
-
-.supervisor-indicator.working {
-    color: var(--accent-blue);
-}
-
-.spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
-
-.supervisor-task {
-    margin-top: 0.5rem;
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-}
-
 /* Agents Grid */
 .agents-grid {
     display: grid;

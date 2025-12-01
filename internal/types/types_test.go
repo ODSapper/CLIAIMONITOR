@@ -73,9 +73,6 @@ func TestDefaultThresholds(t *testing.T) {
 	if thresholds.ConsecutiveRejectsMax != 3 {
 		t.Errorf("ConsecutiveRejectsMax = %d, want 3", thresholds.ConsecutiveRejectsMax)
 	}
-	if thresholds.HumanCheckinSeconds != 1800 {
-		t.Errorf("HumanCheckinSeconds = %d, want 1800", thresholds.HumanCheckinSeconds)
-	}
 }
 
 func TestNewDashboardState(t *testing.T) {
@@ -154,7 +151,6 @@ func TestAlertThresholdsJSONSerialization(t *testing.T) {
 		EscalationQueueMax:    5,
 		TokenUsageMax:         50000,
 		ConsecutiveRejectsMax: 2,
-		HumanCheckinSeconds:   900,
 	}
 
 	data, err := json.Marshal(thresholds)

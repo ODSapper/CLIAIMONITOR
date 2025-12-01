@@ -76,9 +76,6 @@ class Dashboard {
             case 'activity':
                 this.addActivityEntry(message.data);
                 break;
-            case 'supervisor_status':
-                this.updateSupervisorStatus(message.data);
-                break;
         }
     }
 
@@ -207,14 +204,6 @@ class Dashboard {
         }
     }
 
-    async checkin() {
-        try {
-            await fetch('/api/checkin', { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to check in:', error);
-        }
-    }
-
     // Event Binding
     bindEvents() {
         // Mute toggle
@@ -225,17 +214,15 @@ class Dashboard {
             btn.classList.toggle('muted', !this.soundEnabled);
         });
 
-        // Check in
-        document.getElementById('checkin-btn').addEventListener('click', () => {
-            this.checkin();
-        });
-
         // Spawn agent
         document.getElementById('spawn-btn').addEventListener('click', () => {
             const configName = document.getElementById('agent-type-select').value;
             const projectPath = document.getElementById('project-select').value;
+            const count = parseInt(document.getElementById('agent-count-select').value) || 1;
             if (configName && projectPath) {
-                this.spawnAgent(configName, projectPath);
+                for (let i = 0; i < count; i++) {
+                    this.spawnAgent(configName, projectPath);
+                }
             }
         });
 
@@ -255,8 +242,7 @@ class Dashboard {
                 failed_tests_max: parseInt(document.getElementById('threshold-failed-tests').value) || 0,
                 idle_time_max_seconds: parseInt(document.getElementById('threshold-idle-time').value) || 0,
                 token_usage_max: parseInt(document.getElementById('threshold-tokens').value) || 0,
-                consecutive_rejects_max: parseInt(document.getElementById('threshold-rejects').value) || 0,
-                human_checkin_seconds: parseInt(document.getElementById('threshold-checkin').value) || 0
+                consecutive_rejects_max: parseInt(document.getElementById('threshold-rejects').value) || 0
             };
             this.saveThresholds(thresholds);
         });
@@ -278,36 +264,12 @@ class Dashboard {
     render() {
         if (!this.state) return;
 
-        this.renderSupervisor();
         this.renderAgents();
         this.renderAlerts();
         this.renderHumanInput();
         this.renderThresholds();
         this.renderActivityLog();
         this.updateSpawnButton();
-    }
-
-    renderSupervisor() {
-        const container = document.getElementById('supervisor-status');
-        const supervisor = this.state.agents?.['Supervisor'];
-
-        if (!this.state.supervisor_connected) {
-            container.innerHTML = `
-                <div class="supervisor-indicator waiting">
-                    <span class="spinner"></span>
-                    <span>Waiting for Supervisor...</span>
-                </div>
-            `;
-        } else if (supervisor) {
-            const statusClass = supervisor.status === 'working' ? 'working' : 'connected';
-            container.innerHTML = `
-                <div class="supervisor-indicator ${statusClass}">
-                    <span class="status-dot"></span>
-                    <span>${supervisor.status === 'working' ? 'Working' : 'Connected'}</span>
-                </div>
-                ${supervisor.current_task ? `<div class="supervisor-task">${this.escapeHtml(supervisor.current_task)}</div>` : ''}
-            `;
-        }
     }
 
     renderAgents() {
@@ -410,7 +372,6 @@ class Dashboard {
         document.getElementById('threshold-idle-time').value = t.idle_time_max_seconds || 600;
         document.getElementById('threshold-tokens').value = t.token_usage_max || 100000;
         document.getElementById('threshold-rejects').value = t.consecutive_rejects_max || 3;
-        document.getElementById('threshold-checkin').value = t.human_checkin_seconds || 1800;
     }
 
     renderActivityLog(filterAgent = '') {
@@ -454,23 +415,11 @@ class Dashboard {
         this.renderActivityLog(document.getElementById('activity-filter').value);
     }
 
-    updateSupervisorStatus(data) {
-        if (this.state) {
-            this.state.supervisor_connected = data.connected;
-            if (data.agent) {
-                this.state.agents = this.state.agents || {};
-                this.state.agents['Supervisor'] = data.agent;
-            }
-            this.renderSupervisor();
-            this.updateSpawnButton();
-        }
-    }
-
     updateSpawnButton() {
         const btn = document.getElementById('spawn-btn');
         const agentSelect = document.getElementById('agent-type-select');
         const projectSelect = document.getElementById('project-select');
-        btn.disabled = !agentSelect.value || !projectSelect.value || !this.state?.supervisor_connected;
+        btn.disabled = !agentSelect.value || !projectSelect.value;
     }
 
     // Utilities

@@ -15,7 +15,6 @@ type AlertEngine interface {
 	GetThresholds() types.AlertThresholds
 	CheckMetrics(metrics map[string]*types.AgentMetrics) []*types.Alert
 	CheckAgentStatus(agents map[string]*types.Agent) []*types.Alert
-	CheckHumanCheckin(lastCheckin time.Time) *types.Alert
 	CheckEscalationQueue(pendingCount int) *types.Alert
 }
 
@@ -184,33 +183,6 @@ func (a *AlertChecker) CheckAgentStatus(agents map[string]*types.Agent) []*types
 	}
 
 	return alerts
-}
-
-// CheckHumanCheckin checks time since last human check-in
-func (a *AlertChecker) CheckHumanCheckin(lastCheckin time.Time) *types.Alert {
-	a.mu.RLock()
-	thresholds := a.thresholds
-	a.mu.RUnlock()
-
-	if thresholds.HumanCheckinSeconds <= 0 {
-		return nil
-	}
-
-	secondsSince := int(time.Since(lastCheckin).Seconds())
-	if secondsSince >= thresholds.HumanCheckinSeconds {
-		key := "human_checkin"
-		if a.shouldAlert(key) {
-			return &types.Alert{
-				ID:        uuid.New().String(),
-				Type:      "human_checkin",
-				Message:   fmt.Sprintf("No human check-in for %d seconds (threshold: %d)", secondsSince, thresholds.HumanCheckinSeconds),
-				Severity:  "warning",
-				CreatedAt: time.Now(),
-			}
-		}
-	}
-
-	return nil
 }
 
 // CheckEscalationQueue checks pending escalation count

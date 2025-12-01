@@ -80,7 +80,6 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/alerts/{id}/ack", s.handleAcknowledgeAlert).Methods("POST")
 	api.HandleFunc("/thresholds", s.handleUpdateThresholds).Methods("PUT")
 	api.HandleFunc("/metrics/reset", s.handleResetMetrics).Methods("POST")
-	api.HandleFunc("/checkin", s.handleCheckin).Methods("POST")
 
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
@@ -291,13 +290,6 @@ func (s *Server) checkAlerts() {
 	for _, alert := range statusAlerts {
 		s.store.AddAlert(alert)
 		s.hub.BroadcastAlert(alert)
-	}
-
-	// Check human check-in
-	checkinAlert := s.alerts.CheckHumanCheckin(state.LastHumanCheckin)
-	if checkinAlert != nil {
-		s.store.AddAlert(checkinAlert)
-		s.hub.BroadcastAlert(checkinAlert)
 	}
 
 	// Check escalation queue

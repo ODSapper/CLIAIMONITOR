@@ -69,18 +69,16 @@ type AlertThresholds struct {
 	EscalationQueueMax    int   `json:"escalation_queue_max"`
 	TokenUsageMax         int64 `json:"token_usage_max"`
 	ConsecutiveRejectsMax int   `json:"consecutive_rejects_max"`
-	HumanCheckinSeconds   int   `json:"human_checkin_seconds"`
 }
 
 // DefaultThresholds returns sensible defaults
 func DefaultThresholds() AlertThresholds {
 	return AlertThresholds{
 		FailedTestsMax:        5,
-		IdleTimeMaxSeconds:    600,  // 10 minutes
+		IdleTimeMaxSeconds:    600, // 10 minutes
 		EscalationQueueMax:    10,
 		TokenUsageMax:         100000,
 		ConsecutiveRejectsMax: 3,
-		HumanCheckinSeconds:   1800, // 30 minutes
 	}
 }
 
@@ -100,9 +98,6 @@ func (t AlertThresholds) Validate() error {
 	}
 	if t.ConsecutiveRejectsMax < 1 {
 		return fmt.Errorf("consecutive_rejects_max must be at least 1")
-	}
-	if t.HumanCheckinSeconds < 60 {
-		return fmt.Errorf("human_checkin_seconds must be at least 60")
 	}
 	return nil
 }
