@@ -199,6 +199,31 @@ func (s *Server) setupMCPCallbacks() {
 		OnGetAgentList: func() (interface{}, error) {
 			return s.store.GetState().Agents, nil
 		},
+
+		OnRequestStopApproval: func(req *types.StopApprovalRequest) (interface{}, error) {
+			s.store.AddStopRequest(req)
+			// Alert supervisor about pending stop request
+			s.hub.BroadcastAlert(&types.Alert{
+				ID:        req.ID,
+				Type:      "stop_approval_needed",
+				AgentID:   req.AgentID,
+				Message:   fmt.Sprintf("Agent %s wants to stop: %s", req.AgentID, req.Reason),
+				Severity:  "warning",
+				CreatedAt: time.Now(),
+			})
+			s.broadcastState()
+			return map[string]string{"request_id": req.ID, "status": "pending_approval"}, nil
+		},
+
+		OnGetPendingStopRequests: func() (interface{}, error) {
+			return s.store.GetPendingStopRequests(), nil
+		},
+
+		OnRespondStopRequest: func(id string, approved bool, response string) (interface{}, error) {
+			s.store.RespondStopRequest(id, approved, response, "supervisor")
+			s.broadcastState()
+			return map[string]string{"status": "responded", "approved": fmt.Sprintf("%v", approved)}, nil
+		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)

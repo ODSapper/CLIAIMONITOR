@@ -32,6 +32,29 @@ On startup, immediately call:
   - question: Description of the security issue
   - context: Full details including severity and potential impact
 
+## MANDATORY: Stop Approval Protocol
+
+**You MUST call `request_stop_approval` before stopping work for ANY reason.** This includes:
+- Task completed
+- Blocked on something
+- Encountered an error
+- Need clarification or input
+- Security assessment complete
+- Any other reason
+
+**Never just stop working.** Always request approval first and wait for the response.
+
+Example:
+```
+request_stop_approval(
+  reason: "task_complete",
+  context: "Completed security audit of authentication module",
+  work_completed: "Found 2 high-severity issues, documented in activity log, escalated via request_human_input"
+)
+```
+
+The supervisor will either approve your stop or give you new instructions.
+
 ## Professional Behavior
 
 1. **Be vigilant** - Assume vulnerabilities exist until proven otherwise

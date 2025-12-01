@@ -144,6 +144,20 @@ type SupervisorJudgment struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// StopApprovalRequest when an agent wants to stop working
+type StopApprovalRequest struct {
+	ID            string    `json:"id"`
+	AgentID       string    `json:"agent_id"`
+	Reason        string    `json:"reason"`        // "task_complete", "blocked", "error", "needs_input", "other"
+	Context       string    `json:"context"`       // Details about why they want to stop
+	WorkCompleted string    `json:"work_completed"` // Summary of what was accomplished
+	CreatedAt     time.Time `json:"created_at"`
+	Reviewed      bool      `json:"reviewed"`
+	Approved      bool      `json:"approved"`
+	Response      string    `json:"response"` // Supervisor's response message
+	ReviewedBy    string    `json:"reviewed_by"` // "supervisor" or "human"
+}
+
 // MetricsSnapshot for history
 type MetricsSnapshot struct {
 	Timestamp time.Time                `json:"timestamp"`
@@ -152,17 +166,18 @@ type MetricsSnapshot struct {
 
 // DashboardState is the full persisted state
 type DashboardState struct {
-	SupervisorConnected bool                          `json:"supervisor_connected"`
-	Agents              map[string]*Agent             `json:"agents"`
-	Metrics             map[string]*AgentMetrics      `json:"metrics"`
-	MetricsHistory      []MetricsSnapshot             `json:"metrics_history"`
-	HumanRequests       map[string]*HumanInputRequest `json:"human_requests"`
-	Alerts              []*Alert                      `json:"alerts"`
-	ActivityLog         []*ActivityLog                `json:"activity_log"`
-	Judgments           []*SupervisorJudgment         `json:"judgments"`
-	Thresholds          AlertThresholds               `json:"thresholds"`
-	LastHumanCheckin    time.Time                     `json:"last_human_checkin"`
-	AgentCounters       map[string]int                `json:"agent_counters"`
+	SupervisorConnected bool                            `json:"supervisor_connected"`
+	Agents              map[string]*Agent               `json:"agents"`
+	Metrics             map[string]*AgentMetrics        `json:"metrics"`
+	MetricsHistory      []MetricsSnapshot               `json:"metrics_history"`
+	HumanRequests       map[string]*HumanInputRequest   `json:"human_requests"`
+	StopRequests        map[string]*StopApprovalRequest `json:"stop_requests"`
+	Alerts              []*Alert                        `json:"alerts"`
+	ActivityLog         []*ActivityLog                  `json:"activity_log"`
+	Judgments           []*SupervisorJudgment           `json:"judgments"`
+	Thresholds          AlertThresholds                 `json:"thresholds"`
+	LastHumanCheckin    time.Time                       `json:"last_human_checkin"`
+	AgentCounters       map[string]int                  `json:"agent_counters"`
 }
 
 // NewDashboardState creates empty state with defaults
@@ -173,6 +188,7 @@ func NewDashboardState() *DashboardState {
 		Metrics:             make(map[string]*AgentMetrics),
 		MetricsHistory:      []MetricsSnapshot{},
 		HumanRequests:       make(map[string]*HumanInputRequest),
+		StopRequests:        make(map[string]*StopApprovalRequest),
 		Alerts:              []*Alert{},
 		ActivityLog:         []*ActivityLog{},
 		Judgments:           []*SupervisorJudgment{},

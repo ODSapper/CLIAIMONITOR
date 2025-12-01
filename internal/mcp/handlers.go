@@ -9,16 +9,19 @@ import (
 
 // ToolCallbacks interface for tool handlers to call back into services
 type ToolCallbacks struct {
-	OnRegisterAgent       func(agentID, role string) (interface{}, error)
-	OnReportStatus        func(agentID, status, task string) (interface{}, error)
-	OnReportMetrics       func(agentID string, metrics *types.AgentMetrics) (interface{}, error)
-	OnRequestHumanInput   func(req *types.HumanInputRequest) (interface{}, error)
-	OnLogActivity         func(activity *types.ActivityLog) (interface{}, error)
-	OnGetAgentMetrics     func() (interface{}, error)
-	OnGetPendingQuestions func() (interface{}, error)
-	OnEscalateAlert       func(alert *types.Alert) (interface{}, error)
-	OnSubmitJudgment      func(judgment *types.SupervisorJudgment) (interface{}, error)
-	OnGetAgentList        func() (interface{}, error)
+	OnRegisterAgent         func(agentID, role string) (interface{}, error)
+	OnReportStatus          func(agentID, status, task string) (interface{}, error)
+	OnReportMetrics         func(agentID string, metrics *types.AgentMetrics) (interface{}, error)
+	OnRequestHumanInput     func(req *types.HumanInputRequest) (interface{}, error)
+	OnRequestStopApproval   func(req *types.StopApprovalRequest) (interface{}, error)
+	OnLogActivity           func(activity *types.ActivityLog) (interface{}, error)
+	OnGetAgentMetrics       func() (interface{}, error)
+	OnGetPendingQuestions   func() (interface{}, error)
+	OnGetPendingStopRequests func() (interface{}, error)
+	OnRespondStopRequest    func(id string, approved bool, response string) (interface{}, error)
+	OnEscalateAlert         func(alert *types.Alert) (interface{}, error)
+	OnSubmitJudgment        func(judgment *types.SupervisorJudgment) (interface{}, error)
+	OnGetAgentList          func() (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -131,6 +134,33 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 		},
 	})
 
+	// request_stop_approval - Agent requests permission to stop
+	s.RegisterTool(ToolDefinition{
+		Name:        "request_stop_approval",
+		Description: "Request approval from supervisor before stopping work. MUST be called before stopping for ANY reason.",
+		Parameters: map[string]ParameterDef{
+			"reason":         {Type: "string", Description: "Why stopping: task_complete, blocked, error, needs_input, other", Required: true},
+			"context":        {Type: "string", Description: "Details about why you want to stop", Required: true},
+			"work_completed": {Type: "string", Description: "Summary of what you accomplished", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			reason, _ := params["reason"].(string)
+			context, _ := params["context"].(string)
+			workCompleted, _ := params["work_completed"].(string)
+
+			req := &types.StopApprovalRequest{
+				ID:            uuid.New().String(),
+				AgentID:       agentID,
+				Reason:        reason,
+				Context:       context,
+				WorkCompleted: workCompleted,
+				CreatedAt:     time.Now(),
+				Reviewed:      false,
+			}
+			return callbacks.OnRequestStopApproval(req)
+		},
+	})
+
 	// Supervisor-only tools
 	registerSupervisorTools(s, callbacks)
 }
@@ -223,6 +253,33 @@ func registerSupervisorTools(s *Server, callbacks ToolCallbacks) {
 		Parameters:  map[string]ParameterDef{},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
 			return callbacks.OnGetAgentList()
+		},
+	})
+
+	// get_pending_stop_requests - Supervisor checks stop approval queue
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_pending_stop_requests",
+		Description: "Get pending stop approval requests from agents (supervisor only)",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			return callbacks.OnGetPendingStopRequests()
+		},
+	})
+
+	// respond_stop_request - Supervisor approves or denies stop request
+	s.RegisterTool(ToolDefinition{
+		Name:        "respond_stop_request",
+		Description: "Approve or deny an agent's stop request (supervisor only)",
+		Parameters: map[string]ParameterDef{
+			"request_id": {Type: "string", Description: "The stop request ID", Required: true},
+			"approved":   {Type: "boolean", Description: "Whether to approve the stop", Required: true},
+			"response":   {Type: "string", Description: "Message to the agent (instructions if denied)", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			requestID, _ := params["request_id"].(string)
+			approved, _ := params["approved"].(bool)
+			response, _ := params["response"].(string)
+			return callbacks.OnRespondStopRequest(requestID, approved, response)
 		},
 	})
 }

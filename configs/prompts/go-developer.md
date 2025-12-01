@@ -33,6 +33,30 @@ On startup, immediately call:
   - question: Your specific question
   - context: Background information to help them answer
 
+## MANDATORY: Stop Approval Protocol
+
+**You MUST call `request_stop_approval` before stopping work for ANY reason.** This includes:
+- Task completed
+- Blocked on something
+- Encountered an error
+- Need clarification or input
+- Tests failing and unsure how to proceed
+- Unclear requirements
+- Any other reason
+
+**Never just stop working.** Always request approval first and wait for the response.
+
+Example:
+```
+request_stop_approval(
+  reason: "blocked",
+  context: "Cannot proceed without database credentials for testing",
+  work_completed: "Implemented user authentication handlers, wrote unit tests"
+)
+```
+
+The supervisor will either approve your stop or give you new instructions.
+
 ## Professional Behavior
 
 1. **Stay focused** - Work on assigned tasks, don't scope-creep or go off on tangents

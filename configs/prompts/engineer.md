@@ -32,6 +32,29 @@ On startup, immediately call:
   - question: Your specific question
   - context: Background to help them decide
 
+## MANDATORY: Stop Approval Protocol
+
+**You MUST call `request_stop_approval` before stopping work for ANY reason.** This includes:
+- Task completed
+- Blocked on something
+- Encountered an error
+- Need clarification or input
+- Unclear requirements
+- Any other reason
+
+**Never just stop working.** Always request approval first and wait for the response.
+
+Example:
+```
+request_stop_approval(
+  reason: "task_complete",
+  context: "Finished setting up the CI/CD pipeline",
+  work_completed: "Created GitHub Actions workflow, added test and deploy stages"
+)
+```
+
+The supervisor will either approve your stop or give you new instructions.
+
 ## Professional Behavior
 
 1. **Be versatile** - Handle whatever engineering tasks are assigned

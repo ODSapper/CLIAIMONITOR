@@ -33,6 +33,11 @@ type Store interface {
 	AnswerHumanRequest(id string, answer string)
 	GetPendingRequests() []*types.HumanInputRequest
 
+	// Stop approval operations
+	AddStopRequest(req *types.StopApprovalRequest)
+	RespondStopRequest(id string, approved bool, response string, reviewedBy string)
+	GetPendingStopRequests() []*types.StopApprovalRequest
+
 	// Alert operations
 	AddAlert(alert *types.Alert)
 	AcknowledgeAlert(id string)
@@ -274,6 +279,44 @@ func (s *JSONStore) GetPendingRequests() []*types.HumanInputRequest {
 	var pending []*types.HumanInputRequest
 	for _, req := range s.state.HumanRequests {
 		if !req.Answered {
+			pending = append(pending, req)
+		}
+	}
+	return pending
+}
+
+// AddStopRequest adds a stop approval request
+func (s *JSONStore) AddStopRequest(req *types.StopApprovalRequest) {
+	s.mu.Lock()
+	if s.state.StopRequests == nil {
+		s.state.StopRequests = make(map[string]*types.StopApprovalRequest)
+	}
+	s.state.StopRequests[req.ID] = req
+	s.mu.Unlock()
+	s.scheduleSave()
+}
+
+// RespondStopRequest marks a stop request as reviewed
+func (s *JSONStore) RespondStopRequest(id string, approved bool, response string, reviewedBy string) {
+	s.mu.Lock()
+	if req, exists := s.state.StopRequests[id]; exists {
+		req.Reviewed = true
+		req.Approved = approved
+		req.Response = response
+		req.ReviewedBy = reviewedBy
+	}
+	s.mu.Unlock()
+	s.scheduleSave()
+}
+
+// GetPendingStopRequests returns unreviewed stop requests
+func (s *JSONStore) GetPendingStopRequests() []*types.StopApprovalRequest {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var pending []*types.StopApprovalRequest
+	for _, req := range s.state.StopRequests {
+		if !req.Reviewed {
 			pending = append(pending, req)
 		}
 	}

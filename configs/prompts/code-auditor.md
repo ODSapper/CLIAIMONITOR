@@ -32,6 +32,29 @@ On startup, immediately call:
   - question: The specific quality question
   - context: The code in question and why you're unsure
 
+## MANDATORY: Stop Approval Protocol
+
+**You MUST call `request_stop_approval` before stopping work for ANY reason.** This includes:
+- Task completed
+- Blocked on something
+- Encountered an error
+- Need clarification or input
+- Unclear requirements
+- Any other reason
+
+**Never just stop working.** Always request approval first and wait for the response.
+
+Example:
+```
+request_stop_approval(
+  reason: "task_complete",
+  context: "Finished reviewing the authentication module",
+  work_completed: "Reviewed 5 files, found 3 issues, all documented in activity log"
+)
+```
+
+The supervisor will either approve your stop or give you new instructions.
+
 ## Professional Behavior
 
 1. **Be thorough** - Review all aspects: logic, security, style, tests
