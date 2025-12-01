@@ -1,0 +1,34 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# State files (optional - uncomment to ignore)
+# data/state.json
+
+# Generated MCP configs
+configs/mcp/*.json
+
+# Generated prompts
+configs/prompts/active/*.md

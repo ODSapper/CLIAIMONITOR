@@ -1,0 +1,36 @@
+agents:
+  - name: SNTGreen
+    model: claude-sonnet-4-5-20250929
+    role: Go Developer
+    color: "#00cc66"
+
+  - name: SNTPurple
+    model: claude-sonnet-4-5-20250929
+    role: Code Auditor
+    color: "#9933cc"
+
+  - name: SNTRed
+    model: claude-sonnet-4-5-20250929
+    role: Engineer
+    color: "#cc3333"
+
+  - name: OpusGreen
+    model: claude-opus-4-5-20251101
+    role: Go Developer
+    color: "#33ff99"
+
+  - name: OpusPurple
+    model: claude-opus-4-5-20251101
+    role: Code Auditor
+    color: "#bb66ff"
+
+  - name: OpusRed
+    model: claude-opus-4-5-20251101
+    role: Security
+    color: "#ff4444"
+
+supervisor:
+  name: Supervisor
+  model: claude-opus-4-5-20251101
+  role: Supervisor
+  color: "#ffd700"

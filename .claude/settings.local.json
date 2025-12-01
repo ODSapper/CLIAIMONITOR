@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go build:*)",
+      "Bash(git reset:*)",
+      "Bash(git rm:*)",
+      "Bash(go test:*)",
+      "Bash(dir:*)",
+      "Bash(go vet:*)",
+      "Bash(dir /s:*)",
+      "Bash(cmd /c \"dir /s /b\")",
+      "Bash(./cliaimonitor.exe:*)",
+      "Bash(curl:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

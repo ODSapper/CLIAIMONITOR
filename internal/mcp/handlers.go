@@ -1,0 +1,228 @@
+package mcp
+
+import (
+	"time"
+
+	"github.com/CLIAIMONITOR/internal/types"
+	"github.com/google/uuid"
+)
+
+// ToolCallbacks interface for tool handlers to call back into services
+type ToolCallbacks struct {
+	OnRegisterAgent       func(agentID, role string) (interface{}, error)
+	OnReportStatus        func(agentID, status, task string) (interface{}, error)
+	OnReportMetrics       func(agentID string, metrics *types.AgentMetrics) (interface{}, error)
+	OnRequestHumanInput   func(req *types.HumanInputRequest) (interface{}, error)
+	OnLogActivity         func(activity *types.ActivityLog) (interface{}, error)
+	OnGetAgentMetrics     func() (interface{}, error)
+	OnGetPendingQuestions func() (interface{}, error)
+	OnEscalateAlert       func(alert *types.Alert) (interface{}, error)
+	OnSubmitJudgment      func(judgment *types.SupervisorJudgment) (interface{}, error)
+	OnGetAgentList        func() (interface{}, error)
+}
+
+// RegisterDefaultTools registers all standard MCP tools
+// This is called during server setup with callbacks to other services
+func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
+	// register_agent - Agent identifies itself
+	s.RegisterTool(ToolDefinition{
+		Name:        "register_agent",
+		Description: "Register this agent with the dashboard",
+		Parameters: map[string]ParameterDef{
+			"agent_id": {Type: "string", Description: "The agent's unique ID", Required: true},
+			"role":     {Type: "string", Description: "The agent's role", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			role, _ := params["role"].(string)
+			return callbacks.OnRegisterAgent(agentID, role)
+		},
+	})
+
+	// report_status - Agent updates its status
+	s.RegisterTool(ToolDefinition{
+		Name:        "report_status",
+		Description: "Report current agent status and activity",
+		Parameters: map[string]ParameterDef{
+			"status":       {Type: "string", Description: "Status: connected, working, idle, blocked", Required: true},
+			"current_task": {Type: "string", Description: "What the agent is currently doing", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			status, _ := params["status"].(string)
+			task, _ := params["current_task"].(string)
+			return callbacks.OnReportStatus(agentID, status, task)
+		},
+	})
+
+	// report_metrics - Agent reports its metrics
+	s.RegisterTool(ToolDefinition{
+		Name:        "report_metrics",
+		Description: "Report agent metrics (tokens, tests, etc.)",
+		Parameters: map[string]ParameterDef{
+			"tokens_used":         {Type: "number", Description: "Total tokens used", Required: false},
+			"estimated_cost":      {Type: "number", Description: "Estimated cost in USD", Required: false},
+			"failed_tests":        {Type: "number", Description: "Number of failed tests", Required: false},
+			"consecutive_rejects": {Type: "number", Description: "Consecutive rejected submissions", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			metrics := &types.AgentMetrics{
+				AgentID:     agentID,
+				LastUpdated: time.Now(),
+			}
+			if v, ok := params["tokens_used"].(float64); ok {
+				metrics.TokensUsed = int64(v)
+			}
+			if v, ok := params["estimated_cost"].(float64); ok {
+				metrics.EstimatedCost = v
+			}
+			if v, ok := params["failed_tests"].(float64); ok {
+				metrics.FailedTests = int(v)
+			}
+			if v, ok := params["consecutive_rejects"].(float64); ok {
+				metrics.ConsecutiveRejects = int(v)
+			}
+			return callbacks.OnReportMetrics(agentID, metrics)
+		},
+	})
+
+	// request_human_input - Agent needs human answer
+	s.RegisterTool(ToolDefinition{
+		Name:        "request_human_input",
+		Description: "Request input from a human operator",
+		Parameters: map[string]ParameterDef{
+			"question": {Type: "string", Description: "The question to ask", Required: true},
+			"context":  {Type: "string", Description: "Additional context", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			question, _ := params["question"].(string)
+			context, _ := params["context"].(string)
+
+			req := &types.HumanInputRequest{
+				ID:        uuid.New().String(),
+				AgentID:   agentID,
+				Question:  question,
+				Context:   context,
+				CreatedAt: time.Now(),
+				Answered:  false,
+			}
+			return callbacks.OnRequestHumanInput(req)
+		},
+	})
+
+	// log_activity - General activity logging
+	s.RegisterTool(ToolDefinition{
+		Name:        "log_activity",
+		Description: "Log an activity for the dashboard",
+		Parameters: map[string]ParameterDef{
+			"action":  {Type: "string", Description: "The action performed", Required: true},
+			"details": {Type: "string", Description: "Additional details", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			action, _ := params["action"].(string)
+			details, _ := params["details"].(string)
+
+			activity := &types.ActivityLog{
+				ID:        uuid.New().String(),
+				AgentID:   agentID,
+				Action:    action,
+				Details:   details,
+				Timestamp: time.Now(),
+			}
+			return callbacks.OnLogActivity(activity)
+		},
+	})
+
+	// Supervisor-only tools
+	registerSupervisorTools(s, callbacks)
+}
+
+// registerSupervisorTools adds supervisor-specific tools
+func registerSupervisorTools(s *Server, callbacks ToolCallbacks) {
+	// get_agent_metrics - Supervisor retrieves all metrics
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_agent_metrics",
+		Description: "Get metrics for all agents (supervisor only)",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			return callbacks.OnGetAgentMetrics()
+		},
+	})
+
+	// get_pending_questions - Supervisor checks human input queue
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_pending_questions",
+		Description: "Get pending human input requests (supervisor only)",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			return callbacks.OnGetPendingQuestions()
+		},
+	})
+
+	// escalate_alert - Supervisor creates alert
+	s.RegisterTool(ToolDefinition{
+		Name:        "escalate_alert",
+		Description: "Create an alert for human attention",
+		Parameters: map[string]ParameterDef{
+			"type":     {Type: "string", Description: "Alert type", Required: true},
+			"message":  {Type: "string", Description: "Alert message", Required: true},
+			"severity": {Type: "string", Description: "warning or critical", Required: true},
+			"agent_id": {Type: "string", Description: "Related agent ID (optional)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			alertType, _ := params["type"].(string)
+			message, _ := params["message"].(string)
+			severity, _ := params["severity"].(string)
+			relatedAgent, _ := params["agent_id"].(string)
+
+			alert := &types.Alert{
+				ID:        uuid.New().String(),
+				Type:      alertType,
+				AgentID:   relatedAgent,
+				Message:   message,
+				Severity:  severity,
+				CreatedAt: time.Now(),
+			}
+			return callbacks.OnEscalateAlert(alert)
+		},
+	})
+
+	// submit_judgment - Supervisor records decision
+	s.RegisterTool(ToolDefinition{
+		Name:        "submit_judgment",
+		Description: "Record a supervisor judgment/decision",
+		Parameters: map[string]ParameterDef{
+			"agent_id":  {Type: "string", Description: "Agent being judged", Required: true},
+			"issue":     {Type: "string", Description: "The issue observed", Required: true},
+			"decision":  {Type: "string", Description: "The decision made", Required: true},
+			"reasoning": {Type: "string", Description: "Reasoning for decision", Required: true},
+			"action":    {Type: "string", Description: "Action: restart, pause, escalate, continue", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			targetAgentID, _ := params["agent_id"].(string)
+			issue, _ := params["issue"].(string)
+			decision, _ := params["decision"].(string)
+			reasoning, _ := params["reasoning"].(string)
+			action, _ := params["action"].(string)
+
+			judgment := &types.SupervisorJudgment{
+				ID:        uuid.New().String(),
+				AgentID:   targetAgentID,
+				Issue:     issue,
+				Decision:  decision,
+				Reasoning: reasoning,
+				Action:    action,
+				Timestamp: time.Now(),
+			}
+			return callbacks.OnSubmitJudgment(judgment)
+		},
+	})
+
+	// get_agent_list - Get all agents and their status
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_agent_list",
+		Description: "Get list of all agents and their current status",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			return callbacks.OnGetAgentList()
+		},
+	})
+}

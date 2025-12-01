@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CLIAIMONITOR</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <h1>CLIAIMONITOR</h1>
+            <div class="header-controls">
+                <span id="connection-status" class="status-indicator disconnected">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Disconnected</span>
+                </span>
+                <button id="mute-toggle" class="btn btn-icon" title="Toggle Sound">
+                    🔔
+                </button>
+                <button id="checkin-btn" class="btn btn-primary">Check In</button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Left Column -->
+            <div class="left-column">
+                <!-- Supervisor Status -->
+                <section class="panel supervisor-panel">
+                    <h2>Supervisor</h2>
+                    <div id="supervisor-status" class="supervisor-status">
+                        <div class="supervisor-indicator waiting">
+                            <span class="spinner"></span>
+                            <span>Waiting for Supervisor...</span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Team Agents -->
+                <section class="panel agents-panel">
+                    <h2>Team Agents</h2>
+                    <div id="agents-grid" class="agents-grid">
+                        <!-- Agent cards populated by JS -->
+                    </div>
+                </section>
+
+                <!-- Spawn Controls -->
+                <section class="panel controls-panel">
+                    <h2>Spawn Agent</h2>
+                    <div class="spawn-controls">
+                        <select id="agent-type-select">
+                            <option value="">Select agent type...</option>
+                            <option value="SNTGreen">SNTGreen (Go Developer)</option>
+                            <option value="SNTPurple">SNTPurple (Code Auditor)</option>
+                            <option value="SNTRed">SNTRed (Engineer)</option>
+                            <option value="OpusGreen">OpusGreen (Go Developer)</option>
+                            <option value="OpusPurple">OpusPurple (Code Auditor)</option>
+                            <option value="OpusRed">OpusRed (Security)</option>
+                        </select>
+                        <input type="text" id="project-path" placeholder="Project path (optional)">
+                        <button id="spawn-btn" class="btn btn-success" disabled>Spawn</button>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Right Column -->
+            <div class="right-column">
+                <!-- Alerts -->
+                <section class="panel alerts-panel">
+                    <h2>
+                        Alerts
+                        <span id="alert-count" class="badge">0</span>
+                    </h2>
+                    <div id="alerts-list" class="alerts-list">
+                        <!-- Alerts populated by JS -->
+                    </div>
+                </section>
+
+                <!-- Human Input Requests -->
+                <section class="panel human-input-panel">
+                    <h2>
+                        Human Input Required
+                        <span id="human-input-count" class="badge">0</span>
+                    </h2>
+                    <div id="human-input-list" class="human-input-list">
+                        <!-- Human input requests populated by JS -->
+                    </div>
+                </section>
+
+                <!-- Metrics -->
+                <section class="panel metrics-panel">
+                    <h2>Metrics & Thresholds</h2>
+                    <div class="thresholds-form">
+                        <div class="threshold-row">
+                            <label>Failed Tests Max:</label>
+                            <input type="number" id="threshold-failed-tests" min="0" value="5">
+                        </div>
+                        <div class="threshold-row">
+                            <label>Idle Time (sec):</label>
+                            <input type="number" id="threshold-idle-time" min="0" value="600">
+                        </div>
+                        <div class="threshold-row">
+                            <label>Token Usage Max:</label>
+                            <input type="number" id="threshold-tokens" min="0" value="100000">
+                        </div>
+                        <div class="threshold-row">
+                            <label>Consecutive Rejects:</label>
+                            <input type="number" id="threshold-rejects" min="0" value="3">
+                        </div>
+                        <div class="threshold-row">
+                            <label>Human Check-in (sec):</label>
+                            <input type="number" id="threshold-checkin" min="0" value="1800">
+                        </div>
+                        <div class="threshold-actions">
+                            <button id="save-thresholds" class="btn btn-primary">Save Thresholds</button>
+                            <button id="reset-metrics" class="btn btn-warning">Reset History</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- Activity Log (Bottom) -->
+        <section class="panel activity-panel">
+            <h2>
+                Activity Log
+                <select id="activity-filter">
+                    <option value="">All Agents</option>
+                </select>
+            </h2>
+            <div id="activity-log" class="activity-log">
+                <!-- Activity entries populated by JS -->
+            </div>
+        </section>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
