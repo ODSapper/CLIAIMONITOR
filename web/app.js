@@ -8,6 +8,7 @@ class Dashboard {
         this.audioContext = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
+        this.currentView = 'dashboard';
 
         this.init();
     }
@@ -212,8 +213,39 @@ class Dashboard {
         }
     }
 
+
+    switchView(viewName) {
+        // Hide all views
+        document.querySelectorAll('.view').forEach(view => {
+            view.classList.remove('active');
+        });
+
+        // Show selected view
+        const view = document.getElementById(`${viewName}-view`);
+        if (view) {
+            view.classList.add('active');
+        }
+
+        // Update tab buttons
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.tab === viewName) {
+                btn.classList.add('active');
+            }
+        });
+
+        this.currentView = viewName;
+    }
+
     // Event Binding
     bindEvents() {
+        // Tab navigation
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.switchView(btn.dataset.tab);
+            });
+        });
+
         // Mute toggle
         document.getElementById('mute-toggle').addEventListener('click', () => {
             this.soundEnabled = !this.soundEnabled;
@@ -454,3 +486,104 @@ class Dashboard {
 
 // Initialize
 const dashboard = new Dashboard();
+
+// ============================================================
+// Notification Banner Controller
+// ============================================================
+class NotificationBanner {
+    constructor() {
+        this.banner = document.getElementById('notification-banner');
+        this.message = document.getElementById('notification-message');
+        this.dismissBtn = document.getElementById('notification-dismiss');
+        this.currentTimeout = null;
+
+        this.initEventListeners();
+        console.log('[NOTIFICATION] Banner controller initialized');
+    }
+
+    initEventListeners() {
+        // Dismiss button click handler
+        this.dismissBtn.addEventListener('click', () => {
+            this.hide();
+        });
+
+        // Listen for notification events
+        window.addEventListener('supervisor-needs-input', (event) => {
+            const msg = event.detail?.message || 'Supervisor needs your input';
+            this.show(msg, 'supervisor', false);
+        });
+
+        window.addEventListener('notification', (event) => {
+            const { message: msg, type = 'info', autoHide = true } = event.detail || {};
+            if (msg) {
+                this.show(msg, type, autoHide);
+            }
+        });
+    }
+
+    show(text, type = 'info', autoHide = false) {
+        // Clear any existing timeout
+        if (this.currentTimeout) {
+            clearTimeout(this.currentTimeout);
+            this.currentTimeout = null;
+        }
+
+        // Set message
+        this.message.textContent = text;
+
+        // Set type (info, warning, error, supervisor)
+        this.banner.className = 'notification-banner ' + type;
+
+        // Show banner
+        this.banner.style.display = 'block';
+        document.body.classList.add('notification-active');
+
+        // Auto-hide after 10 seconds for non-supervisor alerts
+        if (autoHide && type !== 'supervisor') {
+            this.currentTimeout = setTimeout(() => {
+                this.hide();
+            }, 10000);
+        }
+
+        console.log('[NOTIFICATION] Banner shown:', text, 'Type:', type);
+    }
+
+    hide() {
+        this.banner.style.display = 'none';
+        document.body.classList.remove('notification-active');
+
+        if (this.currentTimeout) {
+            clearTimeout(this.currentTimeout);
+            this.currentTimeout = null;
+        }
+
+        console.log('[NOTIFICATION] Banner hidden');
+    }
+
+    // Public API
+    showInfo(message, autoHide = true) {
+        this.show(message, 'info', autoHide);
+    }
+
+    showWarning(message, autoHide = true) {
+        this.show(message, 'warning', autoHide);
+    }
+
+    showError(message, autoHide = true) {
+        this.show(message, 'error', autoHide);
+    }
+
+    showSupervisorAlert(message) {
+        this.show(message, 'supervisor', false);
+    }
+
+    clear() {
+        this.hide();
+    }
+}
+
+// Initialize notification banner
+const notificationBanner = new NotificationBanner();
+
+// Export to global scope for easy access
+window.notificationBanner = notificationBanner;

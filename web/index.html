@@ -7,6 +7,17 @@
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+    <!-- Notification Banner -->
+    <div id="notification-banner" class="notification-banner" style="display: none;">
+        <div class="notification-content">
+            <span class="notification-icon">🔔</span>
+            <span id="notification-message" class="notification-message"></span>
+            <button id="notification-dismiss" class="notification-dismiss" title="Dismiss notification">
+                &times;
+            </button>
+        </div>
+    </div>
+
     <div id="app">
         <!-- Header -->
         <header class="header">
@@ -22,6 +33,13 @@
             </div>
         </header>
 
+        <!-- Tab Navigation -->
+        <nav class="tab-navigation">
+            <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+        </nav>
+
+        <!-- Dashboard View -->
+        <div id="dashboard-view" class="view active">
         <!-- Activity Log (Top) -->
         <section class="panel activity-panel">
             <h2>
@@ -129,6 +147,7 @@
                 </section>
             </div>
         </main>
+        </div>
     </div>
 
     <script src="/app.js"></script>

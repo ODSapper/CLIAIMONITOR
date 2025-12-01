@@ -9,7 +9,9 @@ import (
 
 	"github.com/CLIAIMONITOR/internal/agents"
 	"github.com/CLIAIMONITOR/internal/mcp"
+	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/metrics"
+	"github.com/CLIAIMONITOR/internal/notifications"
 	"github.com/CLIAIMONITOR/internal/persistence"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/CLIAIMONITOR/web"
@@ -30,6 +32,8 @@ type Server struct {
 	alerts         *metrics.AlertChecker
 	config         *types.TeamsConfig
 	projectsConfig *types.ProjectsConfig
+	memDB          memory.MemoryDB
+	notifications  *notifications.Manager
 	basePath       string
 
 	// Instance metadata
@@ -49,22 +53,28 @@ func NewServer(
 	alertEngine *metrics.AlertChecker,
 	config *types.TeamsConfig,
 	projectsConfig *types.ProjectsConfig,
+	memDB memory.MemoryDB,
 	basePath string,
 	port int,
 ) *Server {
+	// Initialize notification manager
+	notificationMgr := notifications.NewDefaultManager()
+
 	s := &Server{
-		hub:            NewHub(),
-		store:          store,
-		spawner:        spawner,
-		mcp:            mcpServer,
-		metrics:        metricsCollector,
-		alerts:         alertEngine,
-		config:         config,
-		projectsConfig: projectsConfig,
-		basePath:       basePath,
-		port:           port,
-		startTime:      time.Now(),
-		stopChan:       make(chan struct{}),
+		hub:               NewHub(),
+		store:             store,
+		spawner:           spawner,
+		mcp:               mcpServer,
+		metrics:           metricsCollector,
+		alerts:            alertEngine,
+		config:            config,
+		projectsConfig:    projectsConfig,
+		memDB:             memDB,
+		notifications:     notificationMgr,
+		basePath:          basePath,
+		port:              port,
+		startTime:         time.Now(),
+		stopChan:          make(chan struct{}),
 	}
 
 	s.setupRoutes()
@@ -90,6 +100,10 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/metrics/reset", s.handleResetMetrics).Methods("POST")
 	api.HandleFunc("/health", s.handleHealthCheck).Methods("GET")
 	api.HandleFunc("/shutdown", s.handleShutdown).Methods("POST")
+
+	// Notification API routes
+	api.HandleFunc("/notifications/banner", s.handleGetBanner).Methods("GET")
+	api.HandleFunc("/notifications/banner/clear", s.handleClearBanner).Methods("POST")
 
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
