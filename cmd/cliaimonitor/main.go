@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
+	"github.com/CLIAIMONITOR/internal/instance"
 	"github.com/CLIAIMONITOR/internal/mcp"
 	"github.com/CLIAIMONITOR/internal/metrics"
 	"github.com/CLIAIMONITOR/internal/persistence"
@@ -26,7 +27,24 @@ func main() {
 	statePath := flag.String("state", "data/state.json", "State persistence file")
 	noSupervisor := flag.Bool("no-supervisor", false, "Don't auto-spawn supervisor")
 	mcpHost := flag.String("mcp-host", "localhost", "MCP server hostname (for agents to connect)")
+
+	// Instance management flags
+	status := flag.Bool("status", false, "Show status of running instance")
+	stop := flag.Bool("stop", false, "Stop running instance gracefully")
+	forceStop := flag.Bool("force-stop", false, "Force kill running instance")
 	flag.Parse()
+
+	// Handle status command
+	if *status {
+		showInstanceStatus(*statePath, *port)
+		os.Exit(0)
+	}
+
+	// Handle stop commands
+	if *stop || *forceStop {
+		stopInstance(*statePath, *forceStop)
+		os.Exit(0)
+	}
 
 	// Get base path (executable directory or current directory)
 	basePath, err := getBasePath()
@@ -45,6 +63,35 @@ func main() {
 	if !filepath.IsAbs(*statePath) {
 		*statePath = filepath.Join(basePath, *statePath)
 	}
+
+	// Initialize instance manager
+	pidFilePath := filepath.Join(basePath, "data", "cliaimonitor.pid")
+	instanceMgr := instance.NewManager(pidFilePath, *statePath, *port)
+
+	// Check for existing instance
+	existingInfo, err := instanceMgr.CheckExistingInstance()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to check for existing instance: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Handle conflict if instance exists
+	if existingInfo != nil && existingInfo.IsRunning {
+		resolver := instance.NewConflictResolver(instanceMgr, instance.IsInteractive())
+		if err := resolver.Resolve(existingInfo); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to resolve instance conflict: %v\n", err)
+			os.Exit(1)
+		}
+		// Update port in case user chose "use different port"
+		*port = instanceMgr.GetPort()
+	}
+
+	// Acquire exclusive lock
+	if err := instanceMgr.AcquireLock(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to acquire instance lock: %v\n", err)
+		os.Exit(1)
+	}
+	defer instanceMgr.ReleaseLock()
 
 	// Load team configuration
 	config, err := agents.LoadTeamsConfig(*configPath)
@@ -81,6 +128,17 @@ func main() {
 
 	fmt.Println("  Components initialized")
 
+	// Pre-flight port check
+	fmt.Printf("  Checking port %d availability...\n", *port)
+	if !instance.IsPortAvailable(*port) {
+		// Port occupied but no valid instance found
+		procPID, _ := instance.GetProcessUsingPort(*port)
+		fmt.Fprintf(os.Stderr, "\n  ERROR: Port %d is in use by process %d\n", *port, procPID)
+		fmt.Fprintf(os.Stderr, "  Try: Use a different port with -port 8080\n")
+		os.Exit(1)
+	}
+	fmt.Println("  Port available ✓")
+
 	// Create server
 	srv := server.NewServer(
 		store,
@@ -91,6 +149,7 @@ func main() {
 		config,
 		projectsConfig,
 		basePath,
+		*port,
 	)
 
 	// Setup graceful shutdown
@@ -99,12 +158,31 @@ func main() {
 
 	// Start server in goroutine
 	serverErr := make(chan error, 1)
+	serverReady := make(chan struct{})
+
 	go func() {
+		close(serverReady)
 		serverErr <- srv.Start(fmt.Sprintf(":%d", *port))
 	}()
 
-	// Wait a moment for server to start
-	time.Sleep(500 * time.Millisecond)
+	// Wait for server to signal ready or fail
+	<-serverReady
+	time.Sleep(100 * time.Millisecond) // Brief delay for bind to complete
+
+	// Check if server failed immediately
+	select {
+	case err := <-serverErr:
+		fmt.Fprintf(os.Stderr, "Server failed to start: %v\n", err)
+		os.Exit(1)
+	default:
+		// Server started successfully
+		fmt.Printf("  Dashboard ready at http://localhost:%d ✓\n", *port)
+
+		// Write PID file NOW (after confirmed bind)
+		if err := instanceMgr.WritePIDFile(os.Getpid(), *port, basePath); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: Failed to write PID file: %v\n", err)
+		}
+	}
 
 	// Spawn supervisor unless disabled
 	if !*noSupervisor {
@@ -163,6 +241,10 @@ func main() {
 	// Cleanup all generated config and prompt files
 	spawner.CleanupAllAgentFiles()
 
+	// Remove PID file BEFORE shutting down server
+	fmt.Println("Removing PID file...")
+	instanceMgr.RemovePIDFile()
+
 	// Shutdown server
 	if err := srv.Shutdown(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Shutdown error: %v\n", err)
@@ -191,6 +273,133 @@ func getBasePath() (string, error) {
 	}
 
 	return dir, nil
+}
+
+// showInstanceStatus displays information about the running instance
+func showInstanceStatus(statePath string, port int) {
+	basePath, _ := getBasePath()
+	pidPath := filepath.Join(basePath, "data", "cliaimonitor.pid")
+	mgr := instance.NewManager(pidPath, statePath, port)
+	info, err := mgr.CheckExistingInstance()
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return
+	}
+
+	if info == nil {
+		fmt.Println("No CLIAIMONITOR instance is currently running")
+		return
+	}
+
+	// Display formatted instance information
+	fmt.Println()
+	fmt.Println("╔═══════════════════════════════════════════════════════╗")
+	fmt.Println("║         CLIAIMONITOR Instance Status                  ║")
+	fmt.Println("╚═══════════════════════════════════════════════════════╝")
+	fmt.Println()
+
+	statusIcon := "✓"
+	if !info.IsResponding {
+		statusIcon = "✗"
+	}
+
+	fmt.Printf("Instance:    %s RUNNING\n", statusIcon)
+	fmt.Printf("  PID:       %d\n", info.PID)
+	fmt.Printf("  Port:      %d\n", info.Port)
+	fmt.Printf("  Started:   %s (%s ago)\n",
+		info.StartTime.Format("2006-01-02 15:04:05"),
+		time.Since(info.StartTime).Round(time.Second))
+	fmt.Printf("  Dashboard: http://localhost:%d\n", info.Port)
+	fmt.Printf("  Health:    ")
+	if info.IsResponding {
+		fmt.Println("OK (responding)")
+	} else {
+		fmt.Println("DEGRADED (not responding)")
+	}
+	fmt.Println()
+
+	// Load state for agent info
+	store := persistence.NewJSONStore(statePath)
+	state, err := store.Load()
+	if err == nil && state != nil {
+		activeAgents := 0
+		for _, agent := range state.Agents {
+			if agent.Status != types.StatusDisconnected {
+				activeAgents++
+			}
+		}
+
+		fmt.Printf("Active Agents: %d of %d\n", activeAgents, len(state.Agents))
+		for _, agent := range state.Agents {
+			if agent.Status != types.StatusDisconnected {
+				fmt.Printf("  - %s (PID %d): %s\n", agent.ID, agent.PID, agent.Status)
+			}
+		}
+		fmt.Println()
+
+		activeAlerts := 0
+		for _, alert := range state.Alerts {
+			if !alert.Acknowledged {
+				activeAlerts++
+			}
+		}
+		if len(state.Alerts) > 0 {
+			fmt.Printf("Alerts: %d unacknowledged of %d total\n", activeAlerts, len(state.Alerts))
+			fmt.Println()
+		}
+	}
+
+	fmt.Println("Actions:")
+	fmt.Printf("  View dashboard:  http://localhost:%d\n", info.Port)
+	fmt.Printf("  Stop instance:   cliaimonitor.exe -stop\n")
+	fmt.Printf("  Force kill:      cliaimonitor.exe -force-stop\n")
+	fmt.Println()
+}
+
+// stopInstance stops the running instance
+func stopInstance(statePath string, force bool) {
+	basePath, _ := getBasePath()
+	pidPath := filepath.Join(basePath, "data", "cliaimonitor.pid")
+	mgr := instance.NewManager(pidPath, statePath, 0)
+	info, err := mgr.CheckExistingInstance()
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if info == nil {
+		fmt.Println("No CLIAIMONITOR instance is currently running")
+		return
+	}
+
+	if force {
+		fmt.Printf("Force killing process %d...\n", info.PID)
+		if err := instance.KillProcess(info.PID); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to kill process: %v\n", err)
+			os.Exit(1)
+		}
+		time.Sleep(1 * time.Second)
+		mgr.RemovePIDFile()
+		fmt.Println("Instance terminated ✓")
+	} else {
+		fmt.Printf("Sending graceful shutdown request to instance on port %d...\n", info.Port)
+		if err := instance.SendShutdownRequest(info.Port); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to send shutdown request: %v\n", err)
+			fmt.Println("Try using -force-stop to force kill the process")
+			os.Exit(1)
+		}
+
+		// Wait for process to exit
+		fmt.Println("Waiting for graceful shutdown...")
+		if instance.WaitForPortToBeAvailable(info.Port, 5*time.Second) {
+			fmt.Println("Instance stopped successfully ✓")
+		} else {
+			fmt.Println("Warning: Instance may still be running")
+			fmt.Println("Try: cliaimonitor.exe -force-stop")
+		}
+	}
 }
 
 func printBanner() {

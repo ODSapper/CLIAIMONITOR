@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
@@ -233,6 +235,66 @@ func (s *Server) handleResetMetrics(w http.ResponseWriter, r *http.Request) {
 	s.broadcastState()
 
 	s.respondJSON(w, map[string]bool{"success": true})
+}
+
+// handleHealthCheck returns health status of the instance
+func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	state := s.store.GetState()
+
+	// Count connected agents
+	connectedAgents := 0
+	for _, agent := range state.Agents {
+		if agent.Status == types.StatusConnected || agent.Status == types.StatusWorking {
+			connectedAgents++
+		}
+	}
+
+	// Count active alerts
+	activeAlerts := 0
+	for _, alert := range state.Alerts {
+		if !alert.Acknowledged {
+			activeAlerts++
+		}
+	}
+
+	health := map[string]interface{}{
+		"status":         "ok",
+		"uptime_seconds": int(time.Since(s.startTime).Seconds()),
+		"version":        "1.0.0",
+		"pid":            os.Getpid(),
+		"port":           s.port,
+		"agents": map[string]int{
+			"total":     len(state.Agents),
+			"connected": connectedAgents,
+		},
+		"alerts": map[string]int{
+			"total":  len(state.Alerts),
+			"active": activeAlerts,
+		},
+	}
+
+	s.respondJSON(w, health)
+}
+
+// handleShutdown initiates a graceful shutdown of the server
+func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
+	// Only allow from localhost
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if host != "127.0.0.1" && host != "::1" && host != "[::1]" {
+		s.respondError(w, http.StatusForbidden, "Shutdown can only be requested from localhost")
+		return
+	}
+
+	s.respondJSON(w, map[string]string{
+		"status":  "shutting_down",
+		"message": "Graceful shutdown initiated",
+	})
+
+	// Trigger shutdown in goroutine to allow response to be sent
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		os.Exit(0)
+	}()
 }
 
 // Helper functions

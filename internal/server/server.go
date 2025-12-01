@@ -32,6 +32,10 @@ type Server struct {
 	projectsConfig *types.ProjectsConfig
 	basePath       string
 
+	// Instance metadata
+	port      int
+	startTime time.Time
+
 	// Background tasks
 	stopChan chan struct{}
 }
@@ -46,6 +50,7 @@ func NewServer(
 	config *types.TeamsConfig,
 	projectsConfig *types.ProjectsConfig,
 	basePath string,
+	port int,
 ) *Server {
 	s := &Server{
 		hub:            NewHub(),
@@ -57,6 +62,8 @@ func NewServer(
 		config:         config,
 		projectsConfig: projectsConfig,
 		basePath:       basePath,
+		port:           port,
+		startTime:      time.Now(),
 		stopChan:       make(chan struct{}),
 	}
 
@@ -81,6 +88,8 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/alerts/{id}/ack", s.handleAcknowledgeAlert).Methods("POST")
 	api.HandleFunc("/thresholds", s.handleUpdateThresholds).Methods("PUT")
 	api.HandleFunc("/metrics/reset", s.handleResetMetrics).Methods("POST")
+	api.HandleFunc("/health", s.handleHealthCheck).Methods("GET")
+	api.HandleFunc("/shutdown", s.handleShutdown).Methods("POST")
 
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
