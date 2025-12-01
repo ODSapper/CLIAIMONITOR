@@ -30,10 +30,11 @@ const (
 
 // AgentConfig from teams.yaml
 type AgentConfig struct {
-	Name  string    `yaml:"name" json:"name"`
-	Model string    `yaml:"model" json:"model"`
-	Role  AgentRole `yaml:"role" json:"role"`
-	Color string    `yaml:"color" json:"color"`
+	Name            string    `yaml:"name" json:"name"`
+	Model           string    `yaml:"model" json:"model"`
+	Role            AgentRole `yaml:"role" json:"role"`
+	Color           string    `yaml:"color" json:"color"`
+	SkipPermissions bool      `yaml:"skip_permissions" json:"skip_permissions"`
 }
 
 // Agent represents a running agent instance

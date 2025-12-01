@@ -297,6 +297,24 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+// Notification Handlers
+
+func (s *Server) handleGetBanner(w http.ResponseWriter, r *http.Request) {
+	bannerState := s.notifications.GetBannerState()
+	s.respondJSON(w, bannerState)
+}
+
+func (s *Server) handleClearBanner(w http.ResponseWriter, r *http.Request) {
+	if err := s.notifications.ClearAlert(); err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to clear banner: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]string{
+		"status": "cleared",
+	})
+}
+
 // Helper functions
 func (s *Server) respondJSON(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")

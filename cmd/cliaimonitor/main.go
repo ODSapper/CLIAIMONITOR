@@ -13,6 +13,7 @@ import (
 	"github.com/CLIAIMONITOR/internal/agents"
 	"github.com/CLIAIMONITOR/internal/instance"
 	"github.com/CLIAIMONITOR/internal/mcp"
+	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/metrics"
 	"github.com/CLIAIMONITOR/internal/persistence"
 	"github.com/CLIAIMONITOR/internal/server"
@@ -93,6 +94,33 @@ func main() {
 	}
 	defer instanceMgr.ReleaseLock()
 
+	// Initialize memory database
+	dataDir := filepath.Join(basePath, "data")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create data directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	memoryDBPath := filepath.Join(dataDir, "memory.db")
+	memoryDB, err := memory.NewMemoryDB(memoryDBPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize memory database: %v\n", err)
+		os.Exit(1)
+	}
+	defer memoryDB.Close()
+
+	// Discover current repository
+	repo, err := memoryDB.DiscoverRepo(basePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to discover repository: %v\n", err)
+	} else {
+		if repo.NeedsRescan {
+			fmt.Printf("  Repository needs rescan (ID: %s)\n", repo.ID)
+		} else {
+			fmt.Printf("  Repository discovered (ID: %s)\n", repo.ID)
+		}
+	}
+
 	// Load team configuration
 	config, err := agents.LoadTeamsConfig(*configPath)
 	if err != nil {
@@ -148,6 +176,7 @@ func main() {
 		alertEngine,
 		config,
 		projectsConfig,
+		memoryDB,
 		basePath,
 		*port,
 	)
