@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
+	"github.com/CLIAIMONITOR/internal/captain"
 	"github.com/CLIAIMONITOR/internal/instance"
 	"github.com/CLIAIMONITOR/internal/mcp"
 	"github.com/CLIAIMONITOR/internal/memory"
@@ -26,7 +27,6 @@ func main() {
 	configPath := flag.String("config", "configs/teams.yaml", "Team configuration file")
 	projectsPath := flag.String("projects", "configs/projects.yaml", "Projects configuration file")
 	statePath := flag.String("state", "data/state.json", "State persistence file")
-	noSupervisor := flag.Bool("no-supervisor", false, "Don't auto-spawn supervisor")
 	mcpHost := flag.String("mcp-host", "localhost", "MCP server hostname (for agents to connect)")
 
 	// Instance management flags
@@ -213,32 +213,20 @@ func main() {
 		}
 	}
 
-	// Spawn supervisor unless disabled
-	if !*noSupervisor {
-		fmt.Println()
-		fmt.Println("  Spawning Supervisor agent...")
-
-		pid, err := spawner.SpawnSupervisor(config.Supervisor)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  Warning: Failed to spawn supervisor: %v\n", err)
-		} else {
-			// Add supervisor to state
-			supervisor := &types.Agent{
-				ID:          "Supervisor",
-				ConfigName:  config.Supervisor.Name,
-				Role:        types.RoleSupervisor,
-				Model:       config.Supervisor.Model,
-				Color:       config.Supervisor.Color,
-				Status:      types.StatusStarting,
-				PID:         pid,
-				ProjectPath: basePath,
-				SpawnedAt:   time.Now(),
-				LastSeen:    time.Now(),
-			}
-			store.AddAgent(supervisor)
-			fmt.Printf("  Supervisor spawned (PID: %d)\n", pid)
-		}
+	// Convert config to map for Captain
+	configMap := make(map[string]types.AgentConfig)
+	for _, agent := range config.Agents {
+		configMap[agent.Name] = agent
 	}
+
+	// Create cancellable context for Captain
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initialize and start Captain orchestrator
+	captainInstance := captain.NewCaptain(basePath, spawner, memoryDB, configMap)
+	go captainInstance.Run(ctx)
+	fmt.Println("  Captain orchestrator started")
 
 	fmt.Println()
 	fmt.Println("  Press Ctrl+C to shutdown")
@@ -255,9 +243,12 @@ func main() {
 		fmt.Println("Shutting down...")
 	}
 
-	// Graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Graceful shutdown (cancel Captain context first)
+	cancel()
+
+	// Wait for graceful shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 
 	// Stop all agents
 	fmt.Println("Stopping agents...")
@@ -275,7 +266,7 @@ func main() {
 	instanceMgr.RemovePIDFile()
 
 	// Shutdown server
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "Shutdown error: %v\n", err)
 	}
 

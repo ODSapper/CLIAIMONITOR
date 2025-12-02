@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
+	"github.com/CLIAIMONITOR/internal/captain"
 	"github.com/CLIAIMONITOR/internal/handlers"
 	"github.com/CLIAIMONITOR/internal/mcp"
 	"github.com/CLIAIMONITOR/internal/memory"
@@ -35,6 +37,7 @@ type Server struct {
 	projectsConfig *types.ProjectsConfig
 	memDB          memory.MemoryDB
 	notifications  *notifications.Manager
+	captain        *captain.Captain
 	basePath       string
 
 	// Instance metadata
@@ -61,6 +64,15 @@ func NewServer(
 	// Initialize notification manager
 	notificationMgr := notifications.NewDefaultManager()
 
+	// Build agent configs map
+	agentConfigs := make(map[string]types.AgentConfig)
+	for _, cfg := range config.Agents {
+		agentConfigs[cfg.Name] = cfg
+	}
+
+	// Initialize Captain orchestrator
+	cap := captain.NewCaptain(basePath, spawner, memDB, agentConfigs)
+
 	s := &Server{
 		hub:               NewHub(),
 		store:             store,
@@ -72,6 +84,7 @@ func NewServer(
 		projectsConfig:    projectsConfig,
 		memDB:             memDB,
 		notifications:     notificationMgr,
+		captain:           cap,
 		basePath:          basePath,
 		port:              port,
 		startTime:         time.Now(),
@@ -116,6 +129,26 @@ func (s *Server) setupRoutes() {
 	// Supervisor API routes
 	supervisorHandler := handlers.NewSupervisorHandler(s.memDB)
 	supervisorHandler.RegisterRoutes(api)
+
+	// Coordination API routes (Captain's decision engine)
+	coordinationHandler := handlers.NewCoordinationHandler(s.memDB, s.spawner, s.getAgentConfigsMap())
+	coordinationHandler.RegisterRoutes(api)
+
+	// Captain orchestration routes
+	captainHandler := handlers.NewCaptainHandler(s.captain, s.store)
+	api.HandleFunc("/captain/decide", captainHandler.HandleDecideMode).Methods("POST")
+	api.HandleFunc("/captain/execute", captainHandler.HandleExecuteMission).Methods("POST")
+	api.HandleFunc("/captain/execute/parallel", captainHandler.HandleExecuteParallel).Methods("POST")
+	api.HandleFunc("/captain/import-tasks", captainHandler.HandleImportTasks).Methods("POST")
+	api.HandleFunc("/captain/subagents", captainHandler.HandleActiveSubagents).Methods("GET")
+	api.HandleFunc("/captain/api-key", captainHandler.HandleSetAPIKey).Methods("POST")
+	api.HandleFunc("/captain/recon", captainHandler.HandleRecon).Methods("POST")
+	// New Captain endpoints
+	api.HandleFunc("/captain/task", captainHandler.HandleSubmitTask).Methods("POST")
+	api.HandleFunc("/captain/status", captainHandler.HandleGetStatus).Methods("GET")
+	api.HandleFunc("/captain/trigger-recon", captainHandler.HandleTriggerRecon).Methods("POST")
+	api.HandleFunc("/captain/escalations", captainHandler.HandleGetEscalations).Methods("GET")
+	api.HandleFunc("/captain/escalation/{id}/respond", captainHandler.HandleRespondToEscalation).Methods("POST")
 
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
@@ -341,6 +374,96 @@ func (s *Server) setupMCPCallbacks() {
 				"message": "Task completed",
 			}, nil
 		},
+
+		// Snake reconnaissance callbacks
+		OnSubmitReconReport: func(agentID string, report map[string]interface{}) (interface{}, error) {
+			// Log the report as activity
+			s.store.AddActivity(&types.ActivityLog{
+				ID:        fmt.Sprintf("recon-%d", time.Now().Unix()),
+				AgentID:   agentID,
+				Action:    "submitted_recon_report",
+				Details:   fmt.Sprintf("Environment: %v, Mission: %v", report["environment"], report["mission"]),
+				Timestamp: time.Now(),
+			})
+
+			// Store report as agent learning for future reference
+			reportJSON, _ := json.Marshal(report)
+			s.memDB.StoreAgentLearning(&memory.AgentLearning{
+				AgentID:  agentID,
+				Category: "reconnaissance",
+				Title:    fmt.Sprintf("Recon: %v - %v", report["environment"], report["mission"]),
+				Content:  string(reportJSON),
+			})
+
+			// Alert if critical findings
+			if findings, ok := report["findings"].(map[string]interface{}); ok {
+				if critical, ok := findings["critical"].([]interface{}); ok && len(critical) > 0 {
+					s.hub.BroadcastAlert(&types.Alert{
+						ID:        fmt.Sprintf("critical-finding-%d", time.Now().Unix()),
+						Type:      "critical_security_finding",
+						AgentID:   agentID,
+						Message:   fmt.Sprintf("%s found %d critical issues in %v", agentID, len(critical), report["environment"]),
+						Severity:  "critical",
+						CreatedAt: time.Now(),
+					})
+				}
+			}
+
+			s.broadcastState()
+			return map[string]interface{}{
+				"status":  "received",
+				"message": "Reconnaissance report submitted successfully",
+			}, nil
+		},
+
+		OnRequestGuidance: func(agentID string, guidance map[string]interface{}) (interface{}, error) {
+			// Log guidance request
+			s.store.AddActivity(&types.ActivityLog{
+				ID:        fmt.Sprintf("guidance-%d", time.Now().Unix()),
+				AgentID:   agentID,
+				Action:    "requested_guidance",
+				Details:   fmt.Sprintf("Situation: %v", guidance["situation"]),
+				Timestamp: time.Now(),
+			})
+
+			// Alert Captain/Supervisor
+			s.hub.BroadcastAlert(&types.Alert{
+				ID:        fmt.Sprintf("guidance-req-%d", time.Now().Unix()),
+				Type:      "guidance_requested",
+				AgentID:   agentID,
+				Message:   fmt.Sprintf("%s requests guidance: %v", agentID, guidance["situation"]),
+				Severity:  "warning",
+				CreatedAt: time.Now(),
+			})
+
+			s.broadcastState()
+			return map[string]interface{}{
+				"status":  "queued",
+				"message": "Guidance request sent to Captain",
+			}, nil
+		},
+
+		OnReportProgress: func(agentID string, progress map[string]interface{}) (interface{}, error) {
+			// Update agent status with progress
+			s.store.UpdateAgent(agentID, func(a *types.Agent) {
+				a.CurrentTask = fmt.Sprintf("Scanning: %v (%v%% complete)", progress["phase"], progress["percent_complete"])
+				a.LastSeen = time.Now()
+			})
+
+			// Log progress
+			s.store.AddActivity(&types.ActivityLog{
+				ID:        fmt.Sprintf("progress-%d", time.Now().Unix()),
+				AgentID:   agentID,
+				Action:    "reported_progress",
+				Details:   fmt.Sprintf("Phase: %v, Progress: %v%%, Files: %v, Findings: %v", progress["phase"], progress["percent_complete"], progress["files_scanned"], progress["findings_so_far"]),
+				Timestamp: time.Now(),
+			})
+
+			s.broadcastState()
+			return map[string]interface{}{
+				"status": "recorded",
+			}, nil
+		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
@@ -378,6 +501,33 @@ func (s *Server) setupMCPCallbacks() {
 			return agent.ShutdownRequested
 		}
 		return false
+	})
+
+	// Set tool call callback for token estimation
+	// Since Claude agents cannot introspect their own token usage,
+	// we estimate based on MCP tool calls (roughly 500 tokens per call)
+	s.mcp.SetToolCallCallback(func(agentID string, toolName string) {
+		const tokensPerCall = 500
+		const costPer1kTokens = 0.003 // Rough estimate
+
+		// Get current metrics or create new
+		state := s.store.GetState()
+		agentMetrics := state.Metrics[agentID]
+		if agentMetrics == nil {
+			agentMetrics = &types.AgentMetrics{}
+		}
+
+		// Add estimated tokens
+		newTokens := agentMetrics.TokensUsed + tokensPerCall
+		newCost := float64(newTokens) / 1000.0 * costPer1kTokens
+
+		s.store.UpdateMetrics(agentID, &types.AgentMetrics{
+			TokensUsed:         newTokens,
+			EstimatedCost:      newCost,
+			FailedTests:        agentMetrics.FailedTests,
+			ConsecutiveRejects: agentMetrics.ConsecutiveRejects,
+		})
+		s.broadcastState()
 	})
 }
 
@@ -485,4 +635,13 @@ func (s *Server) getAgentConfig(name string) *types.AgentConfig {
 		}
 	}
 	return nil
+}
+
+// getAgentConfigsMap returns all agent configs as a map by name
+func (s *Server) getAgentConfigsMap() map[string]types.AgentConfig {
+	configs := make(map[string]types.AgentConfig)
+	for _, cfg := range s.config.Agents {
+		configs[cfg.Name] = cfg
+	}
+	return configs
 }
