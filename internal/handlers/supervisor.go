@@ -5,16 +5,19 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/CLIAIMONITOR/internal/agents"
 	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/supervisor"
+	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/gorilla/mux"
 )
 
 // SupervisorHandler handles supervisor-related HTTP endpoints
 type SupervisorHandler struct {
-	memDB   memory.MemoryDB
-	scanner *supervisor.Scanner
-	planner *supervisor.Planner
+	memDB    memory.MemoryDB
+	scanner  *supervisor.Scanner
+	planner  *supervisor.Planner
+	executor *supervisor.Executor
 }
 
 // NewSupervisorHandler creates a new supervisor handler
@@ -23,6 +26,16 @@ func NewSupervisorHandler(memDB memory.MemoryDB) *SupervisorHandler {
 		memDB:   memDB,
 		scanner: supervisor.NewScanner(memDB),
 		planner: supervisor.NewPlanner(memDB),
+	}
+}
+
+// NewSupervisorHandlerWithExecutor creates a handler with executor capabilities
+func NewSupervisorHandlerWithExecutor(memDB memory.MemoryDB, spawner *agents.ProcessSpawner, configs map[string]types.AgentConfig) *SupervisorHandler {
+	return &SupervisorHandler{
+		memDB:    memDB,
+		scanner:  supervisor.NewScanner(memDB),
+		planner:  supervisor.NewPlanner(memDB),
+		executor: supervisor.NewExecutor(memDB, spawner, configs),
 	}
 }
 
@@ -39,6 +52,7 @@ func (h *SupervisorHandler) RegisterRoutes(r *mux.Router) {
 	r.HandleFunc("/supervisor/deployments", h.handleGetDeployments).Methods("GET")
 	r.HandleFunc("/supervisor/deployments/{id}", h.handleGetDeployment).Methods("GET")
 	r.HandleFunc("/supervisor/deployments/{id}/status", h.handleUpdateDeploymentStatus).Methods("PUT")
+	r.HandleFunc("/supervisor/deployments/{id}/execute", h.handleExecuteDeployment).Methods("POST")
 }
 
 // handleDiscoverRepo discovers a new repository
@@ -345,6 +359,32 @@ func (h *SupervisorHandler) handleUpdateDeploymentStatus(w http.ResponseWriter, 
 	respondJSON(w, map[string]string{
 		"status": "updated",
 	})
+}
+
+// handleExecuteDeployment executes a deployment plan by spawning agents
+func (h *SupervisorHandler) handleExecuteDeployment(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	idStr := vars["id"]
+
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid deployment ID")
+		return
+	}
+
+	// Check if executor is available
+	if h.executor == nil {
+		respondError(w, http.StatusServiceUnavailable, "Executor not configured - handler created without spawner")
+		return
+	}
+
+	result, err := h.executor.ExecutePlan(id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, result)
 }
 
 // Helper functions
