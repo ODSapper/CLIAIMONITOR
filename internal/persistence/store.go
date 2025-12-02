@@ -22,6 +22,7 @@ type Store interface {
 	UpdateAgent(agentID string, updater func(*types.Agent))
 	RemoveAgent(agentID string)
 	GetAgent(agentID string) *types.Agent
+	RequestAgentShutdown(agentID string, requestTime time.Time)
 
 	// Metrics operations
 	UpdateMetrics(agentID string, metrics *types.AgentMetrics)
@@ -64,6 +65,9 @@ type Store interface {
 	// Thresholds
 	SetThresholds(thresholds types.AlertThresholds)
 	GetThresholds() types.AlertThresholds
+
+	// Cleanup
+	CleanupStaleAgents() int
 }
 
 // JSONStore implements Store with JSON file persistence
@@ -204,6 +208,20 @@ func (s *JSONStore) GetAgent(agentID string) *types.Agent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.state.Agents[agentID]
+}
+
+// RequestAgentShutdown marks an agent for graceful shutdown
+func (s *JSONStore) RequestAgentShutdown(agentID string, requestTime time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if agent, ok := s.state.Agents[agentID]; ok {
+		agent.ShutdownRequested = true
+		agent.ShutdownRequestedAt = &requestTime
+		agent.Status = types.StatusStopping
+		s.state.Agents[agentID] = agent
+		s.scheduleSave()
+	}
 }
 
 // UpdateMetrics updates agent metrics
@@ -433,4 +451,42 @@ func (s *JSONStore) GetThresholds() types.AlertThresholds {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.state.Thresholds
+}
+
+// CleanupStaleAgents removes disconnected agents where process is not running
+func (s *JSONStore) CleanupStaleAgents() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	removedCount := 0
+	for agentID, agent := range s.state.Agents {
+		// Only consider disconnected agents
+		if agent.Status == types.StatusDisconnected && agent.PID > 0 {
+			// Check if process still exists
+			process, err := os.FindProcess(agent.PID)
+			if err != nil {
+				// Process not found, remove agent
+				delete(s.state.Agents, agentID)
+				delete(s.state.Metrics, agentID)
+				removedCount++
+				continue
+			}
+
+			// On Windows, FindProcess always succeeds, so we need to send signal 0
+			// to check if process is actually running
+			err = process.Signal(os.Signal(nil))
+			if err != nil {
+				// Process not running, remove agent
+				delete(s.state.Agents, agentID)
+				delete(s.state.Metrics, agentID)
+				removedCount++
+			}
+		}
+	}
+
+	if removedCount > 0 {
+		s.scheduleSave()
+	}
+
+	return removedCount
 }

@@ -95,6 +95,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/agents/spawn", s.handleSpawnAgent).Methods("POST")
 	api.HandleFunc("/agents/{id}/stop", s.handleStopAgent).Methods("POST")
 	api.HandleFunc("/agents/{id}/graceful-stop", s.handleGracefulStopAgent).Methods("POST")
+	api.HandleFunc("/agents/cleanup", s.handleCleanupAgents).Methods("POST")
 	api.HandleFunc("/human-input/{id}", s.handleAnswerHumanInput).Methods("POST")
 	api.HandleFunc("/alerts/clear", s.handleClearAllAlerts).Methods("POST")
 	api.HandleFunc("/alerts/{id}/ack", s.handleAcknowledgeAlert).Methods("POST")
