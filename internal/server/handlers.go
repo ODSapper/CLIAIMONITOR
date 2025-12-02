@@ -69,6 +69,7 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ConfigName  string `json:"config_name"`
 		ProjectPath string `json:"project_path"`
+		Task        string `json:"task"` // Optional initial task for agent
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.respondError(w, http.StatusBadRequest, "Invalid request body")
@@ -92,8 +93,16 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		projectPath = s.basePath
 	}
 
-	// Spawn agent
-	pid, err := s.spawner.SpawnAgent(*agentConfig, agentID, projectPath)
+	// Build initial prompt if task provided (single line to avoid PowerShell issues)
+	initialPrompt := ""
+	if req.Task != "" {
+		initialPrompt = fmt.Sprintf("Your assigned task: %s. Begin by calling register_agent to identify yourself, then start working on this task.", req.Task)
+	} else {
+		initialPrompt = "You have been spawned. Call register_agent to identify yourself, then await further instructions from the supervisor."
+	}
+
+	// Spawn agent with initial prompt
+	pid, err := s.spawner.SpawnAgent(*agentConfig, agentID, projectPath, initialPrompt)
 	if err != nil {
 		s.respondError(w, http.StatusInternalServerError, err.Error())
 		return

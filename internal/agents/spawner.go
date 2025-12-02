@@ -14,7 +14,7 @@ import (
 
 // Spawner manages agent process lifecycle
 type Spawner interface {
-	SpawnAgent(config types.AgentConfig, agentID string, projectPath string) (pid int, err error)
+	SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (pid int, err error)
 	SpawnSupervisor(config types.AgentConfig) (pid int, err error)
 	StopAgent(agentID string) error
 	IsAgentRunning(pid int) bool
@@ -169,7 +169,7 @@ func (s *ProcessSpawner) getAccessRules(role types.AgentRole, projectPath string
 }
 
 // SpawnAgent launches a team agent in Windows Terminal
-func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, projectPath string) (int, error) {
+func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (int, error) {
 	// Derive project name from path
 	projectName := filepath.Base(projectPath)
 
@@ -202,6 +202,12 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 		"-ProjectPath", projectPath,
 		"-MCPConfigPath", mcpConfigPath,
 		"-SystemPromptPath", promptPath,
+		"-InitialPrompt", initialPrompt,
+	}
+
+	// Add skip permissions flag if enabled
+	if config.SkipPermissions {
+		args = append(args, "-SkipPermissions")
 	}
 
 	cmd := exec.Command("powershell.exe", args...)
@@ -225,7 +231,8 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 
 // SpawnSupervisor launches the supervisor agent
 func (s *ProcessSpawner) SpawnSupervisor(config types.AgentConfig) (int, error) {
-	return s.SpawnAgent(config, "Supervisor", s.basePath)
+	initialPrompt := "You are the Supervisor. Call register_agent to identify yourself, then begin your monitoring cycle."
+	return s.SpawnAgent(config, "Supervisor", s.basePath, initialPrompt)
 }
 
 // StopAgent terminates an agent process

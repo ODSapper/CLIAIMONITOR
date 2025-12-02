@@ -67,11 +67,8 @@ Write-Host ''
 
 Set-Location -Path '$ProjectPath'
 
-# Read the system prompt from file
-`$promptContent = Get-Content -Path '$SystemPromptPath' -Raw
-
-# Launch Claude with the prompt and initial task
-claude --model '$Model' --mcp-config '$MCPConfigPath'$skipPermissionsFlag$initialPromptFlag --append-system-prompt `$promptContent
+# Launch Claude with system prompt file (not inline content - avoids command line length limits)
+claude --model '$Model' --mcp-config '$MCPConfigPath'$skipPermissionsFlag$initialPromptFlag --system-prompt-file '$SystemPromptPath'
 "@
 
 # Save launcher script to temp file
