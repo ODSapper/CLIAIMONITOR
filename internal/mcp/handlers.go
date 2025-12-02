@@ -22,6 +22,10 @@ type ToolCallbacks struct {
 	OnEscalateAlert         func(alert *types.Alert) (interface{}, error)
 	OnSubmitJudgment        func(judgment *types.SupervisorJudgment) (interface{}, error)
 	OnGetAgentList          func() (interface{}, error)
+	OnGetMyTasks            func(agentID, status string) (interface{}, error)
+	OnClaimTask             func(agentID, taskID string) (interface{}, error)
+	OnUpdateTaskProgress    func(agentID, taskID, status, note string) (interface{}, error)
+	OnCompleteTask          func(agentID, taskID, summary string) (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -161,8 +165,72 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 		},
 	})
 
+	// Task workflow tools
+	registerTaskTools(s, callbacks)
+
 	// Supervisor-only tools
 	registerSupervisorTools(s, callbacks)
+}
+
+// registerTaskTools adds task workflow management tools
+func registerTaskTools(s *Server, callbacks ToolCallbacks) {
+	// get_my_tasks - List tasks assigned to the calling agent
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_my_tasks",
+		Description: "Get workflow tasks assigned to you",
+		Parameters: map[string]ParameterDef{
+			"status": {Type: "string", Description: "Filter by status (pending, assigned, in_progress, completed, blocked)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			status, _ := params["status"].(string)
+			return callbacks.OnGetMyTasks(agentID, status)
+		},
+	})
+
+	// claim_task - Claim an unassigned pending task
+	s.RegisterTool(ToolDefinition{
+		Name:        "claim_task",
+		Description: "Claim a pending task to work on. Only works for unassigned tasks.",
+		Parameters: map[string]ParameterDef{
+			"task_id": {Type: "string", Description: "The ID of the task to claim", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			taskID, _ := params["task_id"].(string)
+			return callbacks.OnClaimTask(agentID, taskID)
+		},
+	})
+
+	// update_task_progress - Update status of your assigned task
+	s.RegisterTool(ToolDefinition{
+		Name:        "update_task_progress",
+		Description: "Update progress on a task you're working on",
+		Parameters: map[string]ParameterDef{
+			"task_id": {Type: "string", Description: "The task ID", Required: true},
+			"status":  {Type: "string", Description: "New status: in_progress or blocked", Required: true},
+			"note":    {Type: "string", Description: "Optional progress note", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			taskID, _ := params["task_id"].(string)
+			status, _ := params["status"].(string)
+			note, _ := params["note"].(string)
+			return callbacks.OnUpdateTaskProgress(agentID, taskID, status, note)
+		},
+	})
+
+	// complete_task - Mark task as completed with summary
+	s.RegisterTool(ToolDefinition{
+		Name:        "complete_task",
+		Description: "Mark a task as completed with a summary of what was done",
+		Parameters: map[string]ParameterDef{
+			"task_id": {Type: "string", Description: "The task ID", Required: true},
+			"summary": {Type: "string", Description: "Summary of work completed", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			taskID, _ := params["task_id"].(string)
+			summary, _ := params["summary"].(string)
+			return callbacks.OnCompleteTask(agentID, taskID, summary)
+		},
+	})
 }
 
 // registerSupervisorTools adds supervisor-specific tools

@@ -260,6 +260,87 @@ func (s *Server) setupMCPCallbacks() {
 			s.broadcastState()
 			return map[string]string{"status": "responded", "approved": fmt.Sprintf("%v", approved)}, nil
 		},
+
+		OnGetMyTasks: func(agentID, status string) (interface{}, error) {
+			tasks, err := s.memDB.GetTasks(memory.TaskFilter{
+				AssignedAgentID: agentID,
+				Status:          status,
+				Limit:           50,
+			})
+			if err != nil {
+				return nil, err
+			}
+			return map[string]interface{}{
+				"tasks": tasks,
+				"count": len(tasks),
+			}, nil
+		},
+
+		OnClaimTask: func(agentID, taskID string) (interface{}, error) {
+			task, err := s.memDB.GetTask(taskID)
+			if err != nil {
+				return nil, fmt.Errorf("task not found: %v", err)
+			}
+			if task.AssignedAgentID != "" {
+				return nil, fmt.Errorf("task already assigned to %s", task.AssignedAgentID)
+			}
+			if task.Status != "pending" {
+				return nil, fmt.Errorf("task is not pending (current status: %s)", task.Status)
+			}
+			err = s.memDB.UpdateTaskStatus(taskID, "assigned", agentID)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]interface{}{
+				"success": true,
+				"task_id": taskID,
+				"message": "Task claimed successfully",
+			}, nil
+		},
+
+		OnUpdateTaskProgress: func(agentID, taskID, status, note string) (interface{}, error) {
+			// Validate status
+			if status != "in_progress" && status != "blocked" {
+				return nil, fmt.Errorf("invalid status: %s (must be 'in_progress' or 'blocked')", status)
+			}
+			err := s.memDB.UpdateTaskStatus(taskID, status, agentID)
+			if err != nil {
+				return nil, err
+			}
+			// Store note as learning if provided
+			if note != "" {
+				s.memDB.StoreAgentLearning(&memory.AgentLearning{
+					AgentID:  agentID,
+					Category: "task_progress",
+					Title:    fmt.Sprintf("Progress on task %s", taskID),
+					Content:  note,
+				})
+			}
+			return map[string]interface{}{
+				"success": true,
+				"task_id": taskID,
+				"status":  status,
+			}, nil
+		},
+
+		OnCompleteTask: func(agentID, taskID, summary string) (interface{}, error) {
+			err := s.memDB.UpdateTaskStatus(taskID, "completed", agentID)
+			if err != nil {
+				return nil, err
+			}
+			// Store summary as agent learning
+			s.memDB.StoreAgentLearning(&memory.AgentLearning{
+				AgentID:  agentID,
+				Category: "task_completion",
+				Title:    fmt.Sprintf("Completed task %s", taskID),
+				Content:  summary,
+			})
+			return map[string]interface{}{
+				"success": true,
+				"task_id": taskID,
+				"message": "Task completed",
+			}, nil
+		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
