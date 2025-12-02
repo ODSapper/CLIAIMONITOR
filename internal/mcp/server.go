@@ -12,8 +12,9 @@ import (
 
 // Server implements MCP over SSE
 type Server struct {
-	connections *ConnectionManager
-	tools       *ToolRegistry
+	connections              *ConnectionManager
+	tools                    *ToolRegistry
+	isAgentShutdownRequested func(agentID string) bool
 }
 
 // NewServer creates a new MCP server
@@ -27,6 +28,11 @@ func NewServer() *Server {
 // SetConnectionCallbacks sets connect/disconnect callbacks
 func (s *Server) SetConnectionCallbacks(onConnect, onDisconnect func(agentID string)) {
 	s.connections.SetCallbacks(onConnect, onDisconnect)
+}
+
+// SetShutdownChecker sets callback to check if agent should shutdown
+func (s *Server) SetShutdownChecker(checker func(agentID string) bool) {
+	s.isAgentShutdownRequested = checker
 }
 
 // RegisterTool adds a tool to the server
@@ -92,9 +98,10 @@ func (s *Server) ServeSSE(w http.ResponseWriter, r *http.Request) {
 	defer s.connections.Remove(agentID)
 
 	// Send initial endpoint message (MCP SSE protocol)
-	conn.Send("endpoint", map[string]string{
-		"url": fmt.Sprintf("/mcp/message?agent_id=%s", agentID),
-	})
+	endpointURL := fmt.Sprintf("/mcp/messages/?session_id=%s", conn.SessionID)
+	if err := conn.SendPlainData("endpoint", endpointURL); err != nil {
+		return
+	}
 
 	// Keep connection alive with periodic pings
 	ticker := time.NewTicker(30 * time.Second)
@@ -122,12 +129,17 @@ func (s *Server) ServeMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentID := r.URL.Query().Get("agent_id")
-	if agentID == "" {
-		agentID = r.Header.Get("X-Agent-ID")
+	// Get session ID from query param (per MCP SSE protocol)
+	sessionID := r.URL.Query().Get("session_id")
+	if sessionID == "" {
+		http.Error(w, "session_id required", http.StatusBadRequest)
+		return
 	}
-	if agentID == "" {
-		http.Error(w, "agent_id required", http.StatusBadRequest)
+
+	// Look up connection by session
+	conn := s.connections.GetBySession(sessionID)
+	if conn == nil {
+		http.Error(w, "invalid session", http.StatusUnauthorized)
 		return
 	}
 
@@ -141,16 +153,19 @@ func (s *Server) ServeMessage(w http.ResponseWriter, r *http.Request) {
 	// Parse JSON-RPC request
 	var req types.MCPRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		s.sendError(w, nil, -32700, "Parse error")
+		s.sendErrorToSSE(conn, nil, -32700, "Parse error")
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
-	// Handle request
-	resp := s.handleRequest(agentID, &req)
+	// Handle request - get agentID from connection
+	resp := s.handleRequest(conn.AgentID, &req)
 
-	// Send response
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	// Send response via SSE stream (not HTTP response)
+	conn.SendResponse(resp)
+
+	// HTTP response just acknowledges receipt
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // handleRequest processes an MCP request
@@ -253,17 +268,24 @@ func (s *Server) handleToolsCall(agentID string, req *types.MCPRequest) types.MC
 		resultText = string(jsonBytes)
 	}
 
+	resultMap := map[string]interface{}{
+		"content": []map[string]interface{}{
+			{
+				"type": "text",
+				"text": resultText,
+			},
+		},
+	}
+
+	// Add shutdown flag if applicable
+	if s.isAgentShutdownRequested != nil && s.isAgentShutdownRequested(agentID) {
+		resultMap["_shutdown_requested"] = true
+	}
+
 	return types.MCPResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
-		Result: map[string]interface{}{
-			"content": []map[string]interface{}{
-				{
-					"type": "text",
-					"text": resultText,
-				},
-			},
-		},
+		Result:  resultMap,
 	}
 }
 
@@ -279,4 +301,17 @@ func (s *Server) sendError(w http.ResponseWriter, id interface{}, code int, mess
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// sendErrorToSSE sends error via SSE stream
+func (s *Server) sendErrorToSSE(conn *SSEConnection, id interface{}, code int, message string) {
+	resp := types.MCPResponse{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error: &types.MCPError{
+			Code:    code,
+			Message: message,
+		},
+	}
+	conn.SendResponse(resp)
 }

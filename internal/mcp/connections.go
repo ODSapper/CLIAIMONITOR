@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/types"
+	"github.com/google/uuid"
 )
 
 // SSEConnection represents a connected agent
 type SSEConnection struct {
 	AgentID   string
+	SessionID string
 	Writer    http.ResponseWriter
 	Flusher   http.Flusher
 	Done      chan struct{}
@@ -30,6 +32,7 @@ func NewSSEConnection(agentID string, w http.ResponseWriter) (*SSEConnection, er
 
 	return &SSEConnection{
 		AgentID:   agentID,
+		SessionID: uuid.New().String(),
 		Writer:    w,
 		Flusher:   flusher,
 		Done:      make(chan struct{}),
@@ -50,6 +53,22 @@ func (c *SSEConnection) Send(event string, data interface{}) error {
 
 	// SSE format: event: <event>\ndata: <data>\n\n
 	_, err = fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, jsonData)
+	if err != nil {
+		return err
+	}
+
+	c.Flusher.Flush()
+	c.LastPing = time.Now()
+	return nil
+}
+
+// SendPlainData writes an SSE message with plain string data (not JSON)
+func (c *SSEConnection) SendPlainData(event string, data string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// SSE format: event: <event>\ndata: <data>\n\n
+	_, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, data)
 	if err != nil {
 		return err
 	}
@@ -88,6 +107,7 @@ func (c *SSEConnection) Close() {
 type ConnectionManager struct {
 	mu           sync.RWMutex
 	connections  map[string]*SSEConnection
+	sessions     map[string]*SSEConnection
 	onConnect    func(agentID string)
 	onDisconnect func(agentID string)
 }
@@ -96,6 +116,7 @@ type ConnectionManager struct {
 func NewConnectionManager() *ConnectionManager {
 	return &ConnectionManager{
 		connections: make(map[string]*SSEConnection),
+		sessions:    make(map[string]*SSEConnection),
 	}
 }
 
@@ -110,9 +131,11 @@ func (m *ConnectionManager) Add(agentID string, conn *SSEConnection) {
 	m.mu.Lock()
 	// Close existing connection if any
 	if existing, ok := m.connections[agentID]; ok {
+		delete(m.sessions, existing.SessionID)
 		existing.Close()
 	}
 	m.connections[agentID] = conn
+	m.sessions[conn.SessionID] = conn
 	m.mu.Unlock()
 
 	if m.onConnect != nil {
@@ -124,6 +147,7 @@ func (m *ConnectionManager) Add(agentID string, conn *SSEConnection) {
 func (m *ConnectionManager) Remove(agentID string) {
 	m.mu.Lock()
 	if conn, ok := m.connections[agentID]; ok {
+		delete(m.sessions, conn.SessionID)
 		conn.Close()
 		delete(m.connections, agentID)
 	}
@@ -139,6 +163,13 @@ func (m *ConnectionManager) Get(agentID string) *SSEConnection {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.connections[agentID]
+}
+
+// GetBySession looks up connection by session ID
+func (m *ConnectionManager) GetBySession(sessionID string) *SSEConnection {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sessions[sessionID]
 }
 
 // GetAll returns all connections
