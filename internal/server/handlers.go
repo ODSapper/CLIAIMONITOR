@@ -94,11 +94,24 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build initial prompt if task provided (single line to avoid PowerShell issues)
+	// Include explicit instructions about MCP tools and autonomy
 	initialPrompt := ""
 	if req.Task != "" {
-		initialPrompt = fmt.Sprintf("Your assigned task: %s. Begin by calling register_agent to identify yourself, then start working on this task.", req.Task)
+		initialPrompt = fmt.Sprintf(
+			"CRITICAL: You have MCP tools from the 'cliaimonitor' server. "+
+				"Use these MCP tools for communication - NOT PowerShell scripts. "+
+				"Available MCP tools: mcp__cliaimonitor__register_agent, mcp__cliaimonitor__report_status, mcp__cliaimonitor__request_human_input, mcp__cliaimonitor__request_stop_approval. "+
+				"FIRST: Call mcp__cliaimonitor__register_agent with agent_id='%s' and role='Go Developer'. "+
+				"THEN: Work on your task: %s. "+
+				"Work autonomously. Do NOT ask clarifying questions.",
+			agentID, req.Task)
 	} else {
-		initialPrompt = "You have been spawned. Call register_agent to identify yourself, then await further instructions from the supervisor."
+		initialPrompt = fmt.Sprintf(
+			"CRITICAL: You have MCP tools from the 'cliaimonitor' server. "+
+				"Use these MCP tools for communication - NOT PowerShell scripts. "+
+				"FIRST: Call mcp__cliaimonitor__register_agent with agent_id='%s' and role='Go Developer'. "+
+				"THEN: Wait for instructions. Work autonomously.",
+			agentID)
 	}
 
 	// Spawn agent with initial prompt
@@ -145,6 +158,38 @@ func (s *Server) handleStopAgent(w http.ResponseWriter, r *http.Request) {
 	s.broadcastState()
 
 	s.respondJSON(w, map[string]bool{"success": true})
+}
+
+// handleGracefulStopAgent requests graceful shutdown of an agent
+func (s *Server) handleGracefulStopAgent(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	agentID := vars["id"]
+
+	// Mark agent for shutdown
+	now := time.Now()
+	s.store.RequestAgentShutdown(agentID, now)
+	s.broadcastState()
+
+	// Start a goroutine to force-kill after timeout
+	go func() {
+		time.Sleep(60 * time.Second)
+
+		// Check if agent is still running
+		state := s.store.GetState()
+		if agent, ok := state.Agents[agentID]; ok && agent.ShutdownRequested {
+			// Agent didn't stop gracefully, force kill
+			s.spawner.StopAgent(agentID)
+			s.spawner.CleanupAgentFiles(agentID)
+			s.store.RemoveAgent(agentID)
+			s.metrics.RemoveAgent(agentID)
+			s.broadcastState()
+		}
+	}()
+
+	s.respondJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "Graceful shutdown requested. Agent will be force-stopped in 60 seconds if it doesn't exit.",
+	})
 }
 
 // handleAnswerHumanInput answers a human input request
@@ -321,6 +366,75 @@ func (s *Server) handleClearBanner(w http.ResponseWriter, r *http.Request) {
 
 	s.respondJSON(w, map[string]string{
 		"status": "cleared",
+	})
+}
+
+// Stop Request Handlers
+
+// handleGetStopRequests returns pending stop approval requests
+func (s *Server) handleGetStopRequests(w http.ResponseWriter, r *http.Request) {
+	pending := s.store.GetPendingStopRequests()
+	s.respondJSON(w, map[string]interface{}{
+		"stop_requests": pending,
+	})
+}
+
+// handleRespondStopRequest responds to a stop approval request
+func (s *Server) handleRespondStopRequest(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	requestID := vars["id"]
+
+	var req struct {
+		Approved bool   `json:"approved"`
+		Response string `json:"response"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Verify request exists and is pending
+	state := s.store.GetState()
+	stopReq := state.StopRequests[requestID]
+	if stopReq == nil {
+		s.respondError(w, http.StatusNotFound, "Stop request not found")
+		return
+	}
+	if stopReq.Reviewed {
+		s.respondError(w, http.StatusConflict, "Stop request already reviewed")
+		return
+	}
+
+	// Update store
+	s.store.RespondStopRequest(requestID, req.Approved, req.Response, "human")
+
+	// Notify agent via MCP
+	if stopReq.AgentID != "" {
+		s.mcp.NotifyAgent(stopReq.AgentID, "stop_approval_response", map[string]interface{}{
+			"request_id": requestID,
+			"approved":   req.Approved,
+			"response":   req.Response,
+		})
+	}
+
+	s.broadcastState()
+	s.respondJSON(w, map[string]interface{}{
+		"success":  true,
+		"approved": req.Approved,
+	})
+}
+
+// Agent Cleanup Handlers
+
+// handleCleanupAgents removes stale disconnected agents
+func (s *Server) handleCleanupAgents(w http.ResponseWriter, r *http.Request) {
+	removedCount := s.store.CleanupStaleAgents()
+	s.broadcastState()
+
+	s.respondJSON(w, map[string]interface{}{
+		"success": true,
+		"removed": removedCount,
+		"message": fmt.Sprintf("Removed %d stale agent(s)", removedCount),
 	})
 }
 

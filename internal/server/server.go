@@ -94,6 +94,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/projects", s.handleGetProjects).Methods("GET")
 	api.HandleFunc("/agents/spawn", s.handleSpawnAgent).Methods("POST")
 	api.HandleFunc("/agents/{id}/stop", s.handleStopAgent).Methods("POST")
+	api.HandleFunc("/agents/{id}/graceful-stop", s.handleGracefulStopAgent).Methods("POST")
 	api.HandleFunc("/human-input/{id}", s.handleAnswerHumanInput).Methods("POST")
 	api.HandleFunc("/alerts/clear", s.handleClearAllAlerts).Methods("POST")
 	api.HandleFunc("/alerts/{id}/ack", s.handleAcknowledgeAlert).Methods("POST")
@@ -106,6 +107,10 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/notifications/banner", s.handleGetBanner).Methods("GET")
 	api.HandleFunc("/notifications/banner/clear", s.handleClearBanner).Methods("POST")
 
+	// Stop request management routes
+	api.HandleFunc("/stop-requests", s.handleGetStopRequests).Methods("GET")
+	api.HandleFunc("/stop-requests/{id}/respond", s.handleRespondStopRequest).Methods("POST")
+
 	// Supervisor API routes
 	supervisorHandler := handlers.NewSupervisorHandler(s.memDB)
 	supervisorHandler.RegisterRoutes(api)
@@ -115,7 +120,7 @@ func (s *Server) setupRoutes() {
 
 	// MCP endpoints
 	s.router.HandleFunc("/mcp/sse", s.mcp.ServeSSE)
-	s.router.HandleFunc("/mcp/message", s.mcp.ServeMessage)
+	s.router.HandleFunc("/mcp/messages/", s.mcp.ServeMessage)
 
 	// Static files
 	staticFS, _ := fs.Sub(web.StaticFiles, ".")
@@ -282,6 +287,15 @@ func (s *Server) setupMCPCallbacks() {
 			s.broadcastState()
 		},
 	)
+
+	// Set shutdown checker
+	s.mcp.SetShutdownChecker(func(agentID string) bool {
+		state := s.store.GetState()
+		if agent, ok := state.Agents[agentID]; ok {
+			return agent.ShutdownRequested
+		}
+		return false
+	})
 }
 
 // Start starts the HTTP server
