@@ -137,6 +137,11 @@ func (m *SQLiteMemoryDB) GetTasks(filter TaskFilter) ([]*WorkflowTask, error) {
 		args = append(args, filter.Limit)
 	}
 
+	if filter.Offset > 0 {
+		query += " OFFSET ?"
+		args = append(args, filter.Offset)
+	}
+
 	rows, err := m.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tasks: %w", err)

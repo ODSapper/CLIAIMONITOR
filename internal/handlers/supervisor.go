@@ -152,10 +152,29 @@ func (h *SupervisorHandler) handleCreatePlan(w http.ResponseWriter, r *http.Requ
 func (h *SupervisorHandler) handleGetTasks(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters for filtering
 	query := r.URL.Query()
+
+	limit := 100
+	if l := query.Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	offset := 0
+	if o := query.Get("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
 	filter := memory.TaskFilter{
-		RepoID: query.Get("repo_id"),
-		Status: query.Get("status"),
-		Limit:  100, // Default limit
+		RepoID:          query.Get("repo_id"),
+		Status:          query.Get("status"),
+		AssignedAgentID: query.Get("agent_id"),
+		Priority:        query.Get("priority"),
+		ParentTaskID:    query.Get("parent_id"),
+		Limit:           limit,
+		Offset:          offset,
 	}
 
 	tasks, err := h.memDB.GetTasks(filter)
@@ -165,8 +184,10 @@ func (h *SupervisorHandler) handleGetTasks(w http.ResponseWriter, r *http.Reques
 	}
 
 	respondJSON(w, map[string]interface{}{
-		"tasks": tasks,
-		"count": len(tasks),
+		"tasks":  tasks,
+		"count":  len(tasks),
+		"limit":  limit,
+		"offset": offset,
 	})
 }
 
@@ -206,6 +227,7 @@ func (h *SupervisorHandler) handleUpdateTaskStatus(w http.ResponseWriter, r *htt
 	// Validate status
 	validStatuses := map[string]bool{
 		"pending":     true,
+		"assigned":    true,
 		"in_progress": true,
 		"completed":   true,
 		"blocked":     true,

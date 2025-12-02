@@ -127,6 +127,7 @@ type TaskFilter struct {
 	Priority        string
 	ParentTaskID    string
 	Limit           int
+	Offset          int
 }
 
 // ContextSummary stores session context before compaction
