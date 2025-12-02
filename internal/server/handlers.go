@@ -434,9 +434,30 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 
 // Agent Cleanup Handlers
 
-// handleCleanupAgents removes stale disconnected agents
+// handleCleanupAgents removes stale disconnected agents and kills their processes
 func (s *Server) handleCleanupAgents(w http.ResponseWriter, r *http.Request) {
-	removedCount := s.store.CleanupStaleAgents()
+	// Get current state to find disconnected agents
+	state := s.store.GetState()
+	removedCount := 0
+
+	for agentID, agent := range state.Agents {
+		// Only clean up disconnected agents
+		if agent.Status == types.StatusDisconnected {
+			// Kill the process if it's still running
+			if err := s.spawner.StopAgent(agentID); err != nil {
+				// Log but continue - process may already be dead
+			}
+
+			// Clean up config and prompt files
+			s.spawner.CleanupAgentFiles(agentID)
+
+			// Remove from store and metrics
+			s.store.RemoveAgent(agentID)
+			s.metrics.RemoveAgent(agentID)
+			removedCount++
+		}
+	}
+
 	s.broadcastState()
 
 	s.respondJSON(w, map[string]interface{}{
