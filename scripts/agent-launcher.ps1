@@ -21,7 +21,13 @@ param(
     [string]$MCPConfigPath,
 
     [Parameter(Mandatory=$true)]
-    [string]$SystemPromptPath
+    [string]$SystemPromptPath,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipPermissions,
+
+    [Parameter(Mandatory=$false)]
+    [string]$InitialPrompt = ""
 )
 
 # Verify paths exist
@@ -40,9 +46,13 @@ if (-not (Test-Path $MCPConfigPath)) {
     exit 1
 }
 
+# Build the Claude command with optional flags
+$skipPermissionsFlag = if ($SkipPermissions) { " --dangerously-skip-permissions" } else { "" }
+$initialPromptFlag = if ($InitialPrompt -ne "") { " -p `"$InitialPrompt`"" } else { "" }
+
 # Create a launcher script that will run in the new terminal
 $launcherScript = @"
-`$Host.UI.RawUI.WindowTitle = '$AgentID'
+`$Host.UI.RawUI.WindowTitle = '$AgentName'
 Write-Host ''
 Write-Host '  ================================================' -ForegroundColor Cyan
 Write-Host '    CLIAIMONITOR Agent: $AgentID' -ForegroundColor Green
@@ -60,8 +70,8 @@ Set-Location -Path '$ProjectPath'
 # Read the system prompt from file
 `$promptContent = Get-Content -Path '$SystemPromptPath' -Raw
 
-# Launch Claude with the prompt
-claude --model '$Model' --mcp-config '$MCPConfigPath' --append-system-prompt `$promptContent
+# Launch Claude with the prompt and initial task
+claude --model '$Model' --mcp-config '$MCPConfigPath'$skipPermissionsFlag$initialPromptFlag --append-system-prompt `$promptContent
 "@
 
 # Save launcher script to temp file
@@ -73,10 +83,10 @@ $wtPath = Get-Command "wt.exe" -ErrorAction SilentlyContinue
 
 if ($wtPath) {
     # Launch in Windows Terminal with new tab
-    # Quote paths with spaces for proper parsing
+    # Use AgentName (team name like "SNT Green") for tab title instead of AgentID
     $wtArgs = @(
         "new-tab",
-        "--title", "`"$AgentID`"",
+        "--title", "`"$AgentName`"",
         "--tabColor", $Color,
         "-d", "`"$ProjectPath`"",
         "powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "`"$tempScript`""

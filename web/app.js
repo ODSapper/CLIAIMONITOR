@@ -330,6 +330,10 @@ class Dashboard {
 
         grid.innerHTML = agents.map(agent => {
             const metrics = this.state.metrics?.[agent.id] || {};
+            const statusDisplay = this.getAgentStatusDisplay(agent);
+            const statusTooltip = statusDisplay.fullTask
+                ? `Task: ${statusDisplay.fullTask}\nLast seen: ${this.formatTime(agent.last_seen)}`
+                : `Last seen: ${this.formatTime(agent.last_seen)}`;
             return `
                 <div class="agent-card" style="--agent-color: ${agent.color}">
                     <div class="agent-card-header">
@@ -337,9 +341,8 @@ class Dashboard {
                             <div class="agent-name">${this.escapeHtml(agent.id)}</div>
                             <div class="agent-role">${this.escapeHtml(agent.role)}</div>
                         </div>
-                        <span class="agent-status ${agent.status}">${agent.status}</span>
+                        <span class="agent-status ${statusDisplay.class}" title="${this.escapeHtml(statusTooltip)}">${statusDisplay.text}</span>
                     </div>
-                    ${agent.current_task ? `<div class="agent-task" title="${this.escapeHtml(agent.current_task)}">${this.escapeHtml(agent.current_task)}</div>` : ''}
                     <div class="agent-metrics">
                         <span title="Tokens used">🪙 ${metrics.tokens_used || 0}</span>
                         <span title="Failed tests">❌ ${metrics.failed_tests || 0}</span>
@@ -481,6 +484,46 @@ class Dashboard {
         if (!timestamp) return '';
         const date = new Date(timestamp);
         return date.toLocaleTimeString('en-US', { hour12: false });
+    }
+
+    formatRelativeTime(timestamp) {
+        if (!timestamp) return 'never';
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffSec = Math.floor(diffMs / 1000);
+        const diffMin = Math.floor(diffSec / 60);
+        const diffHour = Math.floor(diffMin / 60);
+
+        if (diffSec < 10) return 'just now';
+        if (diffSec < 60) return `${diffSec}s ago`;
+        if (diffMin < 60) return `${diffMin}m ago`;
+        if (diffHour < 24) return `${diffHour}h ago`;
+        return date.toLocaleDateString();
+    }
+
+    getAgentStatusDisplay(agent) {
+        // If agent has a current task, show it (truncated) as the status
+        if (agent.current_task) {
+            const taskText = agent.current_task.length > 30
+                ? agent.current_task.substring(0, 30) + '...'
+                : agent.current_task;
+            return { text: taskText, class: 'working', fullTask: agent.current_task };
+        }
+
+        // If connected/working but no task, show that
+        if (agent.status === 'connected' || agent.status === 'working') {
+            return { text: agent.status, class: agent.status };
+        }
+
+        // For disconnected/idle agents, show last seen time
+        const lastSeen = this.formatRelativeTime(agent.last_seen);
+        if (agent.status === 'disconnected') {
+            return { text: `seen ${lastSeen}`, class: 'idle' };
+        }
+
+        // Default: show status with last seen
+        return { text: `${agent.status} (${lastSeen})`, class: agent.status };
     }
 }
 
