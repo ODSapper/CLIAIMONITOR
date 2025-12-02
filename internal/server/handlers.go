@@ -424,6 +424,14 @@ func (s *Server) handleRespondStopRequest(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// Stats Handler
+
+// handleGetStats returns session statistics
+func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
+	state := s.store.GetState()
+	s.respondJSON(w, state.SessionStats)
+}
+
 // Agent Cleanup Handlers
 
 // handleCleanupAgents removes stale disconnected agents

@@ -189,6 +189,49 @@ body {
     gap: 0.5rem;
 }
 
+/* Stats Panel */
+.stats-panel {
+    background: linear-gradient(135deg, var(--bg-panel) 0%, var(--bg-secondary) 100%);
+    border: 1px solid var(--accent-blue);
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+}
+
+.stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    transition: all 0.2s;
+}
+
+.stat-item:hover {
+    border-color: var(--accent-blue);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.5rem;
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent-blue);
+}
+
 .badge {
     background: var(--accent-red);
     color: white;
@@ -248,6 +291,11 @@ body {
 .agent-status.blocked { background: rgba(245, 101, 101, 0.2); color: var(--accent-red); }
 .agent-status.disconnected { background: rgba(160, 160, 160, 0.2); color: var(--text-secondary); }
 .agent-status.starting { background: rgba(159, 122, 234, 0.2); color: var(--accent-purple); }
+.agent-status.stopping {
+    background: rgba(236, 201, 75, 0.3);
+    color: var(--accent-yellow);
+    animation: pulse 1s infinite;
+}
 
 .agent-task {
     font-size: 0.8rem;
@@ -268,11 +316,73 @@ body {
 
 .agent-actions {
     margin-top: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .agent-actions .btn {
     font-size: 0.75rem;
     padding: 0.25rem 0.5rem;
+}
+
+.shutdown-countdown {
+    font-size: 0.8rem;
+    color: var(--accent-yellow);
+    margin-right: 0.5rem;
+}
+
+.shutdown-countdown .countdown {
+    font-weight: bold;
+}
+
+/* Agent Status Container */
+.agent-status-container {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.agent-last-seen {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+}
+
+/* Agent Current Task */
+.agent-current-task {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    font-size: 0.8rem;
+    min-height: 2.5rem;
+}
+
+.agent-current-task .task-icon {
+    flex-shrink: 0;
+}
+
+.agent-current-task .task-text {
+    color: var(--text-primary);
+    line-height: 1.4;
+    word-break: break-word;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.agent-current-task.empty {
+    opacity: 0.5;
+}
+
+.agent-current-task.empty .task-text {
+    font-style: italic;
+    color: var(--text-secondary);
 }
 
 /* Spawn Controls */

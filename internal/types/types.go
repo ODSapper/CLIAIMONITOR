@@ -15,6 +15,7 @@ const (
 	StatusIdle         AgentStatus = "idle"
 	StatusBlocked      AgentStatus = "blocked"
 	StatusDisconnected AgentStatus = "disconnected"
+	StatusStopping     AgentStatus = "stopping"
 )
 
 // AgentRole defines the role/specialization of an agent
@@ -39,17 +40,19 @@ type AgentConfig struct {
 
 // Agent represents a running agent instance
 type Agent struct {
-	ID          string      `json:"id"`
-	ConfigName  string      `json:"config_name"`
-	Role        AgentRole   `json:"role"`
-	Model       string      `json:"model"`
-	Color       string      `json:"color"`
-	Status      AgentStatus `json:"status"`
-	PID         int         `json:"pid"`
-	ProjectPath string      `json:"project_path"`
-	SpawnedAt   time.Time   `json:"spawned_at"`
-	LastSeen    time.Time   `json:"last_seen"`
-	CurrentTask string      `json:"current_task"`
+	ID                  string      `json:"id"`
+	ConfigName          string      `json:"config_name"`
+	Role                AgentRole   `json:"role"`
+	Model               string      `json:"model"`
+	Color               string      `json:"color"`
+	Status              AgentStatus `json:"status"`
+	PID                 int         `json:"pid"`
+	ProjectPath         string      `json:"project_path"`
+	SpawnedAt           time.Time   `json:"spawned_at"`
+	LastSeen            time.Time   `json:"last_seen"`
+	CurrentTask         string      `json:"current_task"`
+	ShutdownRequested   bool        `json:"shutdown_requested"`
+	ShutdownRequestedAt *time.Time  `json:"shutdown_requested_at,omitempty"`
 }
 
 // AgentMetrics tracks per-agent statistics
@@ -165,6 +168,15 @@ type MetricsSnapshot struct {
 	Agents    map[string]*AgentMetrics `json:"agents"`
 }
 
+// SessionStats tracks aggregate statistics for the current session
+type SessionStats struct {
+	TotalAgentsSpawned  int       `json:"total_agents_spawned"`
+	TotalTokensUsed     int64     `json:"total_tokens_used"`
+	TotalEstimatedCost  float64   `json:"total_estimated_cost"`
+	SessionStartedAt    time.Time `json:"session_started_at"`
+	CompletedTasks      int       `json:"completed_tasks"`
+}
+
 // DashboardState is the full persisted state
 type DashboardState struct {
 	SupervisorConnected bool                            `json:"supervisor_connected"`
@@ -179,6 +191,7 @@ type DashboardState struct {
 	Thresholds          AlertThresholds                 `json:"thresholds"`
 	LastHumanCheckin    time.Time                       `json:"last_human_checkin"`
 	AgentCounters       map[string]int                  `json:"agent_counters"`
+	SessionStats        SessionStats                    `json:"session_stats"`
 }
 
 // NewDashboardState creates empty state with defaults
@@ -196,5 +209,8 @@ func NewDashboardState() *DashboardState {
 		Thresholds:          DefaultThresholds(),
 		LastHumanCheckin:    time.Now(),
 		AgentCounters:       make(map[string]int),
+		SessionStats: SessionStats{
+			SessionStartedAt: time.Now(),
+		},
 	}
 }

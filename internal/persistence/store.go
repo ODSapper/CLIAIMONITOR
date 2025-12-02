@@ -128,6 +128,10 @@ func (s *JSONStore) Load() (*types.DashboardState, error) {
 	if state.AgentCounters == nil {
 		state.AgentCounters = make(map[string]int)
 	}
+	// Initialize SessionStats if not set
+	if state.SessionStats.SessionStartedAt.IsZero() {
+		state.SessionStats.SessionStartedAt = time.Now()
+	}
 
 	s.state = &state
 	return s.state, nil
@@ -180,6 +184,8 @@ func (s *JSONStore) ResetMetricsHistory() error {
 func (s *JSONStore) AddAgent(agent *types.Agent) {
 	s.mu.Lock()
 	s.state.Agents[agent.ID] = agent
+	// Increment total agents spawned
+	s.state.SessionStats.TotalAgentsSpawned++
 	s.mu.Unlock()
 	s.scheduleSave()
 }
@@ -227,6 +233,22 @@ func (s *JSONStore) RequestAgentShutdown(agentID string, requestTime time.Time) 
 // UpdateMetrics updates agent metrics
 func (s *JSONStore) UpdateMetrics(agentID string, metrics *types.AgentMetrics) {
 	s.mu.Lock()
+	// Calculate delta for token usage
+	oldMetrics := s.state.Metrics[agentID]
+	if oldMetrics != nil {
+		tokenDelta := metrics.TokensUsed - oldMetrics.TokensUsed
+		costDelta := metrics.EstimatedCost - oldMetrics.EstimatedCost
+		if tokenDelta > 0 {
+			s.state.SessionStats.TotalTokensUsed += tokenDelta
+		}
+		if costDelta > 0 {
+			s.state.SessionStats.TotalEstimatedCost += costDelta
+		}
+	} else {
+		// First time metrics for this agent
+		s.state.SessionStats.TotalTokensUsed += metrics.TokensUsed
+		s.state.SessionStats.TotalEstimatedCost += metrics.EstimatedCost
+	}
 	s.state.Metrics[agentID] = metrics
 	s.mu.Unlock()
 	s.scheduleSave()
@@ -323,6 +345,10 @@ func (s *JSONStore) RespondStopRequest(id string, approved bool, response string
 		req.Approved = approved
 		req.Response = response
 		req.ReviewedBy = reviewedBy
+		// If approved, increment completed tasks
+		if approved && req.Reason == "task_complete" {
+			s.state.SessionStats.CompletedTasks++
+		}
 	}
 	s.mu.Unlock()
 	s.scheduleSave()

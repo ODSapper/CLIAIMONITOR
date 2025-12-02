@@ -18,6 +18,9 @@ class Dashboard {
         this.connectWebSocket();
         this.loadInitialState();
         this.loadProjects();
+        this.loadSessionStats();
+        // Update stats every 30 seconds
+        setInterval(() => this.loadSessionStats(), 30000);
     }
 
     // WebSocket Connection
@@ -138,10 +141,33 @@ class Dashboard {
         }
     }
 
+    async loadSessionStats() {
+        try {
+            const response = await fetch('/api/stats');
+            const stats = await response.json();
+            this.renderSessionStats(stats);
+        } catch (error) {
+            console.error('Failed to load session stats:', error);
+        }
+    }
+
     renderProjectsDropdown() {
         const select = document.getElementById('project-select');
         select.innerHTML = '<option value="">Select project...</option>' +
             this.projects.map(p => `<option value="${this.escapeHtml(p.path)}" title="${this.escapeHtml(p.description)}">${this.escapeHtml(p.name)}${p.has_claude_md ? ' (CLAUDE.md)' : ''}</option>`).join('');
+    }
+
+    renderSessionStats(stats) {
+        // Calculate uptime
+        const startTime = new Date(stats.session_started_at);
+        const uptime = this.formatUptime(startTime);
+        document.getElementById('stat-uptime').textContent = uptime;
+
+        // Display other stats
+        document.getElementById('stat-agents-spawned').textContent = stats.total_agents_spawned || 0;
+        document.getElementById('stat-total-tokens').textContent = this.formatNumber(stats.total_tokens_used || 0);
+        document.getElementById('stat-total-cost').textContent = '$' + (stats.total_estimated_cost || 0).toFixed(2);
+        document.getElementById('stat-completed-tasks').textContent = stats.completed_tasks || 0;
     }
 
     async spawnAgent(configName, projectPath) {
@@ -162,6 +188,14 @@ class Dashboard {
             await fetch(`/api/agents/${agentId}/stop`, { method: 'POST' });
         } catch (error) {
             console.error('Failed to stop agent:', error);
+        }
+    }
+
+    async gracefulStopAgent(agentId) {
+        try {
+            await fetch(`/api/agents/${agentId}/graceful-stop`, { method: 'POST' });
+        } catch (error) {
+            console.error('Failed to request graceful stop:', error);
         }
     }
 
@@ -330,10 +364,17 @@ class Dashboard {
 
         grid.innerHTML = agents.map(agent => {
             const metrics = this.state.metrics?.[agent.id] || {};
-            const statusDisplay = this.getAgentStatusDisplay(agent);
-            const statusTooltip = statusDisplay.fullTask
-                ? `Task: ${statusDisplay.fullTask}\nLast seen: ${this.formatTime(agent.last_seen)}`
-                : `Last seen: ${this.formatTime(agent.last_seen)}`;
+            const hasTask = agent.current_task && agent.current_task.trim() !== '';
+            const lastSeen = this.formatRelativeTime(agent.last_seen);
+
+            // Determine display status: if has task, show "working" not "disconnected"
+            let displayStatus = agent.status;
+            let statusClass = agent.status;
+            if (hasTask && agent.status === 'disconnected') {
+                displayStatus = 'working';
+                statusClass = 'working';
+            }
+
             return `
                 <div class="agent-card" style="--agent-color: ${agent.color}">
                     <div class="agent-card-header">
@@ -341,14 +382,39 @@ class Dashboard {
                             <div class="agent-name">${this.escapeHtml(agent.id)}</div>
                             <div class="agent-role">${this.escapeHtml(agent.role)}</div>
                         </div>
-                        <span class="agent-status ${statusDisplay.class}" title="${this.escapeHtml(statusTooltip)}">${statusDisplay.text}</span>
+                        <div class="agent-status-container">
+                            <span class="agent-status ${statusClass}">${displayStatus}</span>
+                            <span class="agent-last-seen">${lastSeen}</span>
+                        </div>
                     </div>
+                    ${hasTask ? `
+                    <div class="agent-current-task" title="${this.escapeHtml(agent.current_task)}">
+                        <span class="task-icon">📋</span>
+                        <span class="task-text">${this.escapeHtml(agent.current_task)}</span>
+                    </div>
+                    ` : `
+                    <div class="agent-current-task empty">
+                        <span class="task-text">Waiting for task...</span>
+                    </div>
+                    `}
                     <div class="agent-metrics">
                         <span title="Tokens used">🪙 ${metrics.tokens_used || 0}</span>
                         <span title="Failed tests">❌ ${metrics.failed_tests || 0}</span>
                     </div>
                     <div class="agent-actions">
-                        <button class="btn btn-danger" onclick="dashboard.stopAgent('${agent.id}')">Stop</button>
+                        ${agent.shutdown_requested ? `
+                            <span class="shutdown-countdown" data-started="${agent.shutdown_requested_at}">
+                                Stopping... <span class="countdown">${this.calculateCountdown(agent.shutdown_requested_at)}</span>
+                            </span>
+                            <button class="btn btn-danger" onclick="dashboard.stopAgent('${agent.id}')">Force Kill</button>
+                        ` : `
+                            <button class="btn btn-warning" onclick="dashboard.gracefulStopAgent('${agent.id}')" title="Request graceful shutdown">
+                                Stop
+                            </button>
+                            <button class="btn btn-danger btn-small" onclick="dashboard.stopAgent('${agent.id}')" title="Force kill immediately">
+                                Kill
+                            </button>
+                        `}
                     </div>
                 </div>
             `;
@@ -502,29 +568,47 @@ class Dashboard {
         return date.toLocaleDateString();
     }
 
-    getAgentStatusDisplay(agent) {
-        // If agent has a current task, show it (truncated) as the status
-        if (agent.current_task) {
-            const taskText = agent.current_task.length > 30
-                ? agent.current_task.substring(0, 30) + '...'
-                : agent.current_task;
-            return { text: taskText, class: 'working', fullTask: agent.current_task };
-        }
-
-        // If connected/working but no task, show that
-        if (agent.status === 'connected' || agent.status === 'working') {
-            return { text: agent.status, class: agent.status };
-        }
-
-        // For disconnected/idle agents, show last seen time
-        const lastSeen = this.formatRelativeTime(agent.last_seen);
-        if (agent.status === 'disconnected') {
-            return { text: `seen ${lastSeen}`, class: 'idle' };
-        }
-
-        // Default: show status with last seen
-        return { text: `${agent.status} (${lastSeen})`, class: agent.status };
+    calculateCountdown(shutdownRequestedAt) {
+        if (!shutdownRequestedAt) return '60s';
+        const requestedTime = new Date(shutdownRequestedAt);
+        const now = new Date();
+        const elapsedMs = now - requestedTime;
+        const remainingMs = Math.max(0, 60000 - elapsedMs);
+        const remainingSec = Math.ceil(remainingMs / 1000);
+        return `${remainingSec}s`;
     }
+
+    formatUptime(startTime) {
+        const now = new Date();
+        const diffMs = now - startTime;
+        const diffSec = Math.floor(diffMs / 1000);
+        const diffMin = Math.floor(diffSec / 60);
+        const diffHour = Math.floor(diffMin / 60);
+        const diffDay = Math.floor(diffHour / 24);
+
+        if (diffDay > 0) {
+            const hours = diffHour % 24;
+            return `${diffDay}d ${hours}h`;
+        } else if (diffHour > 0) {
+            const minutes = diffMin % 60;
+            return `${diffHour}h ${minutes}m`;
+        } else if (diffMin > 0) {
+            const seconds = diffSec % 60;
+            return `${diffMin}m ${seconds}s`;
+        } else {
+            return `${diffSec}s`;
+        }
+    }
+
+    formatNumber(num) {
+        if (num >= 1000000) {
+            return (num / 1000000).toFixed(1) + 'M';
+        } else if (num >= 1000) {
+            return (num / 1000).toFixed(1) + 'K';
+        }
+        return num.toString();
+    }
+
 }
 
 // Initialize

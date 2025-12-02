@@ -103,6 +103,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/metrics/reset", s.handleResetMetrics).Methods("POST")
 	api.HandleFunc("/health", s.handleHealthCheck).Methods("GET")
 	api.HandleFunc("/shutdown", s.handleShutdown).Methods("POST")
+	api.HandleFunc("/stats", s.handleGetStats).Methods("GET")
 
 	// Notification API routes
 	api.HandleFunc("/notifications/banner", s.handleGetBanner).Methods("GET")
