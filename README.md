@@ -117,7 +117,7 @@ CLIAIMONITOR/
 
 ## Requirements
 
-- Go 1.21+
+- Go 1.25.3+
 - Windows Terminal (for tab colors)
 - Claude Code CLI installed
 

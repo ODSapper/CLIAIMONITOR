@@ -163,7 +163,7 @@ snake_report:
         type: "dependency"
         description: "Outdated Go version (1.19) with known vulnerabilities"
         location: "go.mod"
-        recommendation: "Update to Go 1.21+ for security patches"
+        recommendation: "Update to Go 1.25.3+ for security patches"
 
     low:
       - id: "DOC-001"
