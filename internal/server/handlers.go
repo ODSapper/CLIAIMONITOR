@@ -83,9 +83,9 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate agent ID
-	num := s.store.GetNextAgentNumber(req.ConfigName)
-	agentID := req.ConfigName + formatAgentNumber(num)
+	// Generate team-compatible agent ID using spawner's method
+	// This ensures consistent ID format: team-{type}{seq:03d}
+	agentID := s.spawner.GenerateAgentID(req.ConfigName)
 
 	// Default project path
 	projectPath := req.ProjectPath
@@ -93,25 +93,26 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		projectPath = s.basePath
 	}
 
-	// Build initial prompt if task provided (single line to avoid PowerShell issues)
-	// Include explicit instructions about MCP tools and autonomy
+	// Build initial prompt with MANDATORY context verification
+	// The agent MUST announce its identity first so we know context loaded
+	contextVerification := fmt.Sprintf(
+		"MANDATORY FIRST ACTION: Say exactly: 'CONTEXT LOADED: I am %s (%s). Ready for mission.' "+
+			"If you cannot see your agent ID in your system prompt, say 'NO CONTEXT: System prompt not loaded' instead. "+
+			"This confirms your identity was injected correctly. ",
+		agentID, agentConfig.Role)
+
+	mcpInstructions := fmt.Sprintf(
+		"THEN use MCP tools from 'cliaimonitor' server. "+
+			"Call mcp__cliaimonitor__register_agent with agent_id='%s' and role='%s'. ",
+		agentID, agentConfig.Role)
+
 	initialPrompt := ""
 	if req.Task != "" {
-		initialPrompt = fmt.Sprintf(
-			"CRITICAL: You have MCP tools from the 'cliaimonitor' server. "+
-				"Use these MCP tools for communication - NOT PowerShell scripts. "+
-				"Available MCP tools: mcp__cliaimonitor__register_agent, mcp__cliaimonitor__report_status, mcp__cliaimonitor__request_human_input, mcp__cliaimonitor__request_stop_approval. "+
-				"FIRST: Call mcp__cliaimonitor__register_agent with agent_id='%s' and role='Go Developer'. "+
-				"THEN: Work on your task: %s. "+
-				"Work autonomously. Do NOT ask clarifying questions.",
-			agentID, req.Task)
+		initialPrompt = contextVerification + mcpInstructions +
+			fmt.Sprintf("TASK: %s. Work autonomously. Do NOT ask clarifying questions.", req.Task)
 	} else {
-		initialPrompt = fmt.Sprintf(
-			"CRITICAL: You have MCP tools from the 'cliaimonitor' server. "+
-				"Use these MCP tools for communication - NOT PowerShell scripts. "+
-				"FIRST: Call mcp__cliaimonitor__register_agent with agent_id='%s' and role='Go Developer'. "+
-				"THEN: Wait for instructions. Work autonomously.",
-			agentID)
+		initialPrompt = contextVerification + mcpInstructions +
+			"Then wait for instructions. Work autonomously."
 	}
 
 	// Spawn agent with initial prompt
@@ -344,10 +345,15 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 		"message": "Graceful shutdown initiated",
 	})
 
-	// Trigger shutdown in goroutine to allow response to be sent
+	// Signal shutdown via channel (allows main.go to do proper cleanup)
 	go func() {
 		time.Sleep(100 * time.Millisecond)
-		os.Exit(0)
+		select {
+		case <-s.ShutdownChan:
+			// Already closed
+		default:
+			close(s.ShutdownChan)
+		}
 	}()
 }
 
@@ -432,6 +438,18 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, state.SessionStats)
 }
 
+// handleGetAgentsFromDB returns agent data from the database
+func (s *Server) handleGetAgentsFromDB(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.memDB.GetAllAgents()
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get agents: %v", err))
+		return
+	}
+	s.respondJSON(w, map[string]interface{}{
+		"agents": agents,
+	})
+}
+
 // Agent Cleanup Handlers
 
 // handleCleanupAgents removes stale disconnected agents and kills their processes
@@ -481,4 +499,45 @@ func (s *Server) respondError(w http.ResponseWriter, status int, message string)
 
 func formatAgentNumber(n int) string {
 	return fmt.Sprintf("%03d", n)
+}
+
+// Captain Terminal Supervisor Handlers
+
+// handleCaptainTerminalStatus returns the current status of the Captain terminal process
+func (s *Server) handleCaptainTerminalStatus(w http.ResponseWriter, r *http.Request) {
+	if s.captainSupervisor == nil {
+		s.respondJSON(w, map[string]interface{}{
+			"status":      "not_configured",
+			"can_restart": false,
+			"message":     "Captain supervisor not configured",
+		})
+		return
+	}
+
+	info := s.captainSupervisor.GetInfo()
+	s.respondJSON(w, info)
+}
+
+// handleCaptainTerminalRestart manually restarts the Captain terminal
+func (s *Server) handleCaptainTerminalRestart(w http.ResponseWriter, r *http.Request) {
+	if s.captainSupervisor == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Captain supervisor not configured")
+		return
+	}
+
+	info := s.captainSupervisor.GetInfo()
+	if !info.CanRestart {
+		s.respondError(w, http.StatusConflict, fmt.Sprintf("Cannot restart Captain (status: %s)", info.Status))
+		return
+	}
+
+	if err := s.captainSupervisor.Restart(); err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to restart Captain: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "Captain restart initiated",
+	})
 }

@@ -349,6 +349,45 @@ body {
     color: var(--text-secondary);
 }
 
+/* Heartbeat status */
+.agent-heartbeat {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.heartbeat-ok {
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.1);
+}
+
+.heartbeat-caution {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.1);
+}
+
+.heartbeat-warning {
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.1);
+    animation: heartbeatPulse 1s infinite;
+}
+
+@keyframes heartbeatPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.heartbeat-icon {
+    font-size: 0.9em;
+}
+
+.heartbeat-time {
+    font-weight: 500;
+}
+
 /* Agent Current Task */
 .agent-current-task {
     display: flex;

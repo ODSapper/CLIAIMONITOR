@@ -367,6 +367,14 @@ class Dashboard {
             const hasTask = agent.current_task && agent.current_task.trim() !== '';
             const lastSeen = this.formatRelativeTime(agent.last_seen);
 
+            // Calculate heartbeat age
+            const lastSeenTime = new Date(agent.last_seen);
+            const heartbeatAge = Math.floor((Date.now() - lastSeenTime) / 1000);
+
+            // Determine heartbeat status class
+            const heartbeatClass = heartbeatAge > 90 ? 'heartbeat-warning' :
+                                   heartbeatAge > 60 ? 'heartbeat-caution' : 'heartbeat-ok';
+
             // Determine display status: if has task, show "working" not "disconnected"
             let displayStatus = agent.status;
             let statusClass = agent.status;
@@ -384,7 +392,10 @@ class Dashboard {
                         </div>
                         <div class="agent-status-container">
                             <span class="agent-status ${statusClass}">${displayStatus}</span>
-                            <span class="agent-last-seen">${lastSeen}</span>
+                            <div class="agent-heartbeat ${heartbeatClass}">
+                                <span class="heartbeat-icon">💓</span>
+                                <span class="heartbeat-time">${this.formatHeartbeatAge(heartbeatAge)}</span>
+                            </div>
                         </div>
                     </div>
                     ${hasTask ? `
@@ -566,6 +577,12 @@ class Dashboard {
         if (diffMin < 60) return `${diffMin}m ago`;
         if (diffHour < 24) return `${diffHour}h ago`;
         return date.toLocaleDateString();
+    }
+
+    formatHeartbeatAge(seconds) {
+        if (seconds < 60) return `${seconds}s ago`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+        return `${Math.floor(seconds / 3600)}h ago`;
     }
 
     calculateCountdown(shutdownRequestedAt) {
