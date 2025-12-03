@@ -149,7 +149,7 @@ func main() {
 
 	// Initialize components
 	mcpServerURL := fmt.Sprintf("http://%s:%d/mcp/sse", *mcpHost, *port)
-	spawner := agents.NewSpawner(basePath, mcpServerURL)
+	spawner := agents.NewSpawner(basePath, mcpServerURL, memoryDB)
 	mcpServer := mcp.NewServer()
 	metricsCollector := metrics.NewCollector()
 	alertEngine := metrics.NewAlertEngine(state.Thresholds)
@@ -187,30 +187,41 @@ func main() {
 
 	// Start server in goroutine
 	serverErr := make(chan error, 1)
-	serverReady := make(chan struct{})
 
 	go func() {
-		close(serverReady)
 		serverErr <- srv.Start(fmt.Sprintf(":%d", *port))
 	}()
 
-	// Wait for server to signal ready or fail
-	<-serverReady
-	time.Sleep(100 * time.Millisecond) // Brief delay for bind to complete
+	// Wait for server to bind or fail (poll with health check)
+	serverStarted := false
+	for i := 0; i < 50; i++ { // 5 second timeout (50 * 100ms)
+		time.Sleep(100 * time.Millisecond)
 
-	// Check if server failed immediately
-	select {
-	case err := <-serverErr:
-		fmt.Fprintf(os.Stderr, "Server failed to start: %v\n", err)
-		os.Exit(1)
-	default:
-		// Server started successfully
-		fmt.Printf("  Dashboard ready at http://localhost:%d ✓\n", *port)
-
-		// Write PID file NOW (after confirmed bind)
-		if err := instanceMgr.WritePIDFile(os.Getpid(), *port, basePath); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to write PID file: %v\n", err)
+		// Check if server failed
+		select {
+		case err := <-serverErr:
+			fmt.Fprintf(os.Stderr, "Server failed to start: %v\n", err)
+			os.Exit(1)
+		default:
 		}
+
+		// Try health check
+		if instance.HealthCheck(*port) == nil {
+			serverStarted = true
+			break
+		}
+	}
+
+	if !serverStarted {
+		fmt.Fprintf(os.Stderr, "Server failed to become ready within timeout\n")
+		os.Exit(1)
+	}
+
+	fmt.Printf("  Dashboard ready at http://localhost:%d ✓\n", *port)
+
+	// Write PID file NOW (after confirmed bind)
+	if err := instanceMgr.WritePIDFile(os.Getpid(), *port, basePath); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to write PID file: %v\n", err)
 	}
 
 	// Convert config to map for Captain
@@ -223,54 +234,103 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Initialize and start Captain orchestrator
-	captainInstance := captain.NewCaptain(basePath, spawner, memoryDB, configMap)
-	go captainInstance.Run(ctx)
+	// Initialize and start Captain orchestrator (background task processor)
+	captainOrchestrator := captain.NewCaptain(basePath, spawner, memoryDB, configMap)
+	go captainOrchestrator.Run(ctx)
 	fmt.Println("  Captain orchestrator started")
 
+	// Initialize and start Captain Supervisor (manages interactive Captain terminal)
+	captainSupervisor := captain.NewCaptainSupervisor(captain.SupervisorConfig{
+		BasePath:   basePath,
+		ServerPort: *port,
+	})
+
+	// Wire supervisor to server for API endpoints
+	srv.SetCaptainSupervisor(captainSupervisor)
+
+	// Wire Captain clean exit to server shutdown
+	captainSupervisor.SetShutdownCallback(func() {
+		// Signal the server to shut down when Captain exits cleanly
+		srv.RequestShutdown()
+	})
+
+	// Start Captain in separate terminal
 	fmt.Println()
-	fmt.Println("  Press Ctrl+C to shutdown")
+	fmt.Println("  Starting Captain (separate terminal)...")
+	if err := captainSupervisor.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to start Captain terminal: %v\n", err)
+		fmt.Println("  You can manually restart Captain from the dashboard")
+	} else {
+		fmt.Println("  Captain terminal spawned ✓")
+	}
 	fmt.Println()
 
-	// Wait for shutdown signal or server error
+	// Wait for shutdown signal, API shutdown request, Captain clean exit, or server error
 	select {
 	case err := <-serverErr:
-		if err != nil {
+		if err != nil && err.Error() != "http: Server closed" {
 			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		}
 	case <-shutdown:
 		fmt.Println()
-		fmt.Println("Shutting down...")
+		fmt.Println("Shutting down (signal received)...")
+	case <-srv.ShutdownChan:
+		fmt.Println()
+		fmt.Println("Shutting down (API request)...")
+	case <-captainSupervisor.ShutdownChan():
+		fmt.Println()
+		fmt.Println("Shutting down (Captain exited cleanly)...")
 	}
 
 	// Graceful shutdown (cancel Captain context first)
 	cancel()
 
+	// Stop Captain supervisor (kills Captain terminal if still running)
+	fmt.Println("Stopping Captain...")
+	if err := captainSupervisor.Stop(); err != nil {
+		fmt.Printf("  Note: Captain may have already exited: %v\n", err)
+	}
+
 	// Wait for graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	// Stop all agents
+	// Stop all agents - use PIDs from store since spawner may not track them correctly
 	fmt.Println("Stopping agents...")
-	for agentID := range store.GetState().Agents {
-		if err := spawner.StopAgent(agentID); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to stop %s: %v\n", agentID, err)
+	currentState := store.GetState()
+	for agentID, agent := range currentState.Agents {
+		if agent.PID > 0 {
+			// Try to kill the process directly using PID from store
+			if err := instance.KillProcess(agent.PID); err != nil {
+				// Process may already be dead, that's okay
+				fmt.Printf("  Note: Agent %s (PID %d) may have already exited\n", agentID, agent.PID)
+			} else {
+				fmt.Printf("  Stopped agent %s (PID %d)\n", agentID, agent.PID)
+			}
 		}
 	}
 
 	// Cleanup all generated config and prompt files
+	fmt.Println("Cleaning up agent files...")
 	spawner.CleanupAllAgentFiles()
+
+	// Clear all agents from state (they were killed above)
+	for agentID := range currentState.Agents {
+		store.RemoveAgent(agentID)
+	}
 
 	// Remove PID file BEFORE shutting down server
 	fmt.Println("Removing PID file...")
 	instanceMgr.RemovePIDFile()
 
 	// Shutdown server
+	fmt.Println("Shutting down HTTP server...")
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "Shutdown error: %v\n", err)
 	}
 
 	// Final save
+	fmt.Println("Saving state...")
 	if err := store.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to save state: %v\n", err)
 	}

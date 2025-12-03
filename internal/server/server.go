@@ -38,6 +38,8 @@ type Server struct {
 	memDB          memory.MemoryDB
 	notifications  *notifications.Manager
 	captain        *captain.Captain
+	captainSupervisor *captain.CaptainSupervisor
+	cleanup        *CleanupService
 	basePath       string
 
 	// Instance metadata
@@ -46,6 +48,13 @@ type Server struct {
 
 	// Background tasks
 	stopChan chan struct{}
+
+	// Shutdown signaling - external code can listen to this
+	ShutdownChan chan struct{}
+
+	// Cleanup service context
+	cleanupCtx    context.Context
+	cleanupCancel context.CancelFunc
 }
 
 // NewServer creates a new server instance
@@ -89,10 +98,15 @@ func NewServer(
 		port:              port,
 		startTime:         time.Now(),
 		stopChan:          make(chan struct{}),
+		ShutdownChan:      make(chan struct{}),
 	}
 
 	s.setupRoutes()
 	s.setupMCPCallbacks()
+
+	// Initialize cleanup service
+	s.cleanupCtx, s.cleanupCancel = context.WithCancel(context.Background())
+	s.cleanup = NewCleanupService(s.memDB, s.store, s.hub)
 
 	return s
 }
@@ -149,6 +163,10 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/captain/trigger-recon", captainHandler.HandleTriggerRecon).Methods("POST")
 	api.HandleFunc("/captain/escalations", captainHandler.HandleGetEscalations).Methods("GET")
 	api.HandleFunc("/captain/escalation/{id}/respond", captainHandler.HandleRespondToEscalation).Methods("POST")
+
+	// Captain Supervisor (terminal process) endpoints
+	api.HandleFunc("/captain/terminal/status", s.handleCaptainTerminalStatus).Methods("GET")
+	api.HandleFunc("/captain/terminal/restart", s.handleCaptainTerminalRestart).Methods("POST")
 
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
@@ -464,6 +482,59 @@ func (s *Server) setupMCPCallbacks() {
 				"status": "recorded",
 			}, nil
 		},
+
+		OnSignalCaptain: func(agentID, signal, context string) (interface{}, error) {
+			// Map signal to agent status
+			statusMap := map[string]string{
+				"stopped":       "stopped",
+				"blocked":       "blocked",
+				"completed":     "completed",
+				"error":         "error",
+				"need_guidance": "waiting",
+			}
+			status := statusMap[signal]
+			if status == "" {
+				status = signal
+			}
+
+			// Update agent status in DB
+			if err := s.memDB.UpdateStatus(agentID, status, context); err != nil {
+				// Log but don't fail
+				fmt.Printf("[SIGNAL] Warning: failed to update agent status in DB: %v\n", err)
+			}
+
+			// Update dashboard state
+			s.store.UpdateAgent(agentID, func(a *types.Agent) {
+				a.Status = types.AgentStatus(status)
+				a.CurrentTask = context
+				a.LastSeen = time.Now()
+			})
+
+			// Create alert for Captain
+			s.store.AddAlert(&types.Alert{
+				ID:        fmt.Sprintf("signal-%d", time.Now().UnixNano()),
+				Type:      "agent_signal",
+				AgentID:   agentID,
+				Message:   fmt.Sprintf("Agent %s signaled: %s - %s", agentID, signal, context),
+				Severity:  "info",
+				CreatedAt: time.Now(),
+			})
+
+			s.hub.BroadcastAlert(&types.Alert{
+				ID:        fmt.Sprintf("signal-%d", time.Now().UnixNano()),
+				Type:      "agent_signal",
+				AgentID:   agentID,
+				Message:   fmt.Sprintf("Agent %s: %s", agentID, signal),
+				Severity:  "info",
+				CreatedAt: time.Now(),
+			})
+
+			s.broadcastState()
+			return map[string]interface{}{
+				"status": "acknowledged",
+				"signal": signal,
+			}, nil
+		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
@@ -544,6 +615,9 @@ func (s *Server) Start(addr string) error {
 	// Start background tasks
 	go s.backgroundTasks()
 
+	// Start auto-cleanup service
+	go s.cleanup.Start(s.cleanupCtx)
+
 	fmt.Printf("Dashboard ready at http://localhost%s\n", addr)
 	return s.httpServer.ListenAndServe()
 }
@@ -552,10 +626,31 @@ func (s *Server) Start(addr string) error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	close(s.stopChan)
 
+	// Stop cleanup service
+	if s.cleanupCancel != nil {
+		s.cleanupCancel()
+	}
+
 	// Save state
 	s.store.Save()
 
 	return s.httpServer.Shutdown(ctx)
+}
+
+// RequestShutdown signals the server to shut down gracefully
+// This is safe to call multiple times - subsequent calls are no-ops
+func (s *Server) RequestShutdown() {
+	select {
+	case <-s.ShutdownChan:
+		// Already closed
+	default:
+		close(s.ShutdownChan)
+	}
+}
+
+// SetCaptainSupervisor sets the captain supervisor reference for API endpoints
+func (s *Server) SetCaptainSupervisor(supervisor *captain.CaptainSupervisor) {
+	s.captainSupervisor = supervisor
 }
 
 // backgroundTasks runs periodic tasks
@@ -629,10 +724,15 @@ func (s *Server) broadcastState() {
 
 // getAgentConfig finds agent config by name
 func (s *Server) getAgentConfig(name string) *types.AgentConfig {
+	// Check regular agents first
 	for _, cfg := range s.config.Agents {
 		if cfg.Name == name {
 			return &cfg
 		}
+	}
+	// Check supervisor config
+	if s.config.Supervisor.Name == name {
+		return &s.config.Supervisor
 	}
 	return nil
 }
@@ -642,6 +742,10 @@ func (s *Server) getAgentConfigsMap() map[string]types.AgentConfig {
 	configs := make(map[string]types.AgentConfig)
 	for _, cfg := range s.config.Agents {
 		configs[cfg.Name] = cfg
+	}
+	// Include supervisor in the map
+	if s.config.Supervisor.Name != "" {
+		configs[s.config.Supervisor.Name] = s.config.Supervisor
 	}
 	return configs
 }

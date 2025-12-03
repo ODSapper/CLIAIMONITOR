@@ -48,6 +48,20 @@ type MemoryDB interface {
 	GetRecentDeployments(repoID string, limit int) ([]*Deployment, error)
 	UpdateDeploymentStatus(deploymentID int64, status string) error
 
+	// Agent control operations
+	RegisterAgent(agent *AgentControl) error
+	UpdateHeartbeat(agentID string) error
+	UpdateStatus(agentID, status, currentTask string) error
+	SetShutdownFlag(agentID string, reason string) error
+	ClearShutdownFlag(agentID string) error
+	MarkStopped(agentID, reason string) error
+	RemoveAgent(agentID string) error
+	GetAgent(agentID string) (*AgentControl, error)
+	GetAllAgents() ([]*AgentControl, error)
+	GetStaleAgents(threshold time.Duration) ([]*AgentControl, error)
+	GetAgentsByStatus(status string) ([]*AgentControl, error)
+	CheckShutdownFlag(agentID string) (bool, string, error)
+
 	// Lifecycle
 	Close() error
 }

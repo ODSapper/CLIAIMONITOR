@@ -26,6 +26,10 @@ type ToolCallbacks struct {
 	OnClaimTask             func(agentID, taskID string) (interface{}, error)
 	OnUpdateTaskProgress    func(agentID, taskID, status, note string) (interface{}, error)
 	OnCompleteTask          func(agentID, taskID, summary string) (interface{}, error)
+	OnSubmitReconReport     func(agentID string, report map[string]interface{}) (interface{}, error)
+	OnRequestGuidance       func(agentID string, guidance map[string]interface{}) (interface{}, error)
+	OnReportProgress        func(agentID string, progress map[string]interface{}) (interface{}, error)
+	OnSignalCaptain         func(agentID, signal, context string) (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -165,11 +169,65 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 		},
 	})
 
+	// signal_captain - Agent signals Captain for attention
+	s.RegisterTool(ToolDefinition{
+		Name:        "signal_captain",
+		Description: "Signal Captain that you need attention. Use when stopping, blocked, completed, or encountering errors.",
+		Parameters: map[string]ParameterDef{
+			"signal": {
+				Type:        "string",
+				Description: "Signal type: stopped, blocked, completed, error, need_guidance",
+				Required:    true,
+			},
+			"context": {
+				Type:        "string",
+				Description: "Brief explanation of why you're signaling",
+				Required:    true,
+			},
+			"work_completed": {
+				Type:        "string",
+				Description: "Summary of work completed (for stopped/completed signals)",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			signal, _ := params["signal"].(string)
+			context, _ := params["context"].(string)
+			workCompleted, _ := params["work_completed"].(string)
+
+			// Validate signal type
+			validSignals := map[string]bool{
+				"stopped":       true,
+				"blocked":       true,
+				"completed":     true,
+				"error":         true,
+				"need_guidance": true,
+			}
+			if !validSignals[signal] {
+				return map[string]interface{}{
+					"status":  "error",
+					"message": "Invalid signal. Use: stopped, blocked, completed, error, need_guidance",
+				}, nil
+			}
+
+			// Include work summary in context if provided
+			fullContext := context
+			if workCompleted != "" {
+				fullContext = context + "\n\nWork completed:\n" + workCompleted
+			}
+
+			return callbacks.OnSignalCaptain(agentID, signal, fullContext)
+		},
+	})
+
 	// Task workflow tools
 	registerTaskTools(s, callbacks)
 
 	// Supervisor-only tools
 	registerSupervisorTools(s, callbacks)
+
+	// Snake reconnaissance tools
+	registerSnakeTools(s, callbacks)
 }
 
 // registerTaskTools adds task workflow management tools
@@ -348,6 +406,79 @@ func registerSupervisorTools(s *Server, callbacks ToolCallbacks) {
 			approved, _ := params["approved"].(bool)
 			response, _ := params["response"].(string)
 			return callbacks.OnRespondStopRequest(requestID, approved, response)
+		},
+	})
+}
+
+// registerSnakeTools adds Snake reconnaissance agent tools
+func registerSnakeTools(s *Server, callbacks ToolCallbacks) {
+	// submit_recon_report - Snake submits reconnaissance findings
+	s.RegisterTool(ToolDefinition{
+		Name:        "submit_recon_report",
+		Description: "Submit reconnaissance findings to Captain",
+		Parameters: map[string]ParameterDef{
+			"environment": {Type: "string", Description: "Target environment name (e.g., 'CLIAIMONITOR', 'customer-acme')", Required: true},
+			"mission":     {Type: "string", Description: "Mission type (e.g., 'initial_recon', 'security_audit')", Required: true},
+			"findings":    {Type: "object", Description: "Findings object with critical, high, medium, low arrays", Required: true},
+			"summary":     {Type: "object", Description: "Summary object with scan statistics", Required: true},
+			"recommendations": {Type: "object", Description: "Recommendations object with immediate, short_term, long_term arrays", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			// Build complete report with metadata
+			report := map[string]interface{}{
+				"agent_id":    agentID,
+				"timestamp":   time.Now().Format(time.RFC3339),
+				"environment": params["environment"],
+				"mission":     params["mission"],
+				"findings":    params["findings"],
+				"summary":     params["summary"],
+				"recommendations": params["recommendations"],
+			}
+			return callbacks.OnSubmitReconReport(agentID, report)
+		},
+	})
+
+	// request_guidance - Snake asks Captain for direction
+	s.RegisterTool(ToolDefinition{
+		Name:        "request_guidance",
+		Description: "Request guidance from Captain on ambiguous situation",
+		Parameters: map[string]ParameterDef{
+			"situation":      {Type: "string", Description: "Description of the ambiguous or unclear situation", Required: true},
+			"options":        {Type: "array", Description: "Array of possible courses of action", Required: true},
+			"recommendation": {Type: "string", Description: "Your recommended approach", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			guidance := map[string]interface{}{
+				"agent_id":       agentID,
+				"timestamp":      time.Now().Format(time.RFC3339),
+				"situation":      params["situation"],
+				"options":        params["options"],
+				"recommendation": params["recommendation"],
+			}
+			return callbacks.OnRequestGuidance(agentID, guidance)
+		},
+	})
+
+	// report_progress - Snake reports scan progress
+	s.RegisterTool(ToolDefinition{
+		Name:        "report_progress",
+		Description: "Report reconnaissance progress at key milestones",
+		Parameters: map[string]ParameterDef{
+			"phase":            {Type: "string", Description: "Current scan phase (e.g., 'architecture', 'security')", Required: true},
+			"percent_complete": {Type: "number", Description: "Estimated completion percentage (0-100)", Required: true},
+			"files_scanned":    {Type: "number", Description: "Number of files scanned so far", Required: true},
+			"findings_so_far":  {Type: "number", Description: "Count of findings discovered so far", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			progress := map[string]interface{}{
+				"agent_id":         agentID,
+				"timestamp":        time.Now().Format(time.RFC3339),
+				"phase":            params["phase"],
+				"percent_complete": params["percent_complete"],
+				"files_scanned":    params["files_scanned"],
+				"findings_so_far":  params["findings_so_far"],
+			}
+			return callbacks.OnReportProgress(agentID, progress)
 		},
 	})
 }

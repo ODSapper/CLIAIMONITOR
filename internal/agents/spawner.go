@@ -3,12 +3,15 @@ package agents
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/CLIAIMONITOR/internal/instance"
+	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/types"
 )
 
@@ -17,23 +20,27 @@ type Spawner interface {
 	SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (pid int, err error)
 	SpawnSupervisor(config types.AgentConfig) (pid int, err error)
 	StopAgent(agentID string) error
+	StopAgentWithReason(agentID string, reason string) error
 	IsAgentRunning(pid int) bool
 	GetRunningAgents() map[string]int // agentID -> PID
 }
 
 // ProcessSpawner implements Spawner using PowerShell
 type ProcessSpawner struct {
-	mu            sync.RWMutex
-	basePath      string // CLIAIMONITOR directory
-	mcpServerURL  string
-	promptsPath   string
-	scriptsPath   string
-	configsPath   string
-	runningAgents map[string]int // agentID -> PID
+	mu             sync.RWMutex
+	basePath       string // CLIAIMONITOR directory
+	mcpServerURL   string
+	promptsPath    string
+	scriptsPath    string
+	configsPath    string
+	runningAgents  map[string]int // agentID -> PID
+	agentCounters  map[string]int // agentType -> sequence counter
+	memDB          memory.MemoryDB
+	heartbeatPIDs  map[string]int // agentID -> heartbeat script PID
 }
 
 // NewSpawner creates a new process spawner
-func NewSpawner(basePath string, mcpServerURL string) *ProcessSpawner {
+func NewSpawner(basePath string, mcpServerURL string, memDB memory.MemoryDB) *ProcessSpawner {
 	return &ProcessSpawner{
 		basePath:      basePath,
 		mcpServerURL:  mcpServerURL,
@@ -41,7 +48,34 @@ func NewSpawner(basePath string, mcpServerURL string) *ProcessSpawner {
 		scriptsPath:   filepath.Join(basePath, "scripts"),
 		configsPath:   filepath.Join(basePath, "configs"),
 		runningAgents: make(map[string]int),
+		agentCounters: make(map[string]int),
+		memDB:         memDB,
+		heartbeatPIDs: make(map[string]int),
 	}
+}
+
+// GenerateAgentID creates a team-compatible agent ID in format: team-{type}{seq}
+// Example: team-opusgreen001, team-sntpurple002, team-snake003
+func (s *ProcessSpawner) GenerateAgentID(agentType string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Increment counter for this agent type
+	s.agentCounters[agentType]++
+	seq := s.agentCounters[agentType]
+
+	// Normalize agent type to lowercase for team ID
+	normalizedType := strings.ToLower(agentType)
+
+	// Format: team-{type}{seq:03d}
+	return fmt.Sprintf("team-%s%03d", normalizedType, seq)
+}
+
+// GetNextSequence returns the next sequence number for an agent type (for preview)
+func (s *ProcessSpawner) GetNextSequence(agentType string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.agentCounters[agentType] + 1
 }
 
 // MCPConfig structure for agent config file
@@ -92,9 +126,12 @@ func (s *ProcessSpawner) createMCPConfig(agentID string, projectPath string, acc
 }
 
 // createSystemPrompt creates agent-specific system prompt with project context
-func (s *ProcessSpawner) createSystemPrompt(agentID string, role types.AgentRole, projectPath string, projectName string) (string, error) {
-	// Read base prompt for role
-	promptFile := GetPromptFilename(role)
+func (s *ProcessSpawner) createSystemPrompt(agentID string, config types.AgentConfig, projectPath string, projectName string) (string, error) {
+	// Use override prompt file if specified, otherwise derive from role
+	promptFile := config.PromptFile
+	if promptFile == "" {
+		promptFile = GetPromptFilename(config.Role)
+	}
 	basePath := filepath.Join(s.promptsPath, promptFile)
 
 	data, err := os.ReadFile(basePath)
@@ -106,11 +143,11 @@ func (s *ProcessSpawner) createSystemPrompt(agentID string, role types.AgentRole
 	prompt := strings.ReplaceAll(string(data), "{{AGENT_ID}}", agentID)
 
 	// Add project context section
-	projectContext := s.buildProjectContext(projectPath, projectName, role)
+	projectContext := s.buildProjectContext(projectPath, projectName, config.Role, agentID)
 	prompt = strings.ReplaceAll(prompt, "{{PROJECT_CONTEXT}}", projectContext)
 	prompt = strings.ReplaceAll(prompt, "{{PROJECT_NAME}}", projectName)
 	prompt = strings.ReplaceAll(prompt, "{{PROJECT_PATH}}", projectPath)
-	prompt = strings.ReplaceAll(prompt, "{{ACCESS_RULES}}", s.getAccessRules(role, projectPath))
+	prompt = strings.ReplaceAll(prompt, "{{ACCESS_RULES}}", s.getAccessRules(config.Role, projectPath))
 
 	// If placeholders weren't in template, append project context
 	if !strings.Contains(string(data), "{{PROJECT_CONTEXT}}") && projectContext != "" {
@@ -133,7 +170,7 @@ func (s *ProcessSpawner) createSystemPrompt(agentID string, role types.AgentRole
 }
 
 // buildProjectContext builds the project context section for prompts
-func (s *ProcessSpawner) buildProjectContext(projectPath string, projectName string, role types.AgentRole) string {
+func (s *ProcessSpawner) buildProjectContext(projectPath string, projectName string, role types.AgentRole, agentID string) string {
 	var sb strings.Builder
 
 	sb.WriteString("# Project Context\n\n")
@@ -147,6 +184,13 @@ func (s *ProcessSpawner) buildProjectContext(projectPath string, projectName str
 		sb.WriteString(claudeMD)
 		sb.WriteString("\n\n")
 	}
+
+	// Add team context override to suppress team ID questions
+	sb.WriteString("## Team Context Override\n\n")
+	sb.WriteString(fmt.Sprintf("Your team ID is '%s'. Use this for all Planner API interactions.\n", agentID))
+	sb.WriteString("Do NOT ask about team assignments or workflow procedures from project CLAUDE.md.\n")
+	sb.WriteString("Work autonomously on your assigned tasks. Use MCP tools to communicate status.\n")
+	sb.WriteString(fmt.Sprintf("For Planner API calls, use header: X-API-Key: %s\n\n", agentID))
 
 	// Add access rules
 	sb.WriteString("## Access Rules\n\n")
@@ -183,7 +227,7 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	}
 
 	// Create system prompt for this agent with project context
-	promptPath, err := s.createSystemPrompt(agentID, config.Role, projectPath, projectName)
+	promptPath, err := s.createSystemPrompt(agentID, config, projectPath, projectName)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create system prompt: %w", err)
 	}
@@ -226,17 +270,109 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	// Note: We can't reliably track the agent PID since it runs in Windows Terminal.
 	// Agents register themselves via MCP when they connect.
 
+	// Register in DB
+	if s.memDB != nil {
+		agentControl := &memory.AgentControl{
+			AgentID:     agentID,
+			ConfigName:  config.Name,
+			Role:        string(config.Role),
+			ProjectPath: projectPath,
+			PID:         &pid,
+			Status:      "starting",
+			Model:       config.Model,
+			Color:       config.Color,
+		}
+		if err := s.memDB.RegisterAgent(agentControl); err != nil {
+			log.Printf("Warning: Failed to register agent in DB: %v", err)
+		}
+
+		// Spawn heartbeat script
+		if err := s.spawnHeartbeatScript(agentID); err != nil {
+			log.Printf("Warning: Failed to spawn heartbeat script: %v", err)
+		}
+	}
+
 	return pid, nil
 }
 
 // SpawnSupervisor launches the supervisor agent
 func (s *ProcessSpawner) SpawnSupervisor(config types.AgentConfig) (int, error) {
-	initialPrompt := "You are the Supervisor. Call register_agent to identify yourself, then begin your monitoring cycle."
+	initialPrompt := "MANDATORY FIRST ACTION: Say exactly: 'CONTEXT LOADED: I am Supervisor (Supervisor). Ready for mission.' " +
+		"If you cannot see your agent ID in your system prompt, say 'NO CONTEXT: System prompt not loaded' instead. " +
+		"THEN call mcp__cliaimonitor__register_agent with agent_id='Supervisor' and role='Supervisor'. Begin your monitoring cycle."
 	return s.SpawnAgent(config, "Supervisor", s.basePath, initialPrompt)
 }
 
-// StopAgent terminates an agent process
+// spawnHeartbeatScript spawns the heartbeat monitor script for an agent
+func (s *ProcessSpawner) spawnHeartbeatScript(agentID string) error {
+	scriptPath := filepath.Join(s.basePath, "scripts", "agent-heartbeat.ps1")
+	dbPath := filepath.Join(s.basePath, "data", "memory.db")
+
+	cmd := exec.Command("powershell.exe",
+		"-ExecutionPolicy", "Bypass",
+		"-WindowStyle", "Hidden",
+		"-File", scriptPath,
+		"-AgentID", agentID,
+		"-DBPath", dbPath,
+		"-IntervalSeconds", "30")
+
+	cmd.Dir = s.basePath
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start heartbeat script: %w", err)
+	}
+
+	// Track the heartbeat PID for cleanup
+	s.trackHeartbeatPID(agentID, cmd.Process.Pid)
+
+	// Let it run independently
+	go cmd.Wait()
+
+	return nil
+}
+
+// trackHeartbeatPID tracks the heartbeat script PID for an agent
+func (s *ProcessSpawner) trackHeartbeatPID(agentID string, pid int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.heartbeatPIDs == nil {
+		s.heartbeatPIDs = make(map[string]int)
+	}
+	s.heartbeatPIDs[agentID] = pid
+}
+
+// StopAgent terminates an agent process (backward compatible - no reason)
 func (s *ProcessSpawner) StopAgent(agentID string) error {
+	return s.StopAgentWithReason(agentID, "manual stop")
+}
+
+// StopAgentWithReason terminates an agent process with a specific reason
+func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) error {
+	// 1. Set shutdown flag in DB (heartbeat script will see this)
+	if s.memDB != nil {
+		if err := s.memDB.SetShutdownFlag(agentID, reason); err != nil {
+			log.Printf("Warning: Failed to set shutdown flag: %v", err)
+		}
+	}
+
+	// 2. Kill heartbeat script
+	s.mu.Lock()
+	if pid, ok := s.heartbeatPIDs[agentID]; ok {
+		if err := instance.KillProcess(pid); err != nil {
+			log.Printf("Warning: Failed to kill heartbeat script: %v", err)
+		}
+		delete(s.heartbeatPIDs, agentID)
+	}
+	s.mu.Unlock()
+
+	// 3. Mark stopped in DB
+	if s.memDB != nil {
+		if err := s.memDB.MarkStopped(agentID, reason); err != nil {
+			log.Printf("Warning: Failed to mark agent stopped: %v", err)
+		}
+	}
+
+	// 4. Remove from running agents map
 	s.mu.Lock()
 	pid, exists := s.runningAgents[agentID]
 	if exists {
@@ -248,6 +384,7 @@ func (s *ProcessSpawner) StopAgent(agentID string) error {
 		return fmt.Errorf("agent %s not found", agentID)
 	}
 
+	// 5. Try to kill the agent process
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return err
