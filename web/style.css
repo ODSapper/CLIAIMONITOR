@@ -6,17 +6,17 @@
 }
 
 :root {
-    --bg-primary: #1a1a2e;
-    --bg-secondary: #16213e;
-    --bg-panel: #1f2940;
-    --text-primary: #eee;
-    --text-secondary: #aaa;
-    --border-color: #2d3748;
-    --accent-blue: #4299e1;
-    --accent-green: #48bb78;
-    --accent-yellow: #ecc94b;
-    --accent-red: #f56565;
-    --accent-purple: #9f7aea;
+    --bg-primary: #1a1118;
+    --bg-secondary: #2d1f2d;
+    --bg-panel: #3d2a3d;
+    --text-primary: #fce7f3;
+    --text-secondary: #f9a8d4;
+    --border-color: #6b3a5c;
+    --accent-blue: #f472b6;
+    --accent-green: #ec4899;
+    --accent-yellow: #fda4af;
+    --accent-red: #ff1493;
+    --accent-purple: #e879f9;
 }
 
 body {
@@ -68,12 +68,12 @@ body {
 }
 
 .status-indicator.connected {
-    background: rgba(72, 187, 120, 0.2);
+    background: rgba(236, 72, 153, 0.2);
     color: var(--accent-green);
 }
 
 .status-indicator.disconnected {
-    background: rgba(245, 101, 101, 0.2);
+    background: rgba(255, 20, 147, 0.2);
     color: var(--accent-red);
 }
 
@@ -114,7 +114,7 @@ body {
 }
 
 .btn-primary:hover:not(:disabled) {
-    background: #3182ce;
+    background: #db2777;
 }
 
 .btn-success {
@@ -123,7 +123,7 @@ body {
 }
 
 .btn-success:hover:not(:disabled) {
-    background: #38a169;
+    background: #be185d;
 }
 
 .btn-warning {
@@ -285,14 +285,14 @@ body {
     text-transform: uppercase;
 }
 
-.agent-status.connected { background: rgba(72, 187, 120, 0.2); color: var(--accent-green); }
-.agent-status.working { background: rgba(66, 153, 225, 0.2); color: var(--accent-blue); }
-.agent-status.idle { background: rgba(236, 201, 75, 0.2); color: var(--accent-yellow); }
-.agent-status.blocked { background: rgba(245, 101, 101, 0.2); color: var(--accent-red); }
-.agent-status.disconnected { background: rgba(160, 160, 160, 0.2); color: var(--text-secondary); }
-.agent-status.starting { background: rgba(159, 122, 234, 0.2); color: var(--accent-purple); }
+.agent-status.connected { background: rgba(236, 72, 153, 0.2); color: var(--accent-green); }
+.agent-status.working { background: rgba(244, 114, 182, 0.2); color: var(--accent-blue); }
+.agent-status.idle { background: rgba(253, 164, 175, 0.2); color: var(--accent-yellow); }
+.agent-status.blocked { background: rgba(255, 20, 147, 0.2); color: var(--accent-red); }
+.agent-status.disconnected { background: rgba(249, 168, 212, 0.2); color: var(--text-secondary); }
+.agent-status.starting { background: rgba(232, 121, 249, 0.2); color: var(--accent-purple); }
 .agent-status.stopping {
-    background: rgba(236, 201, 75, 0.3);
+    background: rgba(253, 164, 175, 0.3);
     color: var(--accent-yellow);
     animation: pulse 1s infinite;
 }
@@ -360,18 +360,18 @@ body {
 }
 
 .heartbeat-ok {
-    color: #4ade80;
-    background: rgba(74, 222, 128, 0.1);
+    color: #f472b6;
+    background: rgba(244, 114, 182, 0.1);
 }
 
 .heartbeat-caution {
-    color: #fbbf24;
-    background: rgba(251, 191, 36, 0.1);
+    color: #fda4af;
+    background: rgba(253, 164, 175, 0.1);
 }
 
 .heartbeat-warning {
-    color: #f87171;
-    background: rgba(248, 113, 113, 0.1);
+    color: #ff1493;
+    background: rgba(255, 20, 147, 0.1);
     animation: heartbeatPulse 1s infinite;
 }
 
@@ -467,7 +467,7 @@ body {
 
 .alert-item.critical {
     border-left-color: var(--accent-red);
-    background: rgba(245, 101, 101, 0.1);
+    background: rgba(255, 20, 147, 0.1);
 }
 
 .alert-item.warning {
@@ -523,7 +523,7 @@ body {
 
 @keyframes urgentPulse {
     0%, 100% { background: var(--bg-secondary); }
-    50% { background: rgba(159, 122, 234, 0.2); }
+    50% { background: rgba(232, 121, 249, 0.2); }
 }
 
 .human-input-header {
@@ -692,7 +692,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #4a5568;
+    background: #9d4a7a;
 }
 
 /* Tab Navigation */
@@ -822,12 +822,12 @@ body {
 }
 
 .message.supervisor .message-bubble {
-    background: rgba(159, 122, 234, 0.2);
+    background: rgba(232, 121, 249, 0.2);
     border-bottom-left-radius: 4px;
 }
 
 .message.human .message-bubble {
-    background: rgba(66, 153, 225, 0.2);
+    background: rgba(244, 114, 182, 0.2);
     border-bottom-right-radius: 4px;
 }
 
@@ -923,7 +923,7 @@ body {
     right: 0;
     z-index: 9999;
     padding: 12px 20px;
-    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+    background: linear-gradient(135deg, #db2777 0%, #9d174d 100%);
     color: white;
     box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
     animation: slideDown 0.3s ease-out;
@@ -931,20 +931,20 @@ body {
 }
 
 .notification-banner.info {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    background: linear-gradient(135deg, #ec4899 0%, #db2777 100%);
 }
 
 .notification-banner.warning {
-    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    background: linear-gradient(135deg, #f472b6 0%, #ec4899 100%);
 }
 
 .notification-banner.error {
-    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+    background: linear-gradient(135deg, #db2777 0%, #9d174d 100%);
 }
 
 .notification-banner.supervisor {
-    background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
-    border-bottom: 3px solid #fbbf24;
+    background: linear-gradient(135deg, #db2777 0%, #831843 100%);
+    border-bottom: 3px solid #fda4af;
 }
 
 .notification-content {
