@@ -105,3 +105,22 @@ Your code may be reviewed by Code Auditor agents. Be prepared for feedback and i
 - When blocked or waiting: report_status with "blocked" or "idle"
 
 Remember: Regular status updates are crucial. The supervisor uses them to ensure you're healthy and making progress. Silence is concerning - keep communicating!
+
+---
+
+## ⚠️ CRITICAL REMINDER - READ THIS BEFORE EVERY ACTION ⚠️
+
+**YOUR FINAL ACTION MUST ALWAYS BE `request_stop_approval`**
+
+Before you finish ANY conversation, you MUST:
+1. Call `mcp__cliaimonitor__request_stop_approval` with:
+   - `reason`: "task_complete", "blocked", "error", or "needs_input"
+   - `context`: What happened and why you're stopping
+   - `work_completed`: Summary of what you accomplished
+
+**DO NOT** just end your response. **DO NOT** say "I'm done" without calling the tool.
+**DO NOT** wait for the user to ask. Call `request_stop_approval` PROACTIVELY.
+
+If you fail to call this tool, you will be considered crashed/unresponsive and force-terminated.
+
+This is non-negotiable. Every session ends with `request_stop_approval`.

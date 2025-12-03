@@ -15,6 +15,7 @@ type Server struct {
 	connections              *ConnectionManager
 	tools                    *ToolRegistry
 	isAgentShutdownRequested func(agentID string) bool
+	onToolCall               func(agentID string, toolName string)
 }
 
 // NewServer creates a new MCP server
@@ -33,6 +34,11 @@ func (s *Server) SetConnectionCallbacks(onConnect, onDisconnect func(agentID str
 // SetShutdownChecker sets callback to check if agent should shutdown
 func (s *Server) SetShutdownChecker(checker func(agentID string) bool) {
 	s.isAgentShutdownRequested = checker
+}
+
+// SetToolCallCallback sets callback for when a tool is called (for metrics)
+func (s *Server) SetToolCallCallback(callback func(agentID string, toolName string)) {
+	s.onToolCall = callback
 }
 
 // RegisterTool adds a tool to the server
@@ -161,10 +167,13 @@ func (s *Server) ServeMessage(w http.ResponseWriter, r *http.Request) {
 	// Handle request - get agentID from connection
 	resp := s.handleRequest(conn.AgentID, &req)
 
-	// Send response via SSE stream (not HTTP response)
-	conn.SendResponse(resp)
+	// Send response via SSE stream (MCP SSE protocol)
+	if err := conn.SendResponse(resp); err != nil {
+		http.Error(w, "failed to send response", http.StatusInternalServerError)
+		return
+	}
 
-	// HTTP response just acknowledges receipt
+	// Return 202 Accepted to acknowledge receipt
 	w.WriteHeader(http.StatusAccepted)
 }
 
@@ -237,6 +246,11 @@ func (s *Server) handleToolsCall(agentID string, req *types.MCPRequest) types.MC
 
 	toolName, _ := params["name"].(string)
 	toolArgs, _ := params["arguments"].(map[string]interface{})
+
+	// Notify callback for metrics tracking
+	if s.onToolCall != nil && toolName != "" {
+		s.onToolCall(agentID, toolName)
+	}
 
 	if toolName == "" {
 		return types.MCPResponse{

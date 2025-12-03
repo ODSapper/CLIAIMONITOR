@@ -45,6 +45,8 @@ func GetPromptFilename(role types.AgentRole) string {
 		return "engineer.md"
 	case types.RoleSecurity:
 		return "security.md"
+	case types.RoleReconSpecialOps:
+		return "snake.md"
 	default:
 		return "engineer.md"
 	}

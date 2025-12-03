@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "captain_id": "captain-001",
+  "environment": {
+    "id": "customer-example",
+    "name": "Example Customer",
+    "type": "customer",
+    "first_contact": "2025-12-02T10:00:00Z"
+  },
+  "mode": "lightweight",
+  "findings_summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "active_agents": [],
+  "pending_decisions": [],
+  "phone_home": {
+    "enabled": true,
+    "endpoint": "https://magnolia-hq.example.com/api/v1/reports",
+    "last_sync": null,
+    "api_key_env": "MAGNOLIA_API_KEY"
+  },
+  "scale_up": {
+    "triggered": false,
+    "reason": null,
+    "cliaimonitor_port": null
+  }
+}

@@ -22,11 +22,12 @@ const (
 type AgentRole string
 
 const (
-	RoleGoDeveloper AgentRole = "Go Developer"
-	RoleCodeAuditor AgentRole = "Code Auditor"
-	RoleEngineer    AgentRole = "Engineer"
-	RoleSecurity    AgentRole = "Security"
-	RoleSupervisor  AgentRole = "Supervisor"
+	RoleGoDeveloper         AgentRole = "Go Developer"
+	RoleCodeAuditor         AgentRole = "Code Auditor"
+	RoleEngineer            AgentRole = "Engineer"
+	RoleSecurity            AgentRole = "Security"
+	RoleSupervisor          AgentRole = "Supervisor"
+	RoleReconSpecialOps     AgentRole = "Reconnaissance & Special Ops"
 )
 
 // AgentConfig from teams.yaml
@@ -35,6 +36,9 @@ type AgentConfig struct {
 	Model           string    `yaml:"model" json:"model"`
 	Role            AgentRole `yaml:"role" json:"role"`
 	Color           string    `yaml:"color" json:"color"`
+	Prefix          string    `yaml:"prefix" json:"prefix"`           // e.g., "Snake" for Snake001
+	Numbering       bool      `yaml:"numbering" json:"numbering"`     // Whether to auto-number agents
+	PromptFile      string    `yaml:"prompt_file" json:"prompt_file"` // Optional override for prompt file
 	SkipPermissions bool      `yaml:"skip_permissions" json:"skip_permissions"`
 }
 

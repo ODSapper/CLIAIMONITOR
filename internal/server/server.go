@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
@@ -55,6 +56,10 @@ type Server struct {
 	// Cleanup service context
 	cleanupCtx    context.Context
 	cleanupCancel context.CancelFunc
+
+	// Heartbeat tracking
+	agentHeartbeats map[string]*HeartbeatInfo
+	heartbeatMu     sync.RWMutex
 }
 
 // NewServer creates a new server instance
@@ -99,6 +104,7 @@ func NewServer(
 		startTime:         time.Now(),
 		stopChan:          make(chan struct{}),
 		ShutdownChan:      make(chan struct{}),
+		agentHeartbeats:   make(map[string]*HeartbeatInfo),
 	}
 
 	s.setupRoutes()
@@ -140,6 +146,11 @@ func (s *Server) setupRoutes() {
 	// Stop request management routes
 	api.HandleFunc("/stop-requests", s.handleGetStopRequests).Methods("GET")
 	api.HandleFunc("/stop-requests/{id}/respond", s.handleRespondStopRequest).Methods("POST")
+
+	// Heartbeat routes
+	api.HandleFunc("/heartbeat", s.handleHeartbeat).Methods("POST")
+	api.HandleFunc("/heartbeats", s.handleGetHeartbeats).Methods("GET")
+	api.HandleFunc("/heartbeats/{id}", s.handleDeleteHeartbeat).Methods("DELETE")
 
 	// Supervisor API routes
 	supervisorHandler := handlers.NewSupervisorHandler(s.memDB)
@@ -191,6 +202,12 @@ func (s *Server) setupMCPCallbacks() {
 				a.LastSeen = time.Now()
 			})
 
+			// Update heartbeat in database to prevent stale cleanup
+			if s.memDB != nil {
+				s.memDB.UpdateHeartbeat(agentID)
+				s.memDB.UpdateStatus(agentID, "connected", "")
+			}
+
 			// Check if supervisor
 			if agentID == "Supervisor" {
 				s.store.SetSupervisorConnected(true)
@@ -207,6 +224,12 @@ func (s *Server) setupMCPCallbacks() {
 				a.CurrentTask = task
 				a.LastSeen = time.Now()
 			})
+
+			// Update heartbeat in database to prevent stale cleanup
+			if s.memDB != nil {
+				s.memDB.UpdateHeartbeat(agentID)
+				s.memDB.UpdateStatus(agentID, status, task)
+			}
 
 			// Update metrics idle tracking
 			if status == string(types.StatusIdle) {
@@ -301,6 +324,10 @@ func (s *Server) setupMCPCallbacks() {
 			})
 			s.broadcastState()
 			return map[string]string{"request_id": req.ID, "status": "pending_approval"}, nil
+		},
+
+		OnGetStopRequestByID: func(id string) *types.StopApprovalRequest {
+			return s.store.GetStopRequestByID(id)
 		},
 
 		OnGetPendingStopRequests: func() (interface{}, error) {
@@ -618,6 +645,9 @@ func (s *Server) Start(addr string) error {
 
 	// Start auto-cleanup service
 	go s.cleanup.Start(s.cleanupCtx)
+
+	// Start heartbeat checker for auto-respawn
+	go s.StartHeartbeatChecker(s.cleanupCtx)
 
 	fmt.Printf("Dashboard ready at http://localhost%s\n", addr)
 	return s.httpServer.ListenAndServe()

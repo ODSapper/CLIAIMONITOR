@@ -352,6 +352,11 @@ func getBasePath() (string, error) {
 		return os.Getwd()
 	}
 
+	// Check if running from bin/ subdirectory - go up one level to project root
+	if filepath.Base(dir) == "bin" {
+		return filepath.Dir(dir), nil
+	}
+
 	return dir, nil
 }
 

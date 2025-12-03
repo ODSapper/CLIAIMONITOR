@@ -29,14 +29,14 @@ func NewExecutor(memDB memory.MemoryDB, spawner *agents.ProcessSpawner, configs 
 // ExecutionResult contains results of plan execution
 type ExecutionResult struct {
 	DeploymentID  int64            `json:"deployment_id"`
-	SpawnedAgents []SpawnedAgent   `json:"spawned_agents"`
+	SpawnedAgents []ExecutedAgent  `json:"spawned_agents"`
 	FailedAgents  []FailedAgent    `json:"failed_agents"`
 	TasksAssigned int              `json:"tasks_assigned"`
 	Status        string           `json:"status"`
 }
 
-// SpawnedAgent represents a successfully spawned agent
-type SpawnedAgent struct {
+// ExecutedAgent represents a successfully spawned agent from execution
+type ExecutedAgent struct {
 	AgentID    string   `json:"agent_id"`
 	ConfigName string   `json:"config_name"`
 	Role       string   `json:"role"`
@@ -76,7 +76,7 @@ func (e *Executor) ExecutePlan(deploymentID int64) (*ExecutionResult, error) {
 
 	result := &ExecutionResult{
 		DeploymentID:  deploymentID,
-		SpawnedAgents: []SpawnedAgent{},
+		SpawnedAgents: []ExecutedAgent{},
 		FailedAgents:  []FailedAgent{},
 	}
 
@@ -130,7 +130,7 @@ func (e *Executor) ExecutePlan(deploymentID int64) (*ExecutionResult, error) {
 }
 
 // spawnFromProposal converts an AgentProposal to an actual agent spawn
-func (e *Executor) spawnFromProposal(proposal AgentProposal, projectPath string) (*SpawnedAgent, error) {
+func (e *Executor) spawnFromProposal(proposal AgentProposal, projectPath string) (*ExecutedAgent, error) {
 	// Map proposal role to agent config
 	config, agentID, err := e.resolveConfig(proposal)
 	if err != nil {
@@ -146,7 +146,7 @@ func (e *Executor) spawnFromProposal(proposal AgentProposal, projectPath string)
 		return nil, fmt.Errorf("failed to spawn agent: %w", err)
 	}
 
-	return &SpawnedAgent{
+	return &ExecutedAgent{
 		AgentID:    agentID,
 		ConfigName: proposal.ConfigName,
 		Role:       proposal.Role,
@@ -159,7 +159,7 @@ func (e *Executor) spawnFromProposal(proposal AgentProposal, projectPath string)
 func (e *Executor) resolveConfig(proposal AgentProposal) (types.AgentConfig, string, error) {
 	// First try exact match by config name
 	if config, ok := e.configs[proposal.ConfigName]; ok {
-		agentID := fmt.Sprintf("%s-%03d", proposal.ConfigName, generateSequenceNum())
+		agentID := e.generateAgentID(config, proposal.ConfigName)
 		return config, agentID, nil
 	}
 
@@ -172,18 +172,28 @@ func (e *Executor) resolveConfig(proposal AgentProposal) (types.AgentConfig, str
 
 	if configName, ok := roleMapping[proposal.Role]; ok {
 		if config, exists := e.configs[configName]; exists {
-			agentID := fmt.Sprintf("%s-%03d", configName, generateSequenceNum())
+			agentID := e.generateAgentID(config, configName)
 			return config, agentID, nil
 		}
 	}
 
 	// Fallback to first available config
 	for name, config := range e.configs {
-		agentID := fmt.Sprintf("%s-%03d", name, generateSequenceNum())
+		agentID := e.generateAgentID(config, name)
 		return config, agentID, nil
 	}
 
 	return types.AgentConfig{}, "", fmt.Errorf("no agent config available for role '%s'", proposal.Role)
+}
+
+// generateAgentID creates an agent ID based on config settings
+func (e *Executor) generateAgentID(config types.AgentConfig, configName string) string {
+	if config.Numbering && config.Prefix != "" {
+		// Use prefix with zero-padded 3-digit number (e.g., Snake001)
+		return fmt.Sprintf("%s%03d", config.Prefix, generateSequenceNum())
+	}
+	// Traditional naming (e.g., SNTGreen-001)
+	return fmt.Sprintf("%s-%03d", configName, generateSequenceNum())
 }
 
 // buildInitialPrompt creates a task-specific prompt for the agent

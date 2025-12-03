@@ -328,7 +328,8 @@ func (m *SQLiteMemoryDB) GetAllAgents() ([]*AgentControl, error) {
 	return agents, rows.Err()
 }
 
-// GetStaleAgents retrieves agents that haven't sent a heartbeat within the threshold
+// GetStaleAgents retrieves agents that haven't sent a heartbeat within the threshold,
+// OR agents stuck in "starting" status that never sent a heartbeat
 func (m *SQLiteMemoryDB) GetStaleAgents(threshold time.Duration) ([]*AgentControl, error) {
 	query := `
 		SELECT agent_id, config_name, role, project_path, pid,
@@ -337,16 +338,21 @@ func (m *SQLiteMemoryDB) GetStaleAgents(threshold time.Duration) ([]*AgentContro
 		       spawned_at, stopped_at, stop_reason,
 		       model, color
 		FROM agent_control
-		WHERE status != 'stopped'
-		  AND heartbeat_at IS NOT NULL
-		  AND heartbeat_at < datetime('now', ?)
-		ORDER BY heartbeat_at ASC
+		WHERE status NOT IN ('stopped', 'dead')
+		  AND (
+		    -- Case 1: Has heartbeat but it's stale
+		    (heartbeat_at IS NOT NULL AND heartbeat_at < datetime('now', ?))
+		    OR
+		    -- Case 2: Never sent heartbeat and stuck in starting status too long
+		    (heartbeat_at IS NULL AND status = 'starting' AND spawned_at < datetime('now', ?))
+		  )
+		ORDER BY COALESCE(heartbeat_at, spawned_at) ASC
 	`
 
 	// Convert threshold to SQLite format (e.g., "-120 seconds")
 	thresholdStr := fmt.Sprintf("-%d seconds", int(threshold.Seconds()))
 
-	rows, err := m.db.Query(query, thresholdStr)
+	rows, err := m.db.Query(query, thresholdStr, thresholdStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query stale agents: %w", err)
 	}

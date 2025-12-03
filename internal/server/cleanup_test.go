@@ -111,6 +111,7 @@ func (m *mockStore) GetPendingRequests() []*types.HumanInputRequest             
 func (m *mockStore) AddStopRequest(req *types.StopApprovalRequest)                         {}
 func (m *mockStore) RespondStopRequest(id string, approved bool, response string, reviewedBy string) {}
 func (m *mockStore) GetPendingStopRequests() []*types.StopApprovalRequest                  { return nil }
+func (m *mockStore) GetStopRequestByID(id string) *types.StopApprovalRequest               { return nil }
 func (m *mockStore) AddAlert(alert *types.Alert)                                           {}
 func (m *mockStore) AcknowledgeAlert(id string)                                            {}
 func (m *mockStore) ClearAllAlerts()                                                       {}

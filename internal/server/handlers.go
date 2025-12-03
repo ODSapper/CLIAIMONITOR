@@ -18,6 +18,16 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
+// HeartbeatInfo tracks the last heartbeat from an agent
+type HeartbeatInfo struct {
+	AgentID     string    `json:"agent_id"`
+	ConfigName  string    `json:"config_name"`
+	ProjectPath string    `json:"project_path"`
+	Status      string    `json:"status"`
+	CurrentTask string    `json:"current_task"`
+	LastSeen    time.Time `json:"last_seen"`
+}
+
 // handleWebSocket upgrades to WebSocket and manages connection
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -129,6 +139,14 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.store.AddAgent(agent)
+
+	// Set initial heartbeat in database to prevent premature cleanup
+	// This gives the agent time to start and register via MCP
+	if s.memDB != nil {
+		s.memDB.UpdateHeartbeat(agentID)
+		s.memDB.UpdateStatus(agentID, "starting", "")
+	}
+
 	s.broadcastState()
 
 	s.respondJSON(w, agent)
@@ -306,6 +324,7 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 
 	health := map[string]interface{}{
 		"status":         "ok",
+		"timestamp":      time.Now().UTC().Format(time.RFC3339),
 		"uptime_seconds": int(time.Since(s.startTime).Seconds()),
 		"version":        "1.0.0",
 		"pid":            os.Getpid(),
@@ -491,6 +510,84 @@ func (s *Server) respondError(w http.ResponseWriter, status int, message string)
 
 func formatAgentNumber(n int) string {
 	return fmt.Sprintf("%03d", n)
+}
+
+// Heartbeat Handlers
+
+// handleHeartbeat receives heartbeat pings from agents
+func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AgentID     string `json:"agent_id"`
+		ConfigName  string `json:"config_name"`
+		ProjectPath string `json:"project_path"`
+		Status      string `json:"status"`
+		CurrentTask string `json:"current_task"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Validate agent_id is provided
+	if req.AgentID == "" {
+		s.respondError(w, http.StatusBadRequest, "agent_id is required")
+		return
+	}
+
+	// Update heartbeat map
+	s.heartbeatMu.Lock()
+	s.agentHeartbeats[req.AgentID] = &HeartbeatInfo{
+		AgentID:     req.AgentID,
+		ConfigName:  req.ConfigName,
+		ProjectPath: req.ProjectPath,
+		Status:      req.Status,
+		CurrentTask: req.CurrentTask,
+		LastSeen:    time.Now(),
+	}
+	s.heartbeatMu.Unlock()
+
+	s.respondJSON(w, map[string]interface{}{
+		"ok":        true,
+		"timestamp": time.Now(),
+	})
+}
+
+// handleGetHeartbeats returns all current heartbeat information
+func (s *Server) handleGetHeartbeats(w http.ResponseWriter, r *http.Request) {
+	s.heartbeatMu.RLock()
+	defer s.heartbeatMu.RUnlock()
+
+	// Convert map to slice for JSON response
+	heartbeats := make([]*HeartbeatInfo, 0, len(s.agentHeartbeats))
+	for _, info := range s.agentHeartbeats {
+		heartbeats = append(heartbeats, info)
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"heartbeats": heartbeats,
+		"count":      len(heartbeats),
+		"timestamp":  time.Now(),
+	})
+}
+
+// handleDeleteHeartbeat removes a specific heartbeat entry
+func (s *Server) handleDeleteHeartbeat(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	agentID := vars["id"]
+
+	s.heartbeatMu.Lock()
+	defer s.heartbeatMu.Unlock()
+
+	if _, exists := s.agentHeartbeats[agentID]; !exists {
+		s.respondError(w, http.StatusNotFound, "Heartbeat not found")
+		return
+	}
+
+	delete(s.agentHeartbeats, agentID)
+	s.respondJSON(w, map[string]interface{}{
+		"deleted":  agentID,
+		"success":  true,
+	})
 }
 
 // Captain Terminal Supervisor Handlers

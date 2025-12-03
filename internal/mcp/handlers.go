@@ -9,27 +9,28 @@ import (
 
 // ToolCallbacks interface for tool handlers to call back into services
 type ToolCallbacks struct {
-	OnRegisterAgent         func(agentID, role string) (interface{}, error)
-	OnReportStatus          func(agentID, status, task string) (interface{}, error)
-	OnReportMetrics         func(agentID string, metrics *types.AgentMetrics) (interface{}, error)
-	OnRequestHumanInput     func(req *types.HumanInputRequest) (interface{}, error)
-	OnRequestStopApproval   func(req *types.StopApprovalRequest) (interface{}, error)
-	OnLogActivity           func(activity *types.ActivityLog) (interface{}, error)
-	OnGetAgentMetrics       func() (interface{}, error)
-	OnGetPendingQuestions   func() (interface{}, error)
+	OnRegisterAgent          func(agentID, role string) (interface{}, error)
+	OnReportStatus           func(agentID, status, task string) (interface{}, error)
+	OnReportMetrics          func(agentID string, metrics *types.AgentMetrics) (interface{}, error)
+	OnRequestHumanInput      func(req *types.HumanInputRequest) (interface{}, error)
+	OnRequestStopApproval    func(req *types.StopApprovalRequest) (interface{}, error)
+	OnGetStopRequestByID     func(id string) *types.StopApprovalRequest
+	OnLogActivity            func(activity *types.ActivityLog) (interface{}, error)
+	OnGetAgentMetrics        func() (interface{}, error)
+	OnGetPendingQuestions    func() (interface{}, error)
 	OnGetPendingStopRequests func() (interface{}, error)
-	OnRespondStopRequest    func(id string, approved bool, response string) (interface{}, error)
-	OnEscalateAlert         func(alert *types.Alert) (interface{}, error)
-	OnSubmitJudgment        func(judgment *types.SupervisorJudgment) (interface{}, error)
-	OnGetAgentList          func() (interface{}, error)
-	OnGetMyTasks            func(agentID, status string) (interface{}, error)
-	OnClaimTask             func(agentID, taskID string) (interface{}, error)
-	OnUpdateTaskProgress    func(agentID, taskID, status, note string) (interface{}, error)
-	OnCompleteTask          func(agentID, taskID, summary string) (interface{}, error)
-	OnSubmitReconReport     func(agentID string, report map[string]interface{}) (interface{}, error)
-	OnRequestGuidance       func(agentID string, guidance map[string]interface{}) (interface{}, error)
-	OnReportProgress        func(agentID string, progress map[string]interface{}) (interface{}, error)
-	OnSignalCaptain         func(agentID, signal, context string) (interface{}, error)
+	OnRespondStopRequest     func(id string, approved bool, response string) (interface{}, error)
+	OnEscalateAlert          func(alert *types.Alert) (interface{}, error)
+	OnSubmitJudgment         func(judgment *types.SupervisorJudgment) (interface{}, error)
+	OnGetAgentList           func() (interface{}, error)
+	OnGetMyTasks             func(agentID, status string) (interface{}, error)
+	OnClaimTask              func(agentID, taskID string) (interface{}, error)
+	OnUpdateTaskProgress     func(agentID, taskID, status, note string) (interface{}, error)
+	OnCompleteTask           func(agentID, taskID, summary string) (interface{}, error)
+	OnSubmitReconReport      func(agentID string, report map[string]interface{}) (interface{}, error)
+	OnRequestGuidance        func(agentID string, guidance map[string]interface{}) (interface{}, error)
+	OnReportProgress         func(agentID string, progress map[string]interface{}) (interface{}, error)
+	OnSignalCaptain          func(agentID, signal, context string) (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -143,9 +144,10 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 	})
 
 	// request_stop_approval - Agent requests permission to stop
+	// This tool BLOCKS until approval is received, then returns the response
 	s.RegisterTool(ToolDefinition{
 		Name:        "request_stop_approval",
-		Description: "Request approval from supervisor before stopping work. MUST be called before stopping for ANY reason.",
+		Description: "Request approval from supervisor before stopping work. MUST be called before stopping for ANY reason. This will WAIT for approval and return the supervisor's response with any new task assignment.",
 		Parameters: map[string]ParameterDef{
 			"reason":         {Type: "string", Description: "Why stopping: task_complete, blocked, error, needs_input, other", Required: true},
 			"context":        {Type: "string", Description: "Details about why you want to stop", Required: true},
@@ -165,7 +167,39 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 				CreatedAt:     time.Now(),
 				Reviewed:      false,
 			}
-			return callbacks.OnRequestStopApproval(req)
+
+			// Submit the request
+			_, err := callbacks.OnRequestStopApproval(req)
+			if err != nil {
+				return nil, err
+			}
+
+			// Poll for approval response (max 10 minutes, check every 5 seconds)
+			maxWait := 10 * time.Minute
+			pollInterval := 5 * time.Second
+			deadline := time.Now().Add(maxWait)
+
+			for time.Now().Before(deadline) {
+				// Check if request has been reviewed
+				updated := callbacks.OnGetStopRequestByID(req.ID)
+				if updated != nil && updated.Reviewed {
+					// Return the approval response
+					return map[string]interface{}{
+						"status":      "reviewed",
+						"approved":    updated.Approved,
+						"response":    updated.Response,
+						"reviewed_by": updated.ReviewedBy,
+						"next_task":   updated.Response, // Response typically contains next task if not approved to stop
+					}, nil
+				}
+				time.Sleep(pollInterval)
+			}
+
+			// Timeout - return timeout status
+			return map[string]interface{}{
+				"status":  "timeout",
+				"message": "No response received within 10 minutes. You may proceed with caution or try again.",
+			}, nil
 		},
 	})
 

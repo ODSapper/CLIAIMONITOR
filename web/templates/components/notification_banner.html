@@ -1,0 +1,198 @@
+<!-- Notification Banner Component -->
+<!-- This banner appears at the top of the dashboard for important alerts -->
+<div id="notification-banner" class="notification-banner" style="display: none;">
+    <div class="notification-content">
+        <span class="notification-icon">🔔</span>
+        <span id="notification-message" class="notification-message"></span>
+        <button id="notification-dismiss" class="notification-dismiss" title="Dismiss notification">
+            &times;
+        </button>
+    </div>
+</div>
+
+<style>
+/* Notification Banner Styles */
+.notification-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    padding: 12px 20px;
+    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+    color: white;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    animation: slideDown 0.3s ease-out;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+}
+
+.notification-banner.info {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+}
+
+.notification-banner.warning {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+}
+
+.notification-banner.error {
+    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+}
+
+.notification-banner.supervisor {
+    background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+    border-bottom: 3px solid #fbbf24;
+}
+
+.notification-content {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.notification-icon {
+    font-size: 24px;
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.notification-message {
+    flex: 1;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+
+.notification-dismiss {
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    font-size: 24px;
+    font-weight: bold;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    padding: 0;
+    line-height: 1;
+}
+
+.notification-dismiss:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: scale(1.1);
+}
+
+.notification-dismiss:active {
+    transform: scale(0.95);
+}
+
+@keyframes slideDown {
+    from {
+        transform: translateY(-100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.1);
+        opacity: 0.8;
+    }
+}
+
+/* Adjust body padding when banner is visible */
+body.notification-active {
+    padding-top: 60px;
+}
+
+/* Adjust header position when banner is visible */
+body.notification-active .header {
+    top: 60px;
+}
+</style>
+
+<script>
+// Notification Banner JavaScript Controller
+(function() {
+    const banner = document.getElementById('notification-banner');
+    const message = document.getElementById('notification-message');
+    const dismissBtn = document.getElementById('notification-dismiss');
+
+    let currentTimeout = null;
+
+    // Show notification banner
+    window.showNotificationBanner = function(text, type = 'info', autoHide = false) {
+        // Clear any existing timeout
+        if (currentTimeout) {
+            clearTimeout(currentTimeout);
+            currentTimeout = null;
+        }
+
+        // Set message
+        message.textContent = text;
+
+        // Set type (info, warning, error, supervisor)
+        banner.className = 'notification-banner ' + type;
+
+        // Show banner
+        banner.style.display = 'block';
+        document.body.classList.add('notification-active');
+
+        // Auto-hide after 10 seconds for non-supervisor alerts
+        if (autoHide && type !== 'supervisor') {
+            currentTimeout = setTimeout(() => {
+                hideNotificationBanner();
+            }, 10000);
+        }
+
+        console.log('[NOTIFICATION] Banner shown:', text, 'Type:', type);
+    };
+
+    // Hide notification banner
+    window.hideNotificationBanner = function() {
+        banner.style.display = 'none';
+        document.body.classList.remove('notification-active');
+
+        if (currentTimeout) {
+            clearTimeout(currentTimeout);
+            currentTimeout = null;
+        }
+
+        console.log('[NOTIFICATION] Banner hidden');
+    };
+
+    // Dismiss button click handler
+    dismissBtn.addEventListener('click', () => {
+        hideNotificationBanner();
+    });
+
+    // Listen for notification events from WebSocket
+    if (typeof window.addEventListener !== 'undefined') {
+        window.addEventListener('supervisor-needs-input', (event) => {
+            const msg = event.detail?.message || 'Supervisor needs your input';
+            showNotificationBanner(msg, 'supervisor', false);
+        });
+
+        window.addEventListener('notification', (event) => {
+            const { message: msg, type = 'info', autoHide = true } = event.detail || {};
+            if (msg) {
+                showNotificationBanner(msg, type, autoHide);
+            }
+        });
+    }
+
+    console.log('[NOTIFICATION] Banner controller initialized');
+})();
+</script>

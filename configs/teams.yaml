@@ -1,4 +1,18 @@
 agents:
+  # Haiku agents - fast, cheap, for simple tasks
+  - name: HaikuGreen
+    model: claude-3-5-haiku-20241022
+    role: Documentation & Simple Code
+    color: "#90EE90"
+    skip_permissions: true
+
+  - name: HaikuPurple
+    model: claude-3-5-haiku-20241022
+    role: Test Writing & Review
+    color: "#DDA0DD"
+    skip_permissions: true
+
+  # Sonnet agents - standard implementation work
   - name: SNTGreen
     model: claude-sonnet-4-5-20250929
     role: Go Developer
@@ -33,6 +47,15 @@ agents:
     model: claude-opus-4-5-20251101
     role: Security
     color: "#ff4444"
+    skip_permissions: true
+
+  - name: Snake
+    model: claude-opus-4-5-20251101
+    role: Reconnaissance & Special Ops
+    color: "#2d5016"
+    prefix: Snake
+    numbering: true
+    prompt_file: snake.md
     skip_permissions: true
 
 supervisor:

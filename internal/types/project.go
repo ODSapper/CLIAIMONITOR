@@ -29,7 +29,7 @@ const (
 // GetAccessLevelForRole returns the appropriate access level for an agent role
 func GetAccessLevelForRole(role AgentRole) AccessLevel {
 	switch role {
-	case RoleCodeAuditor, RoleSecurity:
+	case RoleCodeAuditor, RoleSecurity, RoleReconSpecialOps:
 		return AccessReadOnlyCross
 	case RoleSupervisor:
 		return AccessReadOnlyAll

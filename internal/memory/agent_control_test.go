@@ -491,6 +491,34 @@ func TestGetStaleAgents(t *testing.T) {
 		t.Fatalf("RegisterAgent failed: %v", err)
 	}
 
+	// Stuck starting agent (no heartbeat, old spawn time) - should be stale
+	stuckStarting := &AgentControl{
+		AgentID:    "agent-stuck-starting",
+		ConfigName: "config-6",
+		Status:     "starting",
+	}
+	if err := db.RegisterAgent(stuckStarting); err != nil {
+		t.Fatalf("RegisterAgent failed: %v", err)
+	}
+	// Manually set spawned_at to old time via direct SQL
+	_, err := db.(*SQLiteMemoryDB).db.Exec(
+		"UPDATE agent_control SET spawned_at = datetime('now', '-5 minutes') WHERE agent_id = ?",
+		"agent-stuck-starting",
+	)
+	if err != nil {
+		t.Fatalf("Failed to set old spawned_at: %v", err)
+	}
+
+	// Fresh starting agent (just spawned) - should NOT be stale
+	freshStarting := &AgentControl{
+		AgentID:    "agent-fresh-starting",
+		ConfigName: "config-7",
+		Status:     "starting",
+	}
+	if err := db.RegisterAgent(freshStarting); err != nil {
+		t.Fatalf("RegisterAgent failed: %v", err)
+	}
+
 	// Get stale agents (threshold: 2 minutes)
 	threshold := 2 * time.Minute
 	staleAgents, err := db.GetStaleAgents(threshold)
@@ -498,23 +526,32 @@ func TestGetStaleAgents(t *testing.T) {
 		t.Fatalf("GetStaleAgents failed: %v", err)
 	}
 
-	// Should find 2 stale agents (agent-stale and agent-very-stale)
-	// Should NOT include: agent-fresh (recent), agent-no-heartbeat (nil heartbeat), agent-stopped (stopped status)
-	if len(staleAgents) != 2 {
-		t.Errorf("Expected 2 stale agents, got %d", len(staleAgents))
+	// Should find 3 stale agents:
+	// - agent-very-stale (old heartbeat)
+	// - agent-stale (old heartbeat)
+	// - agent-stuck-starting (no heartbeat, old spawn time)
+	// Should NOT include:
+	// - agent-fresh (recent heartbeat)
+	// - agent-no-heartbeat (running status, not starting)
+	// - agent-stopped (stopped status)
+	// - agent-fresh-starting (just spawned)
+	if len(staleAgents) != 3 {
+		t.Errorf("Expected 3 stale agents, got %d", len(staleAgents))
 		for _, a := range staleAgents {
-			t.Logf("  Stale agent: %s", a.AgentID)
+			t.Logf("  Stale agent: %s (status=%s)", a.AgentID, a.Status)
 		}
 	}
 
-	// Verify the stale agents are ordered by heartbeat (oldest first)
-	if len(staleAgents) == 2 {
-		if staleAgents[0].AgentID != "agent-very-stale" {
-			t.Errorf("Expected first stale agent to be agent-very-stale, got %s", staleAgents[0].AgentID)
+	// Verify stuck-starting agent is included
+	foundStuckStarting := false
+	for _, a := range staleAgents {
+		if a.AgentID == "agent-stuck-starting" {
+			foundStuckStarting = true
+			break
 		}
-		if staleAgents[1].AgentID != "agent-stale" {
-			t.Errorf("Expected second stale agent to be agent-stale, got %s", staleAgents[1].AgentID)
-		}
+	}
+	if !foundStuckStarting {
+		t.Error("Expected agent-stuck-starting to be in stale agents list")
 	}
 }
 

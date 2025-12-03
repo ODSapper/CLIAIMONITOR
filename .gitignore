@@ -32,3 +32,17 @@ configs/mcp/*.json
 
 # Generated prompts
 configs/prompts/active/*.md
+
+# Runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+*.pid
+*.pid.lock
+nul
+
+# Local settings
+.claude/settings.local.json
+.claude/mcp.json
+

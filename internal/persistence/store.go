@@ -38,6 +38,7 @@ type Store interface {
 	AddStopRequest(req *types.StopApprovalRequest)
 	RespondStopRequest(id string, approved bool, response string, reviewedBy string)
 	GetPendingStopRequests() []*types.StopApprovalRequest
+	GetStopRequestByID(id string) *types.StopApprovalRequest
 
 	// Alert operations
 	AddAlert(alert *types.Alert)
@@ -366,6 +367,13 @@ func (s *JSONStore) GetPendingStopRequests() []*types.StopApprovalRequest {
 		}
 	}
 	return pending
+}
+
+// GetStopRequestByID returns a stop request by ID
+func (s *JSONStore) GetStopRequestByID(id string) *types.StopApprovalRequest {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.StopRequests[id]
 }
 
 // AddAlert adds a new alert

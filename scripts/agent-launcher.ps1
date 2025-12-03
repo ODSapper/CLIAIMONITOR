@@ -91,32 +91,12 @@ if (`$systemPromptContent) {
     Write-Host '  Path: $SystemPromptPath' -ForegroundColor Red
 }
 
-# Create project-specific .claude/settings.local.json for system prompt injection
-`$claudeDir = Join-Path '$ProjectPath' '.claude'
-if (-not (Test-Path `$claudeDir)) {
-    New-Item -ItemType Directory -Path `$claudeDir -Force | Out-Null
-}
+# Launch Claude with MCP config
+Write-Host '  Launching Claude...' -ForegroundColor Green
+claude --model '$Model' --mcp-config '$MCPConfigPath' --strict-mcp-config --dangerously-skip-permissions "$InitialPrompt"
 
-`$settingsPath = Join-Path `$claudeDir 'settings.local.json'
-if (`$systemPromptContent) {
-    `$settings = @{
-        appendSystemPrompt = `$systemPromptContent
-    }
-    `$settingsJson = `$settings | ConvertTo-Json -Depth 10
-    `$settingsJson | Out-File -FilePath `$settingsPath -Encoding UTF8
-    Write-Host "  Settings written to: `$settingsPath" -ForegroundColor DarkGray
-}
-
-# Launch Claude in interactive mode
-try {
-    `$ErrorActionPreference = 'Stop'
-    claude --model '$Model'$mcpConfigFlag$skipPermissionsFlag "$InitialPrompt"
-
-    if (`$LASTEXITCODE -ne 0) {
-        Write-Host "  ERROR: Claude exited with code `$LASTEXITCODE" -ForegroundColor Red
-    }
-} catch {
-    Write-Host "  ERROR: `$_" -ForegroundColor Red
+if (`$LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: Claude exited with code `$LASTEXITCODE" -ForegroundColor Red
     Write-Host "  Press any key to close..." -ForegroundColor Yellow
     `$null = `$Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
 }
@@ -154,6 +134,33 @@ if ($wtPath) {
     ) -WorkingDirectory $ProjectPath
 
     Write-Host "Agent $AgentID launched in PowerShell" -ForegroundColor Green
+}
+
+# Spawn heartbeat script as hidden background process
+$heartbeatScriptPath = Join-Path $PSScriptRoot "agent-heartbeat.ps1"
+
+if (Test-Path $heartbeatScriptPath) {
+    # Start heartbeat monitor in hidden window
+    $heartbeatProcess = Start-Process -FilePath "powershell.exe" `
+        -ArgumentList @(
+            "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden",
+            "-File", "`"$heartbeatScriptPath`"",
+            "-AgentID", "`"$AgentID`"",
+            "-ServerURL", "http://localhost:3000",
+            "-IntervalSeconds", "30",
+            "-CurrentTask", "initializing"
+        ) `
+        -WindowStyle Hidden `
+        -PassThru
+
+    Write-Host "Heartbeat monitor started (PID: $($heartbeatProcess.Id))" -ForegroundColor Green
+
+    # Store heartbeat PID for tracking
+    $heartbeatPidPath = Join-Path "C:\Users\Admin\Documents\VS Projects\CLIAIMONITOR\data\pids" "$AgentID-heartbeat.pid"
+    $heartbeatProcess.Id | Out-File -FilePath $heartbeatPidPath -Encoding ASCII -NoNewline
+} else {
+    Write-Host "WARNING: Heartbeat script not found at $heartbeatScriptPath" -ForegroundColor Yellow
 }
 
 # Return the temp script path for cleanup if needed
