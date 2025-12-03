@@ -1,0 +1,443 @@
+package captain
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+// CaptainStatus represents the current state of the Captain process
+type CaptainStatus string
+
+const (
+	StatusStarting   CaptainStatus = "starting"
+	StatusRunning    CaptainStatus = "running"
+	StatusCrashed    CaptainStatus = "crashed"
+	StatusRestarting CaptainStatus = "restarting"
+	StatusStopped    CaptainStatus = "stopped"
+	StatusDisabled   CaptainStatus = "disabled" // Crash loop protection triggered
+)
+
+// CaptainSupervisor manages the Captain process lifecycle
+type CaptainSupervisor struct {
+	mu sync.RWMutex
+
+	basePath   string
+	serverPort int
+
+	// Process tracking
+	captainPID int
+	captainCmd *exec.Cmd
+
+	// Crash loop protection
+	respawnCount  int
+	respawnWindow time.Time
+	maxRespawns   int
+	windowDuration time.Duration
+
+	// State
+	status        CaptainStatus
+	lastExitCode  int
+	lastExitTime  time.Time
+	startTime     time.Time
+	shutdownChan  chan struct{}
+	shutdownOnce  sync.Once
+
+	// Callbacks
+	onShutdownRequest func() // Called when Captain exits cleanly (code 0)
+}
+
+// SupervisorConfig holds configuration for the CaptainSupervisor
+type SupervisorConfig struct {
+	BasePath       string
+	ServerPort     int
+	MaxRespawns    int           // Default: 3
+	WindowDuration time.Duration // Default: 1 minute
+}
+
+// CaptainInfo provides status information for API responses
+type CaptainInfo struct {
+	Status       CaptainStatus `json:"status"`
+	PID          int           `json:"pid,omitempty"`
+	StartTime    *time.Time    `json:"start_time,omitempty"`
+	LastExitCode int           `json:"last_exit_code,omitempty"`
+	LastExitTime *time.Time    `json:"last_exit_time,omitempty"`
+	RespawnCount int           `json:"respawn_count"`
+	MaxRespawns  int           `json:"max_respawns"`
+	CanRestart   bool          `json:"can_restart"`
+}
+
+// NewCaptainSupervisor creates a new supervisor instance
+func NewCaptainSupervisor(config SupervisorConfig) *CaptainSupervisor {
+	if config.MaxRespawns == 0 {
+		config.MaxRespawns = 3
+	}
+	if config.WindowDuration == 0 {
+		config.WindowDuration = 1 * time.Minute
+	}
+
+	return &CaptainSupervisor{
+		basePath:       config.BasePath,
+		serverPort:     config.ServerPort,
+		maxRespawns:    config.MaxRespawns,
+		windowDuration: config.WindowDuration,
+		status:         StatusStopped,
+		shutdownChan:   make(chan struct{}),
+	}
+}
+
+// SetShutdownCallback sets the function called when Captain requests shutdown
+func (s *CaptainSupervisor) SetShutdownCallback(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onShutdownRequest = fn
+}
+
+// Start launches the Captain process and begins monitoring
+func (s *CaptainSupervisor) Start() error {
+	s.mu.Lock()
+	if s.status == StatusRunning || s.status == StatusStarting {
+		s.mu.Unlock()
+		return fmt.Errorf("captain already running")
+	}
+	s.status = StatusStarting
+	s.mu.Unlock()
+
+	return s.spawnCaptain()
+}
+
+// Stop terminates the Captain process gracefully
+func (s *CaptainSupervisor) Stop() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.captainCmd != nil && s.captainCmd.Process != nil {
+		// Send interrupt signal
+		if err := s.captainCmd.Process.Kill(); err != nil {
+			return fmt.Errorf("failed to kill captain process: %w", err)
+		}
+	}
+
+	s.status = StatusStopped
+	return nil
+}
+
+// Restart manually restarts the Captain (resets crash loop counter)
+func (s *CaptainSupervisor) Restart() error {
+	s.mu.Lock()
+	// Reset crash loop protection on manual restart
+	s.respawnCount = 0
+	s.respawnWindow = time.Time{}
+	s.mu.Unlock()
+
+	// Stop if running
+	s.Stop()
+
+	// Small delay to ensure cleanup
+	time.Sleep(500 * time.Millisecond)
+
+	return s.Start()
+}
+
+// GetInfo returns current Captain status information
+func (s *CaptainSupervisor) GetInfo() CaptainInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	info := CaptainInfo{
+		Status:       s.status,
+		PID:          s.captainPID,
+		LastExitCode: s.lastExitCode,
+		RespawnCount: s.respawnCount,
+		MaxRespawns:  s.maxRespawns,
+		CanRestart:   s.status == StatusDisabled || s.status == StatusCrashed || s.status == StatusStopped,
+	}
+
+	if !s.startTime.IsZero() {
+		info.StartTime = &s.startTime
+	}
+	if !s.lastExitTime.IsZero() {
+		info.LastExitTime = &s.lastExitTime
+	}
+
+	return info
+}
+
+// ShutdownChan returns a channel that closes when Captain requests shutdown
+func (s *CaptainSupervisor) ShutdownChan() <-chan struct{} {
+	return s.shutdownChan
+}
+
+// spawnCaptain launches the Captain in a new Windows Terminal
+func (s *CaptainSupervisor) spawnCaptain() error {
+	// Build Captain system prompt
+	captainPrompt := s.buildCaptainPrompt()
+
+	// Write prompt to a file for the launcher to read
+	promptFile := filepath.Join(s.basePath, "data", "captain-prompt.md")
+	if err := os.WriteFile(promptFile, []byte(captainPrompt), 0644); err != nil {
+		return fmt.Errorf("failed to write captain prompt: %w", err)
+	}
+
+	// Create .claude/settings.local.json in basePath with appendSystemPrompt
+	claudeDir := filepath.Join(s.basePath, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("failed to create .claude dir: %w", err)
+	}
+
+	settingsFile := filepath.Join(claudeDir, "settings.local.json")
+	settings := map[string]string{
+		"appendSystemPrompt": captainPrompt,
+	}
+	settingsJSON, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(settingsFile, settingsJSON, 0644); err != nil {
+		return fmt.Errorf("failed to write captain settings: %w", err)
+	}
+
+	// Initial prompt - check monitoring infrastructure
+	initialPrompt := "You are Captain (Orchestrator). Check your monitoring infrastructure: curl http://localhost:" + fmt.Sprintf("%d", s.serverPort) + "/api/state"
+
+	// Create launcher script with PID tracking
+	launcherScript := fmt.Sprintf(`# Set unique window title for process tracking
+$Host.UI.RawUI.WindowTitle = 'CLIAIMONITOR-Captain'
+
+# Write PID to tracking file for reliable termination
+$pidDir = '%s\data\pids'
+if (-not (Test-Path $pidDir)) { New-Item -ItemType Directory -Path $pidDir -Force | Out-Null }
+$PID | Out-File -FilePath (Join-Path $pidDir 'Captain.pid') -Encoding ASCII -NoNewline
+
+Write-Host ''
+Write-Host '  ================================================' -ForegroundColor Yellow
+Write-Host '    CLIAIMONITOR CAPTAIN - Orchestrator' -ForegroundColor Yellow
+Write-Host '  ================================================' -ForegroundColor Yellow
+Write-Host ''
+Write-Host '  Dashboard: http://localhost:%d' -ForegroundColor Cyan
+Write-Host '  Project:   %s' -ForegroundColor Cyan
+Write-Host "  PID:       $PID" -ForegroundColor DarkGray
+Write-Host ''
+
+Set-Location -Path '%s'
+
+claude --model claude-opus-4-5-20251101 --dangerously-skip-permissions "%s"
+`, s.basePath, s.serverPort, s.basePath, s.basePath, initialPrompt)
+
+	// Write launcher script
+	launcherFile := filepath.Join(os.TempDir(), "cliaimonitor-captain-launcher.ps1")
+	if err := os.WriteFile(launcherFile, []byte(launcherScript), 0644); err != nil {
+		return fmt.Errorf("failed to write launcher script: %w", err)
+	}
+
+	// Spawn in Windows Terminal using PowerShell
+	cmd := exec.Command("wt", "new-tab",
+		"--title", "CLIAIMONITOR Captain",
+		"--tabColor", "#ffd700",
+		"-d", s.basePath,
+		"powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", launcherFile)
+
+	if err := cmd.Start(); err != nil {
+		s.mu.Lock()
+		s.status = StatusCrashed
+		s.mu.Unlock()
+		return fmt.Errorf("failed to spawn captain terminal: %w", err)
+	}
+
+	s.mu.Lock()
+	s.captainCmd = cmd
+	s.captainPID = cmd.Process.Pid
+	s.status = StatusRunning
+	s.startTime = time.Now()
+	s.mu.Unlock()
+
+	// Monitor the process in a goroutine
+	go s.monitorCaptain(cmd)
+
+	return nil
+}
+
+// monitorCaptain watches the Captain process and handles exit
+func (s *CaptainSupervisor) monitorCaptain(cmd *exec.Cmd) {
+	// Wait for process to exit
+	err := cmd.Wait()
+
+	s.mu.Lock()
+	s.lastExitTime = time.Now()
+
+	// Determine exit code
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1 // Unknown error
+		}
+	}
+	s.lastExitCode = exitCode
+
+	// Handle based on exit code
+	if exitCode == 0 {
+		// Check if process ran long enough to be a real Captain exit
+		// wt.exe (Windows Terminal launcher) exits immediately with code 0
+		// A real Captain session would run for at least 5 seconds
+		runtime := time.Since(s.startTime)
+		if runtime < 5*time.Second {
+			// This is just the launcher exiting, not Captain
+			s.status = StatusRunning // Captain is actually running in the new terminal
+			s.captainPID = 0         // We don't have the real PID
+			s.captainCmd = nil       // Can't track the real process
+			s.mu.Unlock()
+			fmt.Printf("Windows Terminal launcher exited (runtime: %v) - Captain running in separate terminal\n", runtime)
+			return
+		}
+
+		// Clean exit after real runtime - trigger server shutdown
+		s.status = StatusStopped
+		callback := s.onShutdownRequest
+		s.mu.Unlock()
+
+		fmt.Println("Captain exited cleanly (code 0) - initiating server shutdown")
+		s.shutdownOnce.Do(func() {
+			close(s.shutdownChan)
+		})
+
+		if callback != nil {
+			callback()
+		}
+		return
+	}
+
+	// Crash - check if we should respawn
+	fmt.Printf("Captain crashed with exit code %d\n", exitCode)
+	s.status = StatusCrashed
+
+	// Check crash loop protection
+	now := time.Now()
+	if s.respawnWindow.IsZero() || now.Sub(s.respawnWindow) > s.windowDuration {
+		// Reset window
+		s.respawnWindow = now
+		s.respawnCount = 1
+	} else {
+		s.respawnCount++
+	}
+
+	if s.respawnCount > s.maxRespawns {
+		// Too many crashes - disable auto-respawn
+		s.status = StatusDisabled
+		s.mu.Unlock()
+		fmt.Printf("Captain crash loop detected (%d crashes in %v) - auto-respawn disabled\n",
+			s.respawnCount, s.windowDuration)
+		fmt.Println("Use dashboard or API to manually restart Captain")
+		return
+	}
+
+	s.status = StatusRestarting
+	s.mu.Unlock()
+
+	// Wait a moment before respawning
+	fmt.Printf("Respawning Captain in 2 seconds (attempt %d/%d)...\n", s.respawnCount, s.maxRespawns)
+	time.Sleep(2 * time.Second)
+
+	if err := s.spawnCaptain(); err != nil {
+		fmt.Printf("Failed to respawn Captain: %v\n", err)
+		s.mu.Lock()
+		s.status = StatusCrashed
+		s.mu.Unlock()
+	}
+}
+
+// buildCaptainPrompt creates the system prompt for Captain
+func (s *CaptainSupervisor) buildCaptainPrompt() string {
+	return fmt.Sprintf(`You are Captain, the orchestrator of the CLIAIMONITOR AI agent system.
+
+## Your Role
+You coordinate AI agents to work on software development tasks across the Magnolia ecosystem (MAH, MSS, MSS-AI, Planner). You are the central intelligence that monitors, directs, and learns from all agent activity.
+
+## YOUR MONITORING INFRASTRUCTURE
+
+### Dashboard & API (http://localhost:%d)
+The dashboard shows real-time state. You can query everything via curl:
+
+**Core State:**
+- curl http://localhost:%d/api/state          # Full state: agents, alerts, human requests, metrics
+- curl http://localhost:%d/api/health         # System health, uptime, agent counts
+- curl http://localhost:%d/api/stats          # Session statistics
+
+**Captain Orchestration:**
+- curl http://localhost:%d/api/captain/status       # Your orchestration queue and status
+- curl http://localhost:%d/api/captain/subagents    # Active subagent processes
+- curl http://localhost:%d/api/captain/escalations  # Issues requiring human review
+
+**Agent Management:**
+- curl -X POST http://localhost:%d/api/agents/spawn -d '{"config_name":"Snake","project_path":"...","task":"..."}'
+- curl -X POST http://localhost:%d/api/agents/{id}/stop
+- curl -X POST http://localhost:%d/api/agents/cleanup  # Remove stale disconnected agents
+
+### SQLite Memory Database (data/memory.db)
+You have a persistent memory across sessions! Query it with sqlite3:
+
+**Tables:**
+- repos: Discovered git repositories (id, base_path, git_remote, last_scanned)
+- repo_files: Important files like CLAUDE.md (repo_id, file_path, content)
+- agent_learnings: Knowledge from all agents (agent_id, category, title, content)
+- workflow_tasks: Tasks parsed from plans (id, title, status, assigned_agent_id, priority)
+- human_decisions: All human approvals/guidance (context, question, answer, decision_type)
+- deployments: Agent spawn history (repo_id, deployment_plan, status, agent_configs)
+- context_summaries: Session summaries (session_id, agent_id, summary)
+
+**Example Queries:**
+sqlite3 data/memory.db "SELECT * FROM repos"
+sqlite3 data/memory.db "SELECT title, status, assigned_agent_id FROM workflow_tasks WHERE status='pending'"
+sqlite3 data/memory.db "SELECT category, title, content FROM agent_learnings ORDER BY created_at DESC LIMIT 10"
+sqlite3 data/memory.db "SELECT question, answer, decision_type FROM human_decisions ORDER BY created_at DESC LIMIT 5"
+
+### State File (data/state.json)
+Real-time dashboard state (JSON). Check this for:
+- agents: Currently spawned agents with PID, status, current_task
+- alerts: Active alerts (unacknowledged issues)
+- human_requests: Pending questions from agents needing human input
+- stop_requests: Agents requesting permission to stop
+- metrics: Token usage, costs, error counts per agent
+
+## Projects in This Ecosystem
+- MAH: Hosting platform (Go) at ../MAH - Magnolia Auto Host
+- MSS: Firewall/IPS (Go) at ../MSS - Security server
+- MSS-AI: AI agent system (Go) at ../mss-ai
+- Planner: Task management API at ../planner
+- CLIAIMONITOR: This system at %s
+
+## Available Agent Types
+Spawn these via the dashboard or API:
+- Snake: Opus-powered reconnaissance/scanning agent
+- SNTGreen: Sonnet implementation agent (standard tasks)
+- SNTPurple: Sonnet analysis/review agent
+- OpusGreen: Opus for high-priority implementation
+- OpusRed: Opus for critical security work
+
+## Workflow
+1. Check your current state: curl http://localhost:%d/api/state
+2. Review any pending escalations or human requests
+3. For user requests, decide: do it yourself OR spawn specialized agents
+4. Track agent progress via the dashboard or API
+5. Query memory DB for context from previous sessions
+
+## Spawning Subagents
+For quick headless tasks (output captured):
+  claude --print "task description"
+
+For persistent terminal agents (use the API):
+  curl -X POST http://localhost:%d/api/agents/spawn \
+    -H "Content-Type: application/json" \
+    -d '{"config_name":"Snake","project_path":"C:/path/to/project","task":"Scan for security issues"}'
+
+## Important
+- When you exit normally (/exit), the entire CLIAIMONITOR system shuts down gracefully
+- If you crash, you will be auto-restarted (up to 3 times per minute)
+- Check memory.db for learnings from past sessions before starting new tasks
+- Use the API to spawn agents rather than running claude directly for better tracking
+
+Be proactive: check your monitoring infrastructure, review pending items, and coordinate work efficiently.
+`, s.serverPort, s.serverPort, s.serverPort, s.serverPort, s.serverPort, s.serverPort, s.serverPort, s.serverPort, s.serverPort, s.serverPort, s.basePath, s.serverPort, s.serverPort)
+}

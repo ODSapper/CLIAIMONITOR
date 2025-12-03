@@ -145,74 +145,38 @@ func (c *Captain) SetPlannerAPIKey(key string) {
 }
 
 // DecideMode determines the best execution mode for a mission
+// All tasks run as subagents (headless) in the Captain's process
 func (c *Captain) DecideMode(mission Mission) ModeDecision {
 	decision := ModeDecision{
+		Mode:           ModeSubagent, // Always use subagent mode - runs in same process
 		Parallelizable: true,
 	}
 
 	switch mission.TaskType {
 	case TaskRecon:
-		// Reconnaissance tasks are perfect for subagents
-		// Quick, parallel, fire-and-forget
-		decision.Mode = ModeSubagent
-		decision.Reason = "Recon tasks are one-shot operations that report back findings"
+		decision.Reason = "Recon: scanning and reporting findings"
 		decision.AgentType = "Snake"
-		decision.Parallelizable = true
 
 	case TaskAnalysis:
-		// Analysis can be either mode depending on scope
-		if mission.RequiresHuman {
-			decision.Mode = ModeTerminal
-			decision.Reason = "Analysis requires human review/interaction"
-			decision.AgentType = "SNTPurple"
-		} else {
-			decision.Mode = ModeSubagent
-			decision.Reason = "Analysis can run independently and return results"
-			decision.AgentType = "SNTPurple"
-		}
-		decision.Parallelizable = true
+		decision.Reason = "Analysis: reviewing code and providing assessment"
+		decision.AgentType = "SNTPurple"
 
 	case TaskImplementation:
-		// Implementation almost always needs terminal mode
-		// Long-running, may need guidance, want visibility
-		decision.Mode = ModeTerminal
-		decision.Reason = "Implementation tasks need dashboard visibility and may require guidance"
+		decision.Reason = "Implementation: writing/modifying code"
 		decision.AgentType = selectImplementationAgent(mission.Priority)
-		decision.Parallelizable = false // Usually sequential for code changes
+		decision.Parallelizable = false // Sequential for code changes
 
 	case TaskTesting:
-		// Testing can be subagent if just running tests
-		// Terminal if debugging/fixing
-		if strings.Contains(strings.ToLower(mission.Description), "fix") {
-			decision.Mode = ModeTerminal
-			decision.Reason = "Test fixing requires interactive debugging"
-			decision.AgentType = "SNTGreen"
-		} else {
-			decision.Mode = ModeSubagent
-			decision.Reason = "Test execution is a one-shot operation"
-			decision.AgentType = "SNTGreen"
-		}
-		decision.Parallelizable = true
+		decision.Reason = "Testing: running tests and reporting results"
+		decision.AgentType = "SNTGreen"
 
 	case TaskPlanning:
-		// Planning tasks use the planning agent
-		decision.Mode = ModeSubagent
-		decision.Reason = "Planning tasks interact with Planner API and return structured data"
+		decision.Reason = "Planning: task management and coordination"
 		decision.AgentType = "Planner"
-		decision.Parallelizable = true
 
 	default:
-		// Default to terminal for safety
-		decision.Mode = ModeTerminal
-		decision.Reason = "Unknown task type defaults to terminal for visibility"
+		decision.Reason = "General task execution"
 		decision.AgentType = "SNTGreen"
-		decision.Parallelizable = false
-	}
-
-	// Override for human-required tasks
-	if mission.RequiresHuman {
-		decision.Mode = ModeTerminal
-		decision.Reason = "Task requires human approval/input"
 	}
 
 	return decision
@@ -271,7 +235,14 @@ func (c *Captain) ExecuteMissionsParallel(ctx context.Context, missions []Missio
 
 // executeSubagent spawns a quick Claude agent and captures output
 func (c *Captain) executeSubagent(ctx context.Context, mission Mission, decision ModeDecision) (*SubagentResult, error) {
-	agentID := fmt.Sprintf("%s-%d", decision.AgentType, time.Now().UnixNano()%10000)
+	// Generate team-compatible agent ID (e.g., team-opusgreen001)
+	var agentID string
+	if c.spawner != nil {
+		agentID = c.spawner.GenerateAgentID(decision.AgentType)
+	} else {
+		// Fallback for tests where spawner is nil
+		agentID = fmt.Sprintf("team-%s", strings.ToLower(decision.AgentType))
+	}
 
 	result := &SubagentResult{
 		AgentID:   agentID,
@@ -358,11 +329,18 @@ func (c *Captain) executeTerminal(ctx context.Context, mission Mission, decision
 		return nil, fmt.Errorf("no config found for agent type: %s", decision.AgentType)
 	}
 
-	agentID := fmt.Sprintf("%s-%03d", decision.AgentType, time.Now().UnixNano()%1000)
+	// Spawner is required for terminal mode
+	if c.spawner == nil {
+		return nil, fmt.Errorf("spawner not configured - terminal mode unavailable")
+	}
+
+	// Generate team-compatible agent ID (e.g., team-opusgreen001)
+	agentID := c.spawner.GenerateAgentID(decision.AgentType)
 	initialPrompt := fmt.Sprintf(
-		"Mission: %s\n\nDescription: %s\n\nWork autonomously. Report progress via MCP tools.",
-		mission.Title,
-		mission.Description,
+		"You are agent '%s' with role '%s'. Register via MCP: mcp__cliaimonitor__register_agent with agent_id='%s'. "+
+			"Your team ID for Planner API is '%s'. "+
+			"Mission: %s. Description: %s. Work autonomously. Report progress via MCP tools.",
+		agentID, config.Role, agentID, agentID, mission.Title, mission.Description,
 	)
 
 	pid, err := c.spawner.SpawnAgent(config, agentID, mission.ProjectPath, initialPrompt)
@@ -636,8 +614,8 @@ func (c *Captain) runCycle(ctx context.Context) {
 					continue
 				}
 
-				// Execute agent spawns
-				c.executeAgentSpawns(ctx, plan)
+				// Execute agent spawns - pass project path from mission
+				c.executeAgentSpawns(ctx, plan, task.Mission.ProjectPath)
 				task.Status = "executing"
 				task.UpdatedAt = time.Now()
 			}
@@ -896,7 +874,7 @@ func (c *Captain) analyzeAndPlan(task *CaptainTask) *supervisor.ActionPlan {
 }
 
 // executeAgentSpawns spawns terminal agents based on action plan
-func (c *Captain) executeAgentSpawns(ctx context.Context, plan *supervisor.ActionPlan) {
+func (c *Captain) executeAgentSpawns(ctx context.Context, plan *supervisor.ActionPlan, projectPath string) {
 	// Spawn agents for each recommendation
 	for _, rec := range plan.AgentRecommendations {
 		mission := Mission{
@@ -904,6 +882,7 @@ func (c *Captain) executeAgentSpawns(ctx context.Context, plan *supervisor.Actio
 			Title:        rec.Task,
 			Description:  fmt.Sprintf("%s\n\nRationale: %s", rec.Task, rec.Rationale),
 			TaskType:     TaskImplementation,
+			ProjectPath:  projectPath, // Must set project path for agent to work in correct directory
 			Priority:     rec.Priority,
 			RequiresHuman: plan.RequiresHuman,
 			Metadata: map[string]string{

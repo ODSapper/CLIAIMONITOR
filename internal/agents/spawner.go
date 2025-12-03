@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -297,9 +298,7 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 
 // SpawnSupervisor launches the supervisor agent
 func (s *ProcessSpawner) SpawnSupervisor(config types.AgentConfig) (int, error) {
-	initialPrompt := "MANDATORY FIRST ACTION: Say exactly: 'CONTEXT LOADED: I am Supervisor (Supervisor). Ready for mission.' " +
-		"If you cannot see your agent ID in your system prompt, say 'NO CONTEXT: System prompt not loaded' instead. " +
-		"THEN call mcp__cliaimonitor__register_agent with agent_id='Supervisor' and role='Supervisor'. Begin your monitoring cycle."
+	initialPrompt := "You are the Supervisor agent. Call mcp__cliaimonitor__register_agent with agent_id='Supervisor' and role='Supervisor' to register with the dashboard. Begin your monitoring cycle."
 	return s.SpawnAgent(config, "Supervisor", s.basePath, initialPrompt)
 }
 
@@ -374,24 +373,66 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 
 	// 4. Remove from running agents map
 	s.mu.Lock()
-	pid, exists := s.runningAgents[agentID]
-	if exists {
-		delete(s.runningAgents, agentID)
-	}
+	delete(s.runningAgents, agentID)
 	s.mu.Unlock()
 
-	if !exists {
-		return fmt.Errorf("agent %s not found", agentID)
+	// 5. Try to kill the agent process using PID file (preferred method)
+	pid, err := s.GetAgentPIDFromFile(agentID)
+	if err == nil && pid > 0 {
+		log.Printf("Killing agent %s using PID file (PID: %d)", agentID, pid)
+		if err := instance.KillProcess(pid); err != nil {
+			log.Printf("Warning: Failed to kill agent by PID: %v", err)
+		}
+		// Clean up PID file
+		s.CleanupAgentPIDFile(agentID)
+		return nil
 	}
 
-	// 5. Try to kill the agent process
-	proc, err := os.FindProcess(pid)
-	if err != nil {
+	// 6. Fallback: Kill by window title
+	log.Printf("PID file not found for %s, trying window title fallback", agentID)
+	if err := s.KillByWindowTitle(agentID); err != nil {
+		log.Printf("Warning: Failed to kill agent by window title: %v", err)
 		return err
 	}
 
-	// Send terminate signal
-	return proc.Kill()
+	return nil
+}
+
+// GetAgentPIDFromFile reads the actual agent PID from the tracking file
+func (s *ProcessSpawner) GetAgentPIDFromFile(agentID string) (int, error) {
+	pidFile := filepath.Join(s.basePath, "data", "pids", agentID+".pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read PID file: %w", err)
+	}
+	pidStr := strings.TrimSpace(string(data))
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid PID in file: %w", err)
+	}
+	return pid, nil
+}
+
+// CleanupAgentPIDFile removes the PID tracking file for an agent
+func (s *ProcessSpawner) CleanupAgentPIDFile(agentID string) error {
+	pidFile := filepath.Join(s.basePath, "data", "pids", agentID+".pid")
+	if err := os.Remove(pidFile); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove PID file: %w", err)
+	}
+	return nil
+}
+
+// KillByWindowTitle finds and kills a process by its window title (fallback method)
+func (s *ProcessSpawner) KillByWindowTitle(agentID string) error {
+	title := fmt.Sprintf("CLIAIMONITOR-%s", agentID)
+	// Use PowerShell to find process by window title and kill it
+	cmd := exec.Command("powershell.exe", "-Command",
+		fmt.Sprintf(`Get-Process | Where-Object {$_.MainWindowTitle -eq '%s'} | Stop-Process -Force -ErrorAction SilentlyContinue`, title))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to kill by window title: %w (output: %s)", err, string(output))
+	}
+	return nil
 }
 
 // IsAgentRunning checks if a process is still running
@@ -438,7 +479,7 @@ func (s *ProcessSpawner) GetAgentByPID(pid int) string {
 	return ""
 }
 
-// CleanupAgentFiles removes MCP config and prompt files for an agent
+// CleanupAgentFiles removes MCP config, prompt files, and PID file for an agent
 func (s *ProcessSpawner) CleanupAgentFiles(agentID string) error {
 	// Remove MCP config
 	mcpConfigPath := filepath.Join(s.configsPath, "mcp", fmt.Sprintf("%s-mcp.json", agentID))
@@ -452,10 +493,13 @@ func (s *ProcessSpawner) CleanupAgentFiles(agentID string) error {
 		return fmt.Errorf("failed to remove prompt: %w", err)
 	}
 
+	// Remove PID tracking file
+	s.CleanupAgentPIDFile(agentID)
+
 	return nil
 }
 
-// CleanupAllAgentFiles removes all generated config and prompt files
+// CleanupAllAgentFiles removes all generated config, prompt, and PID files
 func (s *ProcessSpawner) CleanupAllAgentFiles() error {
 	// Clean MCP configs
 	mcpDir := filepath.Join(s.configsPath, "mcp")
@@ -475,6 +519,17 @@ func (s *ProcessSpawner) CleanupAllAgentFiles() error {
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), "-prompt.md") {
 				os.Remove(filepath.Join(activeDir, entry.Name()))
+			}
+		}
+	}
+
+	// Clean PID tracking files
+	pidsDir := filepath.Join(s.basePath, "data", "pids")
+	entries, err = os.ReadDir(pidsDir)
+	if err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".pid") {
+				os.Remove(filepath.Join(pidsDir, entry.Name()))
 			}
 		}
 	}

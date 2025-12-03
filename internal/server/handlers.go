@@ -93,25 +93,17 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		projectPath = s.basePath
 	}
 
-	// Build initial prompt with MANDATORY context verification
-	// The agent MUST announce its identity first so we know context loaded
-	contextVerification := fmt.Sprintf(
-		"MANDATORY FIRST ACTION: Say exactly: 'CONTEXT LOADED: I am %s (%s). Ready for mission.' "+
-			"If you cannot see your agent ID in your system prompt, say 'NO CONTEXT: System prompt not loaded' instead. "+
-			"This confirms your identity was injected correctly. ",
-		agentID, agentConfig.Role)
-
+	// Build initial prompt - agent should register via MCP and start working
 	mcpInstructions := fmt.Sprintf(
-		"THEN use MCP tools from 'cliaimonitor' server. "+
-			"Call mcp__cliaimonitor__register_agent with agent_id='%s' and role='%s'. ",
-		agentID, agentConfig.Role)
+		"You are agent '%s' with role '%s'. First, call mcp__cliaimonitor__register_agent with agent_id='%s' and role='%s' to register with the dashboard. ",
+		agentID, agentConfig.Role, agentID, agentConfig.Role)
 
 	initialPrompt := ""
 	if req.Task != "" {
-		initialPrompt = contextVerification + mcpInstructions +
+		initialPrompt = mcpInstructions +
 			fmt.Sprintf("TASK: %s. Work autonomously. Do NOT ask clarifying questions.", req.Task)
 	} else {
-		initialPrompt = contextVerification + mcpInstructions +
+		initialPrompt = mcpInstructions +
 			"Then wait for instructions. Work autonomously."
 	}
 
