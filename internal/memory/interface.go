@@ -62,6 +62,9 @@ type MemoryDB interface {
 	GetAgentsByStatus(status string) ([]*AgentControl, error)
 	CheckShutdownFlag(agentID string) (bool, string, error)
 
+	// Learning memory access
+	AsLearningDB() LearningDB
+
 	// Lifecycle
 	Close() error
 }

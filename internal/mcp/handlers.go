@@ -31,6 +31,13 @@ type ToolCallbacks struct {
 	OnRequestGuidance        func(agentID string, guidance map[string]interface{}) (interface{}, error)
 	OnReportProgress         func(agentID string, progress map[string]interface{}) (interface{}, error)
 	OnSignalCaptain          func(agentID, signal, context string) (interface{}, error)
+
+	// Learning memory callbacks
+	OnStoreKnowledge    func(agentID string, knowledge map[string]interface{}) (interface{}, error)
+	OnSearchKnowledge   func(query, category string, limit int) (interface{}, error)
+	OnRecordEpisode     func(agentID string, episode map[string]interface{}) (interface{}, error)
+	OnGetRecentEpisodes func(sessionID string, limit int) (interface{}, error)
+	OnSearchEpisodes    func(query, project string, limit int) (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -513,6 +520,137 @@ func registerSnakeTools(s *Server, callbacks ToolCallbacks) {
 				"findings_so_far":  params["findings_so_far"],
 			}
 			return callbacks.OnReportProgress(agentID, progress)
+		},
+	})
+
+	// Learning memory tools
+	registerLearningTools(s, callbacks)
+}
+
+// registerLearningTools adds RAG memory tools for knowledge storage and retrieval
+func registerLearningTools(s *Server, callbacks ToolCallbacks) {
+	// store_knowledge - Store something learned for future retrieval
+	s.RegisterTool(ToolDefinition{
+		Name:        "store_knowledge",
+		Description: "Store knowledge learned from experience for future retrieval. Use this to save solutions, patterns, best practices, and gotchas.",
+		Parameters: map[string]ParameterDef{
+			"category": {Type: "string", Description: "Category: error_solution, pattern, best_practice, gotcha", Required: true},
+			"title":    {Type: "string", Description: "Brief title/summary of the knowledge", Required: true},
+			"content":  {Type: "string", Description: "Full details of what was learned", Required: true},
+			"tags":     {Type: "array", Description: "Optional tags for filtering (e.g., ['api', 'http'])", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnStoreKnowledge == nil {
+				return map[string]interface{}{"error": "Learning memory not configured"}, nil
+			}
+			knowledge := map[string]interface{}{
+				"agent_id":   agentID,
+				"timestamp":  time.Now().Format(time.RFC3339),
+				"category":   params["category"],
+				"title":      params["title"],
+				"content":    params["content"],
+				"tags":       params["tags"],
+			}
+			return callbacks.OnStoreKnowledge(agentID, knowledge)
+		},
+	})
+
+	// search_knowledge - Find relevant knowledge using TF-IDF search
+	s.RegisterTool(ToolDefinition{
+		Name:        "search_knowledge",
+		Description: "Search stored knowledge for relevant information. Returns matching knowledge entries ranked by relevance.",
+		Parameters: map[string]ParameterDef{
+			"query":    {Type: "string", Description: "Natural language query to search for", Required: true},
+			"category": {Type: "string", Description: "Optional category filter: error_solution, pattern, best_practice, gotcha", Required: false},
+			"limit":    {Type: "number", Description: "Maximum results to return (default: 5)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSearchKnowledge == nil {
+				return map[string]interface{}{"error": "Learning memory not configured"}, nil
+			}
+			query, _ := params["query"].(string)
+			category, _ := params["category"].(string)
+			limit := 5
+			if l, ok := params["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return callbacks.OnSearchKnowledge(query, category, limit)
+		},
+	})
+
+	// record_episode - Log what happened in current session
+	s.RegisterTool(ToolDefinition{
+		Name:        "record_episode",
+		Description: "Record an episode of what happened. Use for logging actions, errors, decisions, and outcomes for session continuity.",
+		Parameters: map[string]ParameterDef{
+			"event_type":  {Type: "string", Description: "Type: action, error, decision, outcome", Required: true},
+			"title":       {Type: "string", Description: "Brief title of what happened", Required: true},
+			"content":     {Type: "string", Description: "Full details of the event", Required: true},
+			"project":     {Type: "string", Description: "Optional project/repo name", Required: false},
+			"importance":  {Type: "number", Description: "Importance 0-1 (default: 0.5)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnRecordEpisode == nil {
+				return map[string]interface{}{"error": "Learning memory not configured"}, nil
+			}
+			importance := 0.5
+			if imp, ok := params["importance"].(float64); ok {
+				importance = imp
+			}
+			episode := map[string]interface{}{
+				"agent_id":   agentID,
+				"timestamp":  time.Now().Format(time.RFC3339),
+				"event_type": params["event_type"],
+				"title":      params["title"],
+				"content":    params["content"],
+				"project":    params["project"],
+				"importance": importance,
+			}
+			return callbacks.OnRecordEpisode(agentID, episode)
+		},
+	})
+
+	// get_recent_episodes - Get context from current/recent sessions
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_recent_episodes",
+		Description: "Get recent episodes for context. Useful for understanding what happened recently.",
+		Parameters: map[string]ParameterDef{
+			"session_id": {Type: "string", Description: "Optional session ID (defaults to current)", Required: false},
+			"limit":      {Type: "number", Description: "Maximum results (default: 10)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetRecentEpisodes == nil {
+				return map[string]interface{}{"error": "Learning memory not configured"}, nil
+			}
+			sessionID, _ := params["session_id"].(string)
+			limit := 10
+			if l, ok := params["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return callbacks.OnGetRecentEpisodes(sessionID, limit)
+		},
+	})
+
+	// search_episodes - Find past similar situations
+	s.RegisterTool(ToolDefinition{
+		Name:        "search_episodes",
+		Description: "Search past episodes for similar situations. Useful for finding what happened before with similar contexts.",
+		Parameters: map[string]ParameterDef{
+			"query":   {Type: "string", Description: "Search query", Required: true},
+			"project": {Type: "string", Description: "Optional project filter", Required: false},
+			"limit":   {Type: "number", Description: "Maximum results (default: 5)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSearchEpisodes == nil {
+				return map[string]interface{}{"error": "Learning memory not configured"}, nil
+			}
+			query, _ := params["query"].(string)
+			project, _ := params["project"].(string)
+			limit := 5
+			if l, ok := params["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return callbacks.OnSearchEpisodes(query, project, limit)
 		},
 	})
 }

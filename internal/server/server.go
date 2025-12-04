@@ -563,6 +563,165 @@ func (s *Server) setupMCPCallbacks() {
 				"signal": signal,
 			}, nil
 		},
+
+		// Learning memory callbacks
+		OnStoreKnowledge: func(agentID string, knowledge map[string]interface{}) (interface{}, error) {
+			learningDB := s.memDB.AsLearningDB()
+
+			// Extract fields from map
+			category, _ := knowledge["category"].(string)
+			title, _ := knowledge["title"].(string)
+			content, _ := knowledge["content"].(string)
+
+			var tags []string
+			if tagsRaw, ok := knowledge["tags"].([]interface{}); ok {
+				for _, t := range tagsRaw {
+					if str, ok := t.(string); ok {
+						tags = append(tags, str)
+					}
+				}
+			}
+
+			k := &memory.Knowledge{
+				Category: category,
+				Title:    title,
+				Content:  content,
+				Tags:     tags,
+				Source:   agentID,
+			}
+
+			if err := learningDB.StoreKnowledge(k); err != nil {
+				return nil, fmt.Errorf("failed to store knowledge: %w", err)
+			}
+
+			return map[string]interface{}{
+				"knowledge_id": k.ID,
+				"status":       "stored",
+			}, nil
+		},
+
+		OnSearchKnowledge: func(query, category string, limit int) (interface{}, error) {
+			learningDB := s.memDB.AsLearningDB()
+
+			results, err := learningDB.SearchKnowledge(query, category, limit)
+			if err != nil {
+				return nil, fmt.Errorf("failed to search knowledge: %w", err)
+			}
+
+			// Convert to response format
+			var items []map[string]interface{}
+			for _, k := range results {
+				items = append(items, map[string]interface{}{
+					"id":              k.ID,
+					"category":        k.Category,
+					"title":           k.Title,
+					"content":         k.Content,
+					"tags":            k.Tags,
+					"use_count":       k.UseCount,
+					"relevance_score": k.RelevanceScore,
+				})
+				// Increment use count for retrieved knowledge
+				learningDB.IncrementUseCount(k.ID)
+			}
+
+			return map[string]interface{}{
+				"results": items,
+				"count":   len(items),
+			}, nil
+		},
+
+		OnRecordEpisode: func(agentID string, episode map[string]interface{}) (interface{}, error) {
+			learningDB := s.memDB.AsLearningDB()
+
+			eventType, _ := episode["event_type"].(string)
+			title, _ := episode["title"].(string)
+			content, _ := episode["content"].(string)
+			project, _ := episode["project"].(string)
+			importance := 0.5
+			if imp, ok := episode["importance"].(float64); ok {
+				importance = imp
+			}
+
+			// Use agent ID as session ID for now
+			sessionID := agentID
+
+			ep := &memory.Episode{
+				SessionID:  sessionID,
+				AgentID:    agentID,
+				EventType:  eventType,
+				Title:      title,
+				Content:    content,
+				Project:    project,
+				Importance: importance,
+			}
+
+			if err := learningDB.RecordEpisode(ep); err != nil {
+				return nil, fmt.Errorf("failed to record episode: %w", err)
+			}
+
+			return map[string]interface{}{
+				"episode_id": ep.ID,
+				"status":     "recorded",
+			}, nil
+		},
+
+		OnGetRecentEpisodes: func(sessionID string, limit int) (interface{}, error) {
+			learningDB := s.memDB.AsLearningDB()
+
+			episodes, err := learningDB.GetRecentEpisodes(sessionID, limit)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get episodes: %w", err)
+			}
+
+			var items []map[string]interface{}
+			for _, ep := range episodes {
+				items = append(items, map[string]interface{}{
+					"id":         ep.ID,
+					"session_id": ep.SessionID,
+					"agent_id":   ep.AgentID,
+					"event_type": ep.EventType,
+					"title":      ep.Title,
+					"content":    ep.Content,
+					"project":    ep.Project,
+					"importance": ep.Importance,
+					"created_at": ep.CreatedAt,
+				})
+			}
+
+			return map[string]interface{}{
+				"episodes": items,
+				"count":    len(items),
+			}, nil
+		},
+
+		OnSearchEpisodes: func(query, project string, limit int) (interface{}, error) {
+			learningDB := s.memDB.AsLearningDB()
+
+			episodes, err := learningDB.SearchEpisodes(query, project, limit)
+			if err != nil {
+				return nil, fmt.Errorf("failed to search episodes: %w", err)
+			}
+
+			var items []map[string]interface{}
+			for _, ep := range episodes {
+				items = append(items, map[string]interface{}{
+					"id":         ep.ID,
+					"session_id": ep.SessionID,
+					"agent_id":   ep.AgentID,
+					"event_type": ep.EventType,
+					"title":      ep.Title,
+					"content":    ep.Content,
+					"project":    ep.Project,
+					"importance": ep.Importance,
+					"created_at": ep.CreatedAt,
+				})
+			}
+
+			return map[string]interface{}{
+				"results": items,
+				"count":   len(items),
+			}, nil
+		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)

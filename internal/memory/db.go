@@ -23,6 +23,9 @@ var migration002 string
 //go:embed migrations/003_agent_control.sql
 var migration003 string
 
+//go:embed migrations/004_learning_db.sql
+var migration004 string
+
 // SQLiteMemoryDB is the concrete implementation of MemoryDB using SQLite
 type SQLiteMemoryDB struct {
 	db   *sql.DB
@@ -99,6 +102,14 @@ func (m *SQLiteMemoryDB) migrate() error {
 			return fmt.Errorf("failed to run migration 003: %w", err)
 		}
 		fmt.Println("[MIGRATION] Successfully migrated to schema v4")
+	}
+
+	if version < 5 {
+		fmt.Println("[MIGRATION] Running migration to v5: Add learning database tables")
+		if _, err := m.db.Exec(migration004); err != nil {
+			return fmt.Errorf("failed to run migration 004: %w", err)
+		}
+		fmt.Println("[MIGRATION] Successfully migrated to schema v5")
 	}
 
 	return nil
