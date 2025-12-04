@@ -17,6 +17,7 @@ import (
 	"github.com/CLIAIMONITOR/internal/metrics"
 	"github.com/CLIAIMONITOR/internal/notifications"
 	"github.com/CLIAIMONITOR/internal/persistence"
+	"github.com/CLIAIMONITOR/internal/router"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/CLIAIMONITOR/web"
 	"github.com/gorilla/mux"
@@ -721,6 +722,16 @@ func (s *Server) setupMCPCallbacks() {
 				"results": items,
 				"count":   len(items),
 			}, nil
+		},
+
+		// Skill Router callback
+		OnSkillQuery: func(agentID, query string, limit int) (interface{}, error) {
+			skillRouter := router.NewSkillRouter(s.memDB)
+			result, err := skillRouter.RouteQuery(query, limit)
+			if err != nil {
+				return nil, fmt.Errorf("skill query failed: %w", err)
+			}
+			return result, nil
 		},
 	}
 

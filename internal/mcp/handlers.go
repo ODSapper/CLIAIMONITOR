@@ -38,6 +38,9 @@ type ToolCallbacks struct {
 	OnRecordEpisode     func(agentID string, episode map[string]interface{}) (interface{}, error)
 	OnGetRecentEpisodes func(sessionID string, limit int) (interface{}, error)
 	OnSearchEpisodes    func(query, project string, limit int) (interface{}, error)
+
+	// Skill Router callbacks (replaces PowerShell heartbeat)
+	OnSkillQuery func(agentID, query string, limit int) (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -651,6 +654,33 @@ func registerLearningTools(s *Server, callbacks ToolCallbacks) {
 				limit = int(l)
 			}
 			return callbacks.OnSearchEpisodes(query, project, limit)
+		},
+	})
+
+	// Skill Router tools
+	registerSkillRouterTools(s, callbacks)
+}
+
+// registerSkillRouterTools adds the skill router query tool
+func registerSkillRouterTools(s *Server, callbacks ToolCallbacks) {
+	// skill_query - Route queries to the appropriate data source
+	s.RegisterTool(ToolDefinition{
+		Name:        "skill_query",
+		Description: "Smart query router that automatically routes your question to the right data source (knowledge, episodes, agents, tasks, recon). Use this when you need information but aren't sure which specific tool to use.",
+		Parameters: map[string]ParameterDef{
+			"query": {Type: "string", Description: "Natural language query (e.g., 'how do I fix auth redirect', 'what agents are running', 'what happened last session')", Required: true},
+			"limit": {Type: "number", Description: "Maximum results (default: 10)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSkillQuery == nil {
+				return map[string]interface{}{"error": "Skill Router not configured"}, nil
+			}
+			query, _ := params["query"].(string)
+			limit := 10
+			if l, ok := params["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return callbacks.OnSkillQuery(agentID, query, limit)
 		},
 	})
 }
