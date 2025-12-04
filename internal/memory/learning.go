@@ -105,11 +105,15 @@ func (l *SQLiteLearningDB) RecordEpisode(episode *Episode) error {
 	if episode.Importance == 0 {
 		episode.Importance = 0.5
 	}
+	// Default to captain if not specified
+	if episode.AgentType == "" {
+		episode.AgentType = AgentTypeCaptain
+	}
 
 	_, err := l.db.Exec(`
-		INSERT INTO episodes (id, session_id, agent_id, event_type, title, content, project, importance, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, episode.ID, episode.SessionID, episode.AgentID, episode.EventType,
+		INSERT INTO episodes (id, session_id, agent_id, agent_type, event_type, title, content, project, importance, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, episode.ID, episode.SessionID, episode.AgentID, episode.AgentType, episode.EventType,
 		episode.Title, episode.Content, episode.Project, episode.Importance, time.Now())
 
 	return err
@@ -122,7 +126,7 @@ func (l *SQLiteLearningDB) GetRecentEpisodes(sessionID string, limit int) ([]*Ep
 	}
 
 	query := `
-		SELECT id, session_id, agent_id, event_type, title, content, project, importance, created_at
+		SELECT id, session_id, agent_id, agent_type, event_type, title, content, project, importance, created_at
 		FROM episodes
 		WHERE session_id = ? OR ? = ''
 		ORDER BY created_at DESC
@@ -138,14 +142,17 @@ func (l *SQLiteLearningDB) GetRecentEpisodes(sessionID string, limit int) ([]*Ep
 	var episodes []*Episode
 	for rows.Next() {
 		var ep Episode
-		var project sql.NullString
-		err := rows.Scan(&ep.ID, &ep.SessionID, &ep.AgentID, &ep.EventType,
+		var project, agentType sql.NullString
+		err := rows.Scan(&ep.ID, &ep.SessionID, &ep.AgentID, &agentType, &ep.EventType,
 			&ep.Title, &ep.Content, &project, &ep.Importance, &ep.CreatedAt)
 		if err != nil {
 			return nil, err
 		}
 		if project.Valid {
 			ep.Project = project.String
+		}
+		if agentType.Valid {
+			ep.AgentType = agentType.String
 		}
 		episodes = append(episodes, &ep)
 	}
@@ -443,18 +450,24 @@ func (l *SQLiteLearningDB) SearchKnowledgeByType(query string, agentType string,
 		return []*Knowledge{}, nil
 	}
 
-	// Get document frequencies for query terms
+	// Get document frequencies for query terms (filtered by agent type)
 	placeholders := make([]string, len(queryTerms))
-	args := make([]interface{}, len(queryTerms))
+	termArgs := make([]interface{}, len(queryTerms)+1)
 	for i, term := range queryTerms {
 		placeholders[i] = "?"
-		args[i] = term
+		termArgs[i] = term
 	}
+	termArgs[len(queryTerms)] = agentType
 
+	// Count documents containing each term for this agent type specifically
 	termDocFreq := make(map[string]int)
 	rows, err := l.db.Query(fmt.Sprintf(`
-		SELECT term, doc_count FROM term_stats WHERE term IN (%s)
-	`, strings.Join(placeholders, ",")), args...)
+		SELECT kt.term, COUNT(DISTINCT kt.knowledge_id) as doc_count
+		FROM knowledge_terms kt
+		JOIN knowledge k ON k.id = kt.knowledge_id
+		WHERE kt.term IN (%s) AND k.agent_type = ?
+		GROUP BY kt.term
+	`, strings.Join(placeholders, ",")), termArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -467,23 +480,32 @@ func (l *SQLiteLearningDB) SearchKnowledgeByType(query string, agentType string,
 	rows.Close()
 
 	// Calculate IDF for each query term
+	// Use a minimum IDF of 0.1 to ensure terms present in all docs still get some weight
 	idf := make(map[string]float64)
 	for _, term := range queryTerms {
 		df := termDocFreq[term]
 		if df == 0 {
 			df = 1
 		}
-		idf[term] = math.Log(float64(totalDocs+1) / float64(df+1))
+		idfVal := math.Log(float64(totalDocs+1) / float64(df+1))
+		if idfVal < 0.1 {
+			idfVal = 0.1 // Minimum IDF to prevent zero scores
+		}
+		idf[term] = idfVal
 	}
 
 	// Get documents that match the agent type and contain query terms
+	args := make([]interface{}, len(queryTerms)+1)
+	for i, term := range queryTerms {
+		args[i] = term
+	}
+	args[len(queryTerms)] = agentType
 	querySQL := fmt.Sprintf(`
 		SELECT DISTINCT kt.knowledge_id
 		FROM knowledge_terms kt
 		JOIN knowledge k ON k.id = kt.knowledge_id
 		WHERE kt.term IN (%s) AND k.agent_type = ?
 	`, strings.Join(placeholders, ","))
-	args = append(args, agentType)
 
 	rows, err = l.db.Query(querySQL, args...)
 	if err != nil {
