@@ -22,11 +22,14 @@ func NewNATSBridge(s *Server, client *natslib.Client) *NATSBridge {
 	}
 
 	callbacks := natslib.HandlerCallbacks{
-		OnHeartbeat:      bridge.handleHeartbeat,
-		OnStatusUpdate:   bridge.handleStatusUpdate,
-		OnToolCall:       bridge.handleToolCall,
-		OnStopApproval:   bridge.handleStopApproval,
-		OnShutdownNotify: bridge.handleShutdownNotify,
+		OnHeartbeat:         bridge.handleHeartbeat,
+		OnStatusUpdate:      bridge.handleStatusUpdate,
+		OnToolCall:          bridge.handleToolCall,
+		OnStopApproval:      bridge.handleStopApproval,
+		OnShutdownNotify:    bridge.handleShutdownNotify,
+		OnCaptainStatus:     bridge.handleCaptainStatus,
+		OnEscalationForward: bridge.handleEscalationForward,
+		OnSystemBroadcast:   bridge.handleSystemBroadcast,
 	}
 
 	bridge.handler = natslib.NewHandler(client, callbacks)
@@ -162,7 +165,6 @@ func (b *NATSBridge) handleShutdownNotify(agentID, reason string, approved, forc
 }
 
 // handleCaptainStatus processes Captain status updates
-// This will be wired to captain.status subscription in Phase 3
 func (b *NATSBridge) handleCaptainStatus(status, currentOp string, queueSize int) error {
 	log.Printf("[NATS-BRIDGE] Captain status update: status=%s currentOp=%s queueSize=%d", status, currentOp, queueSize)
 
@@ -171,5 +173,64 @@ func (b *NATSBridge) handleCaptainStatus(status, currentOp string, queueSize int
 
 	// Broadcast updated state to dashboard
 	b.server.broadcastState()
+	return nil
+}
+
+// handleEscalationForward processes escalations forwarded by Captain to human
+func (b *NATSBridge) handleEscalationForward(id, agentID, question, captainContext, captainRecommends string) error {
+	log.Printf("[NATS-BRIDGE] Escalation forwarded from Captain: id=%s agent=%s", id, agentID)
+
+	// Create alert for dashboard
+	alert := &types.Alert{
+		ID:        id,
+		Type:      "escalation",
+		AgentID:   agentID,
+		Message:   fmt.Sprintf("Question from agent %s: %s", agentID, question),
+		Severity:  "info",
+		CreatedAt: time.Now(),
+	}
+
+	// If captain provided context or recommendations, add to message
+	if captainContext != "" {
+		alert.Message += fmt.Sprintf("\n\nCaptain Context: %s", captainContext)
+	}
+	if captainRecommends != "" {
+		alert.Message += fmt.Sprintf("\n\nCaptain Recommends: %s", captainRecommends)
+	}
+
+	// Broadcast alert to dashboard via WebSocket
+	b.server.hub.BroadcastAlert(alert)
+
+	// Also broadcast state update
+	b.server.broadcastState()
+	return nil
+}
+
+// handleSystemBroadcast processes system-wide broadcast messages
+func (b *NATSBridge) handleSystemBroadcast(msgType, message string, data map[string]interface{}) error {
+	log.Printf("[NATS-BRIDGE] System broadcast: type=%s message=%s", msgType, message)
+
+	// Create alert for dashboard based on broadcast type
+	severity := "info"
+	if msgType == "shutdown" || msgType == "agent_killed" {
+		severity = "warning"
+	}
+
+	alert := &types.Alert{
+		ID:        fmt.Sprintf("broadcast-%d", time.Now().UnixNano()),
+		Type:      msgType,
+		Message:   message,
+		Severity:  severity,
+		CreatedAt: time.Now(),
+	}
+
+	// Extract agent ID if present in data
+	if agentID, ok := data["agent_id"].(string); ok {
+		alert.AgentID = agentID
+	}
+
+	// Broadcast alert to dashboard
+	b.server.hub.BroadcastAlert(alert)
+
 	return nil
 }

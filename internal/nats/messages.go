@@ -37,6 +37,22 @@ const (
 
 	// SubjectCaptainStatus is used for Captain status updates
 	SubjectCaptainStatus = "captain.status"
+
+	// SubjectCaptainCommands is used for dashboard commands to Captain
+	SubjectCaptainCommands = "captain.commands"
+
+	// SubjectSystemBroadcast is used for system-wide announcements
+	SubjectSystemBroadcast = "system.broadcast"
+
+	// SubjectEscalationCreate is used when agents raise questions
+	SubjectEscalationCreate = "escalation.create"
+
+	// SubjectEscalationForward is used when Captain forwards to human
+	SubjectEscalationForward = "escalation.forward"
+
+	// SubjectEscalationResponse is the pattern for human's answer
+	// Use fmt.Sprintf(SubjectEscalationResponse, escalationID) to create specific subjects
+	SubjectEscalationResponse = "escalation.response.%s"
 )
 
 // HeartbeatMessage represents an agent heartbeat message
@@ -112,4 +128,46 @@ type CaptainStatusMessage struct {
 	CurrentOp string    `json:"current_op,omitempty"`
 	QueueSize int       `json:"queue_size"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+// CaptainCommandMessage represents commands sent to Captain from dashboard
+type CaptainCommandMessage struct {
+	Type    string                 `json:"type"` // spawn_agent, kill_agent, submit_task, pause, resume
+	Payload map[string]interface{} `json:"payload"`
+	From    string                 `json:"from"` // client ID of sender
+}
+
+// EscalationCreateMessage represents an agent raising a question
+type EscalationCreateMessage struct {
+	ID        string                 `json:"id"`
+	AgentID   string                 `json:"agent_id"`
+	Question  string                 `json:"question"`
+	Context   map[string]interface{} `json:"context,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+}
+
+// EscalationForwardMessage represents Captain forwarding escalation to human
+type EscalationForwardMessage struct {
+	ID                string                 `json:"id"`
+	AgentID           string                 `json:"agent_id"`
+	Question          string                 `json:"question"`
+	CaptainContext    string                 `json:"captain_context,omitempty"`
+	CaptainRecommends string                 `json:"captain_recommends,omitempty"`
+	Timestamp         time.Time              `json:"timestamp"`
+}
+
+// EscalationResponseMessage represents human's answer to escalation
+type EscalationResponseMessage struct {
+	ID        string    `json:"id"`
+	Response  string    `json:"response"`
+	From      string    `json:"from"` // "human" or client ID
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// SystemBroadcastMessage represents system-wide announcements
+type SystemBroadcastMessage struct {
+	Type      string                 `json:"type"` // shutdown, agent_killed, config_change
+	Message   string                 `json:"message"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
 }

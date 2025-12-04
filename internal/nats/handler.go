@@ -12,11 +12,14 @@ import (
 
 // HandlerCallbacks defines callbacks the handler uses to communicate with the server
 type HandlerCallbacks struct {
-	OnHeartbeat      func(agentID, status, task, configName, projectPath string) error
-	OnStatusUpdate   func(agentID, status, message string) error
-	OnToolCall       func(agentID, tool string, args map[string]interface{}) (interface{}, error)
-	OnStopApproval   func(agentID, reason, context string, workCompleted bool) (bool, string, error)
-	OnShutdownNotify func(agentID, reason string, approved, force bool) error
+	OnHeartbeat          func(agentID, status, task, configName, projectPath string) error
+	OnStatusUpdate       func(agentID, status, message string) error
+	OnToolCall           func(agentID, tool string, args map[string]interface{}) (interface{}, error)
+	OnStopApproval       func(agentID, reason, context string, workCompleted bool) (bool, string, error)
+	OnShutdownNotify     func(agentID, reason string, approved, force bool) error
+	OnCaptainStatus      func(status, currentOp string, queueSize int) error
+	OnEscalationForward  func(id, agentID, question, captainContext, captainRecommends string) error
+	OnSystemBroadcast    func(msgType, message string, data map[string]interface{}) error
 }
 
 // Handler processes NATS messages and delegates to callbacks
@@ -69,6 +72,27 @@ func (h *Handler) Start() error {
 	sub, err = h.client.QueueSubscribe(SubjectToolCall, "tool-workers", h.handleToolCall)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to tool calls: %w", err)
+	}
+	h.addSub(sub)
+
+	// Subscribe to captain status updates
+	sub, err = h.client.Subscribe(SubjectCaptainStatus, h.handleCaptainStatus)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to captain status: %w", err)
+	}
+	h.addSub(sub)
+
+	// Subscribe to escalation forwards (captain -> human)
+	sub, err = h.client.Subscribe(SubjectEscalationForward, h.handleEscalationForward)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to escalation forwards: %w", err)
+	}
+	h.addSub(sub)
+
+	// Subscribe to system broadcasts
+	sub, err = h.client.Subscribe(SubjectSystemBroadcast, h.handleSystemBroadcast)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to system broadcasts: %w", err)
 	}
 	h.addSub(sub)
 
@@ -179,4 +203,49 @@ func (h *Handler) replyError(subject string, errMsg string) {
 		"timestamp": time.Now(),
 	}
 	h.client.PublishJSON(subject, resp)
+}
+
+// handleCaptainStatus processes Captain status update messages
+func (h *Handler) handleCaptainStatus(msg *Message) {
+	var status CaptainStatusMessage
+	if err := json.Unmarshal(msg.Data, &status); err != nil {
+		log.Printf("[NATS-HANDLER] Invalid captain status message: %v", err)
+		return
+	}
+
+	if h.callbacks.OnCaptainStatus != nil {
+		if err := h.callbacks.OnCaptainStatus(status.Status, status.CurrentOp, status.QueueSize); err != nil {
+			log.Printf("[NATS-HANDLER] Captain status callback error: %v", err)
+		}
+	}
+}
+
+// handleEscalationForward processes escalation forward messages (captain -> human)
+func (h *Handler) handleEscalationForward(msg *Message) {
+	var esc EscalationForwardMessage
+	if err := json.Unmarshal(msg.Data, &esc); err != nil {
+		log.Printf("[NATS-HANDLER] Invalid escalation forward message: %v", err)
+		return
+	}
+
+	if h.callbacks.OnEscalationForward != nil {
+		if err := h.callbacks.OnEscalationForward(esc.ID, esc.AgentID, esc.Question, esc.CaptainContext, esc.CaptainRecommends); err != nil {
+			log.Printf("[NATS-HANDLER] Escalation forward callback error: %v", err)
+		}
+	}
+}
+
+// handleSystemBroadcast processes system broadcast messages
+func (h *Handler) handleSystemBroadcast(msg *Message) {
+	var broadcast SystemBroadcastMessage
+	if err := json.Unmarshal(msg.Data, &broadcast); err != nil {
+		log.Printf("[NATS-HANDLER] Invalid system broadcast message: %v", err)
+		return
+	}
+
+	if h.callbacks.OnSystemBroadcast != nil {
+		if err := h.callbacks.OnSystemBroadcast(broadcast.Type, broadcast.Message, broadcast.Data); err != nil {
+			log.Printf("[NATS-HANDLER] System broadcast callback error: %v", err)
+		}
+	}
 }
