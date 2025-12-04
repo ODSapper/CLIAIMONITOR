@@ -22,6 +22,7 @@ type LearningDB interface {
 	// Knowledge - what was learned
 	StoreKnowledge(knowledge *Knowledge) error
 	SearchKnowledge(query string, category string, limit int) ([]*Knowledge, error)
+	SearchKnowledgeByType(query string, agentType string, category string, limit int) ([]*Knowledge, error)
 	GetKnowledge(id string) (*Knowledge, error)
 	IncrementUseCount(id string) error
 
@@ -34,6 +35,7 @@ type Episode struct {
 	ID         string    `json:"id"`
 	SessionID  string    `json:"session_id"`
 	AgentID    string    `json:"agent_id"`
+	AgentType  string    `json:"agent_type"` // captain, developer, recon, reviewer
 	EventType  string    `json:"event_type"` // action, error, decision, outcome
 	Title      string    `json:"title"`
 	Content    string    `json:"content"`
@@ -45,7 +47,8 @@ type Episode struct {
 // Knowledge represents a searchable piece of learned information
 type Knowledge struct {
 	ID        string    `json:"id"`
-	Category  string    `json:"category"` // error_solution, pattern, best_practice, gotcha
+	AgentType string    `json:"agent_type"` // captain, developer, recon, reviewer
+	Category  string    `json:"category"`   // error_solution, pattern, best_practice, gotcha
 	Title     string    `json:"title"`
 	Content   string    `json:"content"`
 	Tags      []string  `json:"tags,omitempty"`
@@ -57,6 +60,14 @@ type Knowledge struct {
 	// Search result fields
 	RelevanceScore float64 `json:"relevance_score,omitempty"`
 }
+
+// AgentTypes for knowledge filtering
+const (
+	AgentTypeCaptain   = "captain"
+	AgentTypeDeveloper = "developer"
+	AgentTypeRecon     = "recon"
+	AgentTypeReviewer  = "reviewer"
+)
 
 // KnowledgeStats provides statistics about the knowledge base
 type KnowledgeStats struct {
@@ -210,6 +221,10 @@ func (l *SQLiteLearningDB) StoreKnowledge(knowledge *Knowledge) error {
 	if knowledge.ID == "" {
 		knowledge.ID = uuid.New().String()
 	}
+	// Default to captain if not specified
+	if knowledge.AgentType == "" {
+		knowledge.AgentType = AgentTypeCaptain
+	}
 
 	now := time.Now()
 	tagsJSON, _ := json.Marshal(knowledge.Tags)
@@ -221,11 +236,11 @@ func (l *SQLiteLearningDB) StoreKnowledge(knowledge *Knowledge) error {
 	}
 	defer tx.Rollback()
 
-	// Insert knowledge
+	// Insert knowledge with agent_type
 	_, err = tx.Exec(`
-		INSERT INTO knowledge (id, category, title, content, tags, source, use_count, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-	`, knowledge.ID, knowledge.Category, knowledge.Title, knowledge.Content,
+		INSERT INTO knowledge (id, agent_type, category, title, content, tags, source, use_count, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+	`, knowledge.ID, knowledge.AgentType, knowledge.Category, knowledge.Title, knowledge.Content,
 		string(tagsJSON), knowledge.Source, now, now)
 	if err != nil {
 		return err
@@ -403,23 +418,178 @@ func (l *SQLiteLearningDB) SearchKnowledge(query string, category string, limit 
 	return results, nil
 }
 
+// SearchKnowledgeByType searches knowledge filtered by agent type
+// This allows each agent type to have isolated knowledge
+func (l *SQLiteLearningDB) SearchKnowledgeByType(query string, agentType string, category string, limit int) ([]*Knowledge, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	if agentType == "" {
+		agentType = AgentTypeCaptain
+	}
+
+	queryTerms := tokenize(query)
+	if len(queryTerms) == 0 {
+		return []*Knowledge{}, nil
+	}
+
+	// Get total document count for this agent type
+	var totalDocs int
+	err := l.db.QueryRow("SELECT COUNT(*) FROM knowledge WHERE agent_type = ?", agentType).Scan(&totalDocs)
+	if err != nil {
+		return nil, err
+	}
+	if totalDocs == 0 {
+		return []*Knowledge{}, nil
+	}
+
+	// Get document frequencies for query terms
+	placeholders := make([]string, len(queryTerms))
+	args := make([]interface{}, len(queryTerms))
+	for i, term := range queryTerms {
+		placeholders[i] = "?"
+		args[i] = term
+	}
+
+	termDocFreq := make(map[string]int)
+	rows, err := l.db.Query(fmt.Sprintf(`
+		SELECT term, doc_count FROM term_stats WHERE term IN (%s)
+	`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var term string
+		var count int
+		rows.Scan(&term, &count)
+		termDocFreq[term] = count
+	}
+	rows.Close()
+
+	// Calculate IDF for each query term
+	idf := make(map[string]float64)
+	for _, term := range queryTerms {
+		df := termDocFreq[term]
+		if df == 0 {
+			df = 1
+		}
+		idf[term] = math.Log(float64(totalDocs+1) / float64(df+1))
+	}
+
+	// Get documents that match the agent type and contain query terms
+	querySQL := fmt.Sprintf(`
+		SELECT DISTINCT kt.knowledge_id
+		FROM knowledge_terms kt
+		JOIN knowledge k ON k.id = kt.knowledge_id
+		WHERE kt.term IN (%s) AND k.agent_type = ?
+	`, strings.Join(placeholders, ","))
+	args = append(args, agentType)
+
+	rows, err = l.db.Query(querySQL, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	var docIDs []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		docIDs = append(docIDs, id)
+	}
+	rows.Close()
+
+	if len(docIDs) == 0 {
+		return []*Knowledge{}, nil
+	}
+
+	// Calculate TF-IDF score for each document
+	type scoredDoc struct {
+		id    string
+		score float64
+	}
+	var scored []scoredDoc
+
+	for _, docID := range docIDs {
+		rows, err := l.db.Query(`SELECT term, tf FROM knowledge_terms WHERE knowledge_id = ?`, docID)
+		if err != nil {
+			continue
+		}
+
+		docTermFreq := make(map[string]float64)
+		for rows.Next() {
+			var term string
+			var tf float64
+			rows.Scan(&term, &tf)
+			docTermFreq[term] = tf
+		}
+		rows.Close()
+
+		var score float64
+		for _, term := range queryTerms {
+			if tf, ok := docTermFreq[term]; ok {
+				score += tf * idf[term]
+			}
+		}
+
+		if score > 0 {
+			scored = append(scored, scoredDoc{id: docID, score: score})
+		}
+	}
+
+	// Sort by score descending
+	for i := 0; i < len(scored); i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[j].score > scored[i].score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
+		}
+	}
+
+	// Limit results
+	if len(scored) > limit {
+		scored = scored[:limit]
+	}
+
+	// Fetch full knowledge records
+	var results []*Knowledge
+	for _, s := range scored {
+		k, err := l.GetKnowledge(s.id)
+		if err != nil {
+			continue
+		}
+		if category != "" && k.Category != category {
+			continue
+		}
+		k.RelevanceScore = s.score
+		results = append(results, k)
+	}
+
+	return results, nil
+}
+
 // GetKnowledge retrieves a single knowledge entry
 func (l *SQLiteLearningDB) GetKnowledge(id string) (*Knowledge, error) {
 	var k Knowledge
+	var agentType sql.NullString
 	var tagsJSON sql.NullString
 	var source sql.NullString
 	var lastUsed sql.NullTime
 
 	err := l.db.QueryRow(`
-		SELECT id, category, title, content, tags, source, use_count, last_used, created_at, updated_at
+		SELECT id, agent_type, category, title, content, tags, source, use_count, last_used, created_at, updated_at
 		FROM knowledge WHERE id = ?
-	`, id).Scan(&k.ID, &k.Category, &k.Title, &k.Content, &tagsJSON, &source,
+	`, id).Scan(&k.ID, &agentType, &k.Category, &k.Title, &k.Content, &tagsJSON, &source,
 		&k.UseCount, &lastUsed, &k.CreatedAt, &k.UpdatedAt)
 
 	if err != nil {
 		return nil, err
 	}
 
+	if agentType.Valid {
+		k.AgentType = agentType.String
+	} else {
+		k.AgentType = AgentTypeCaptain
+	}
 	if tagsJSON.Valid {
 		json.Unmarshal([]byte(tagsJSON.String), &k.Tags)
 	}
