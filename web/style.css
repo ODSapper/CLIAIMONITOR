@@ -57,35 +57,57 @@ body {
     gap: 1rem;
 }
 
+/* Status Bar */
+.status-bar {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
 /* Status Indicator */
 .status-indicator {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    border-radius: 20px;
-    font-size: 0.875rem;
+    padding: 0.375rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    background: rgba(45, 31, 45, 0.6);
+    border: 1px solid var(--border-color);
 }
 
-.status-indicator.connected {
-    background: rgba(236, 72, 153, 0.2);
-    color: var(--accent-green);
-}
-
-.status-indicator.disconnected {
-    background: rgba(255, 20, 147, 0.2);
-    color: var(--accent-red);
-}
-
-.status-dot {
+.status-indicator .dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: currentColor;
+    background: #999;
+    transition: background 0.3s;
 }
 
-.status-indicator.connected .status-dot {
+.status-indicator .dot.connected {
+    background: #4ade80;
     animation: pulse 2s infinite;
+}
+
+.status-indicator .dot.disconnected {
+    background: #ef4444;
+}
+
+.status-indicator .dot.degraded {
+    background: #eab308;
+    animation: pulse 1s infinite;
+}
+
+.status-indicator .status-text {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    min-width: 40px;
+}
+
+.status-indicator .count {
+    font-weight: 600;
+    color: var(--accent-blue);
 }
 
 @keyframes pulse {
@@ -339,9 +361,8 @@ body {
 /* Agent Status Container */
 .agent-status-container {
     display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .agent-last-seen {
@@ -349,43 +370,21 @@ body {
     color: var(--text-secondary);
 }
 
-/* Heartbeat status */
-.agent-heartbeat {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.65rem;
-    padding: 2px 6px;
-    border-radius: 4px;
+/* NATS Connection Indicator */
+.nats-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
 }
 
-.heartbeat-ok {
-    color: #f472b6;
-    background: rgba(244, 114, 182, 0.1);
+.nats-indicator.connected {
+    background: var(--accent-green);
+    animation: pulse 2s infinite;
 }
 
-.heartbeat-caution {
-    color: #fda4af;
-    background: rgba(253, 164, 175, 0.1);
-}
-
-.heartbeat-warning {
-    color: #ff1493;
-    background: rgba(255, 20, 147, 0.1);
-    animation: heartbeatPulse 1s infinite;
-}
-
-@keyframes heartbeatPulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
-}
-
-.heartbeat-icon {
-    font-size: 0.9em;
-}
-
-.heartbeat-time {
-    font-weight: 500;
+.nats-indicator.disconnected {
+    background: var(--accent-red);
 }
 
 /* Agent Current Task */
@@ -569,6 +568,73 @@ body {
     border-radius: 6px;
     background: var(--bg-primary);
     color: var(--text-primary);
+}
+
+/* Escalations Panel */
+.escalations-panel {
+    border: 1px solid var(--accent-red);
+}
+
+.escalations-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.escalation-card {
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    border-left: 3px solid var(--accent-red);
+}
+
+.escalation-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.escalation-agent {
+    font-weight: 600;
+    font-size: 0.875rem;
+}
+
+.escalation-time {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
+.escalation-question {
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.escalation-context {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.5rem;
+    padding: 0.5rem;
+    background: var(--bg-primary);
+    border-radius: 4px;
+}
+
+.escalation-response {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.escalation-response input {
+    flex: 1;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.85rem;
 }
 
 /* Thresholds Form */

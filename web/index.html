@@ -23,10 +23,11 @@
         <header class="header">
             <h1>CLITCOMMANDER</h1>
             <div class="header-controls">
-                <span id="connection-status" class="status-indicator disconnected">
-                    <span class="status-dot"></span>
-                    <span class="status-text">Disconnected</span>
-                </span>
+                <div class="status-bar">
+                    <span class="status-indicator" id="nats-status">NATS: <span class="dot"></span></span>
+                    <span class="status-indicator" id="captain-status">Captain: <span class="dot"></span> <span class="status-text">--</span></span>
+                    <span class="status-indicator" id="agent-count">Agents: <span class="count">0</span></span>
+                </div>
                 <button id="mute-toggle" class="btn btn-icon" title="Toggle Sound">
                     🔔
                 </button>
@@ -132,6 +133,17 @@
                     </h2>
                     <div id="alerts-list" class="alerts-list">
                         <!-- Alerts populated by JS -->
+                    </div>
+                </section>
+
+                <!-- Escalations Panel -->
+                <section class="panel escalations-panel">
+                    <h2>
+                        Escalations
+                        <span id="escalation-count" class="badge">0</span>
+                    </h2>
+                    <div id="escalations-list" class="escalations-list">
+                        <!-- Escalations populated by JS -->
                     </div>
                 </section>
 

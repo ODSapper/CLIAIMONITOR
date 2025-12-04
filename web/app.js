@@ -61,10 +61,34 @@ class Dashboard {
         }
     }
 
-    updateConnectionStatus(connected) {
-        const el = document.getElementById('connection-status');
-        el.className = `status-indicator ${connected ? 'connected' : 'disconnected'}`;
-        el.querySelector('.status-text').textContent = connected ? 'Connected' : 'Disconnected';
+    updateNATSStatus(connected) {
+        const el = document.getElementById('nats-status');
+        const dot = el.querySelector('.dot');
+        if (connected) {
+            dot.className = 'dot connected';
+        } else {
+            dot.className = 'dot disconnected';
+        }
+    }
+
+    updateCaptainStatus(connected, status) {
+        const el = document.getElementById('captain-status');
+        const dot = el.querySelector('.dot');
+        const text = el.querySelector('.status-text');
+
+        if (connected) {
+            dot.className = 'dot connected';
+        } else {
+            dot.className = 'dot disconnected';
+        }
+
+        text.textContent = status || '--';
+    }
+
+    updateAgentCount(count) {
+        const el = document.getElementById('agent-count');
+        const countEl = el.querySelector('.count');
+        countEl.textContent = count;
     }
 
     // Message Handling
@@ -80,6 +104,9 @@ class Dashboard {
             case 'activity':
                 this.addActivityEntry(message.data);
                 break;
+            case 'escalation_forward':
+                this.handleEscalation(message.data);
+                break;
         }
     }
 
@@ -93,6 +120,17 @@ class Dashboard {
             this.state.alerts.unshift(alert);
             this.renderAlerts();
         }
+    }
+
+    handleEscalation(escalation) {
+        // Add escalation to state
+        if (this.state) {
+            this.state.escalations = this.state.escalations || [];
+            this.state.escalations.unshift(escalation);
+            this.renderEscalations();
+        }
+        // Play alert sound for escalations
+        this.playAlertSound();
     }
 
     // Sound
@@ -345,8 +383,15 @@ class Dashboard {
     render() {
         if (!this.state) return;
 
+        // Update status indicators
+        this.updateNATSStatus(this.state.nats_connected || false);
+        this.updateCaptainStatus(this.state.captain_connected || false, this.state.captain_status || '--');
+        const agentCount = Object.values(this.state.agents || {}).filter(a => a.id !== 'Supervisor').length;
+        this.updateAgentCount(agentCount);
+
         this.renderAgents();
         this.renderAlerts();
+        this.renderEscalations();
         this.renderHumanInput();
         this.renderThresholds();
         this.renderActivityLog();
@@ -365,15 +410,6 @@ class Dashboard {
         grid.innerHTML = agents.map(agent => {
             const metrics = this.state.metrics?.[agent.id] || {};
             const hasTask = agent.current_task && agent.current_task.trim() !== '';
-            const lastSeen = this.formatRelativeTime(agent.last_seen);
-
-            // Calculate heartbeat age
-            const lastSeenTime = new Date(agent.last_seen);
-            const heartbeatAge = Math.floor((Date.now() - lastSeenTime) / 1000);
-
-            // Determine heartbeat status class
-            const heartbeatClass = heartbeatAge > 90 ? 'heartbeat-warning' :
-                                   heartbeatAge > 60 ? 'heartbeat-caution' : 'heartbeat-ok';
 
             // Determine display status: if has task, show "working" not "disconnected"
             let displayStatus = agent.status;
@@ -382,6 +418,12 @@ class Dashboard {
                 displayStatus = 'working';
                 statusClass = 'working';
             }
+
+            // NATS connection indicator
+            const natsConnected = agent.status === 'connected' || agent.status === 'working';
+            const natsIndicator = natsConnected ?
+                '<span class="nats-indicator connected" title="NATS Connected"></span>' :
+                '<span class="nats-indicator disconnected" title="NATS Disconnected"></span>';
 
             return `
                 <div class="agent-card" style="--agent-color: ${agent.color}">
@@ -392,10 +434,7 @@ class Dashboard {
                         </div>
                         <div class="agent-status-container">
                             <span class="agent-status ${statusClass}">${displayStatus}</span>
-                            <div class="agent-heartbeat ${heartbeatClass}">
-                                <span class="heartbeat-icon">💓</span>
-                                <span class="heartbeat-time">${this.formatHeartbeatAge(heartbeatAge)}</span>
-                            </div>
+                            ${natsIndicator}
                         </div>
                     </div>
                     ${hasTask ? `
@@ -493,6 +532,64 @@ class Dashboard {
         }
     }
 
+    renderEscalations() {
+        const list = document.getElementById('escalations-list');
+        const escalations = this.state.escalations || [];
+        const pending = escalations.filter(e => !e.responded);
+
+        document.getElementById('escalation-count').textContent = pending.length;
+        document.getElementById('escalation-count').setAttribute('data-count', pending.length);
+
+        if (pending.length === 0) {
+            list.innerHTML = '<div class="empty-state">No pending escalations</div>';
+            return;
+        }
+
+        list.innerHTML = pending.map(esc => `
+            <div class="escalation-card">
+                <div class="escalation-header">
+                    <span class="escalation-agent">${this.escapeHtml(esc.agent_id)}</span>
+                    <span class="escalation-time">${this.formatTime(esc.timestamp)}</span>
+                </div>
+                <div class="escalation-question">${this.escapeHtml(esc.question)}</div>
+                ${esc.captain_context ? `<div class="escalation-context">Captain: ${this.escapeHtml(esc.captain_context)}</div>` : ''}
+                ${esc.captain_recommends ? `<div class="escalation-context">Recommends: ${this.escapeHtml(esc.captain_recommends)}</div>` : ''}
+                <div class="escalation-response">
+                    <input type="text" id="escalation-response-${esc.id}" placeholder="Type your response..." onkeypress="if(event.key==='Enter')dashboard.submitEscalationResponse('${esc.id}')">
+                    <button class="btn btn-primary" onclick="dashboard.submitEscalationResponse('${esc.id}')">Send</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    submitEscalationResponse(escalationId) {
+        const input = document.getElementById(`escalation-response-${escalationId}`);
+        if (input && input.value.trim()) {
+            const response = input.value.trim();
+            this.sendEscalationResponse(escalationId, response);
+        }
+    }
+
+    async sendEscalationResponse(escalationId, response) {
+        try {
+            await fetch(`/api/escalation/${escalationId}/respond`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ response })
+            });
+            // Remove from UI on success
+            if (this.state && this.state.escalations) {
+                const index = this.state.escalations.findIndex(e => e.id === escalationId);
+                if (index !== -1) {
+                    this.state.escalations[index].responded = true;
+                    this.renderEscalations();
+                }
+            }
+        } catch (error) {
+            console.error('Failed to submit escalation response:', error);
+        }
+    }
+
     renderThresholds() {
         const t = this.state.thresholds || {};
         document.getElementById('threshold-failed-tests').value = t.failed_tests_max || 5;
@@ -577,12 +674,6 @@ class Dashboard {
         if (diffMin < 60) return `${diffMin}m ago`;
         if (diffHour < 24) return `${diffHour}h ago`;
         return date.toLocaleDateString();
-    }
-
-    formatHeartbeatAge(seconds) {
-        if (seconds < 60) return `${seconds}s ago`;
-        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-        return `${Math.floor(seconds / 3600)}h ago`;
     }
 
     calculateCountdown(shutdownRequestedAt) {
