@@ -149,6 +149,9 @@ func (m *mockStore) GetLastHumanCheckin() time.Time                          { r
 func (m *mockStore) SetThresholds(thresholds types.AlertThresholds)          {}
 func (m *mockStore) GetThresholds() types.AlertThresholds                    { return types.AlertThresholds{} }
 func (m *mockStore) CleanupStaleAgents() int                                 { return 0 }
+func (m *mockStore) SetNATSConnected(connected bool)                         {}
+func (m *mockStore) SetCaptainConnected(connected bool)                      {}
+func (m *mockStore) SetCaptainStatus(status string)                          {}
 
 func TestNewCleanupService(t *testing.T) {
 	mockDB := &mockMemoryDB{}

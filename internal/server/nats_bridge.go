@@ -160,3 +160,16 @@ func (b *NATSBridge) handleShutdownNotify(agentID, reason string, approved, forc
 	b.server.broadcastState()
 	return nil
 }
+
+// handleCaptainStatus processes Captain status updates
+// This will be wired to captain.status subscription in Phase 3
+func (b *NATSBridge) handleCaptainStatus(status, currentOp string, queueSize int) error {
+	log.Printf("[NATS-BRIDGE] Captain status update: status=%s currentOp=%s queueSize=%d", status, currentOp, queueSize)
+
+	// Update Captain status in store
+	b.server.store.SetCaptainStatus(status)
+
+	// Broadcast updated state to dashboard
+	b.server.broadcastState()
+	return nil
+}

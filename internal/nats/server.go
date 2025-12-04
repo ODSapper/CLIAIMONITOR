@@ -17,10 +17,11 @@ type EmbeddedServerConfig struct {
 
 // EmbeddedServer wraps the NATS server
 type EmbeddedServer struct {
-	server *server.Server
-	config EmbeddedServerConfig
-	mu     sync.RWMutex
-	running bool
+	server           *server.Server
+	config           EmbeddedServerConfig
+	mu               sync.RWMutex
+	running          bool
+	connectedClients map[string]time.Time // clientID -> connected timestamp
 }
 
 // NewEmbeddedServer creates a new embedded NATS server instance
@@ -34,7 +35,8 @@ func NewEmbeddedServer(config EmbeddedServerConfig) (*EmbeddedServer, error) {
 	}
 
 	return &EmbeddedServer{
-		config: config,
+		config:           config,
+		connectedClients: make(map[string]time.Time),
 	}, nil
 }
 
@@ -115,4 +117,44 @@ func (e *EmbeddedServer) IsRunning() bool {
 	defer e.mu.RUnlock()
 
 	return e.running
+}
+
+// GetConnectedClients returns a list of currently connected client IDs
+func (e *EmbeddedServer) GetConnectedClients() []ClientInfo {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	clients := make([]ClientInfo, 0, len(e.connectedClients))
+	for clientID, connectedAt := range e.connectedClients {
+		clients = append(clients, ClientInfo{
+			ClientID:    clientID,
+			ConnectedAt: connectedAt,
+		})
+	}
+	return clients
+}
+
+// IsClientConnected checks if a specific client ID is currently connected
+func (e *EmbeddedServer) IsClientConnected(clientID string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	_, exists := e.connectedClients[clientID]
+	return exists
+}
+
+// trackClientConnected records a client connection
+func (e *EmbeddedServer) trackClientConnected(clientID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.connectedClients[clientID] = time.Now()
+}
+
+// trackClientDisconnected removes a client from the connected list
+func (e *EmbeddedServer) trackClientDisconnected(clientID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	delete(e.connectedClients, clientID)
 }

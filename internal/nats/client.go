@@ -17,24 +17,30 @@ type Message struct {
 
 // Client wraps a NATS connection with convenience methods
 type Client struct {
-	conn *nc.Conn
+	conn     *nc.Conn
+	clientID string
 }
 
 // NewClient creates a new NATS client with reconnect handling
-func NewClient(url string) (*Client, error) {
+// clientID should follow the convention:
+//   - "captain" for Captain process
+//   - "server" for Server process
+//   - "agent-{configName}-{seq}" for agents (e.g., "agent-coder-1")
+func NewClient(url string, clientID string) (*Client, error) {
 	opts := []nc.Option{
+		nc.Name(clientID), // Set client ID for connection tracking
 		nc.ReconnectWait(2 * time.Second),
 		nc.MaxReconnects(-1), // Reconnect indefinitely
 		nc.DisconnectErrHandler(func(conn *nc.Conn, err error) {
 			if err != nil {
-				fmt.Printf("[NATS] Disconnected: %v\n", err)
+				fmt.Printf("[NATS] %s disconnected: %v\n", clientID, err)
 			}
 		}),
 		nc.ReconnectHandler(func(conn *nc.Conn) {
-			fmt.Printf("[NATS] Reconnected to %s\n", conn.ConnectedUrl())
+			fmt.Printf("[NATS] %s reconnected to %s\n", clientID, conn.ConnectedUrl())
 		}),
 		nc.ClosedHandler(func(conn *nc.Conn) {
-			fmt.Println("[NATS] Connection closed")
+			fmt.Printf("[NATS] %s connection closed\n", clientID)
 		}),
 	}
 
@@ -43,7 +49,12 @@ func NewClient(url string) (*Client, error) {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
-	return &Client{conn: conn}, nil
+	return &Client{conn: conn, clientID: clientID}, nil
+}
+
+// GetClientID returns the client ID for this connection
+func (c *Client) GetClientID() string {
+	return c.clientID
 }
 
 // Close closes the NATS connection

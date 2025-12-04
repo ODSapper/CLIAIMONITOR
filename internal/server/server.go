@@ -108,15 +108,15 @@ func NewServer(
 		}
 	}
 
-	// Create NATS client
+	// Create NATS client with "server" as client ID
 	var natsClient *natslib.Client
 	if natsServer != nil && natsServer.IsRunning() {
-		client, err := natslib.NewClient(natsServer.URL())
+		client, err := natslib.NewClient(natsServer.URL(), "server")
 		if err != nil {
 			log.Printf("[NATS] Warning: Failed to create client: %v", err)
 		} else {
 			natsClient = client
-			log.Printf("[NATS] Client connected")
+			log.Printf("[NATS] Client connected as 'server'")
 		}
 	}
 
@@ -150,6 +150,13 @@ func NewServer(
 	// Pass NATS URL to spawner
 	if s.natsServer != nil && s.natsServer.IsRunning() {
 		s.spawner.SetNATSURL(s.natsServer.URL())
+	}
+
+	// Initialize NATS connection status in store
+	if s.natsServer != nil && s.natsServer.IsRunning() {
+		s.store.SetNATSConnected(true)
+	} else {
+		s.store.SetNATSConnected(false)
 	}
 
 	s.setupRoutes()

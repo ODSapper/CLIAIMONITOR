@@ -23,14 +23,14 @@ func TestNATSIntegration_HeartbeatFlow(t *testing.T) {
 	defer server.Shutdown()
 
 	// Create monitor client (simulates CLIAIMONITOR server)
-	monitor, err := NewClient(server.URL())
+	monitor, err := NewClient(server.URL(), "test-monitor")
 	if err != nil {
 		t.Fatalf("Failed to create monitor client: %v", err)
 	}
 	defer monitor.Close()
 
 	// Create agent client (simulates Claude agent)
-	agent, err := NewClient(server.URL())
+	agent, err := NewClient(server.URL(), "test-agent")
 	if err != nil {
 		t.Fatalf("Failed to create agent client: %v", err)
 	}
@@ -100,14 +100,14 @@ func TestNATSIntegration_ToolCallRequestReply(t *testing.T) {
 	defer server.Shutdown()
 
 	// Server client
-	serverClient, err := NewClient(server.URL())
+	serverClient, err := NewClient(server.URL(), "test-server")
 	if err != nil {
 		t.Fatalf("Failed to create server client: %v", err)
 	}
 	defer serverClient.Close()
 
 	// Agent client
-	agentClient, err := NewClient(server.URL())
+	agentClient, err := NewClient(server.URL(), "test-agent-client")
 	if err != nil {
 		t.Fatalf("Failed to create agent client: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestNATSIntegration_MultipleAgents(t *testing.T) {
 	defer server.Shutdown()
 
 	// Monitor client
-	monitor, err := NewClient(server.URL())
+	monitor, err := NewClient(server.URL(), "test-monitor")
 	if err != nil {
 		t.Fatalf("Failed to create monitor client: %v", err)
 	}
@@ -211,14 +211,13 @@ func TestNATSIntegration_MultipleAgents(t *testing.T) {
 		go func(agentNum int) {
 			defer wg.Done()
 
-			client, err := NewClient(server.URL())
+			agentID := "agent-" + string(rune('A'+agentNum))
+			client, err := NewClient(server.URL(), agentID)
 			if err != nil {
 				t.Errorf("Failed to create agent %d client: %v", agentNum, err)
 				return
 			}
 			defer client.Close()
-
-			agentID := "agent-" + string(rune('A'+agentNum))
 			subject := "agent." + agentID + ".heartbeat"
 
 			for j := 0; j < messagesPerAgent; j++ {

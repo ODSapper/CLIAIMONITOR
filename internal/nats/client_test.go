@@ -40,7 +40,7 @@ func TestNATSClient_RequestReply(t *testing.T) {
 	defer ns.Shutdown()
 
 	// Create client
-	client, err := NewClient(url)
+	client, err := NewClient(url, "test-client")
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestNATSClient_RequestReply(t *testing.T) {
 	}
 
 	// Set up responder
-	responder, err := NewClient(url)
+	responder, err := NewClient(url, "test-responder")
 	if err != nil {
 		t.Fatalf("Failed to create responder: %v", err)
 	}
@@ -94,14 +94,14 @@ func TestNATSClient_PubSub(t *testing.T) {
 	defer ns.Shutdown()
 
 	// Create publisher
-	publisher, err := NewClient(url)
+	publisher, err := NewClient(url, "test-publisher")
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Create subscriber
-	subscriber, err := NewClient(url)
+	subscriber, err := NewClient(url, "test-subscriber")
 	if err != nil {
 		t.Fatalf("Failed to create subscriber: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestNATSClient_PublishJSON(t *testing.T) {
 	ns, url := startTestServer(t)
 	defer ns.Shutdown()
 
-	client, err := NewClient(url)
+	client, err := NewClient(url, "test-client")
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
@@ -218,13 +218,13 @@ func TestNATSClient_RequestJSON(t *testing.T) {
 	ns, url := startTestServer(t)
 	defer ns.Shutdown()
 
-	client, err := NewClient(url)
+	client, err := NewClient(url, "test-client")
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 	defer client.Close()
 
-	responder, err := NewClient(url)
+	responder, err := NewClient(url, "test-responder")
 	if err != nil {
 		t.Fatalf("Failed to create responder: %v", err)
 	}
@@ -278,20 +278,20 @@ func TestNATSClient_QueueSubscribe(t *testing.T) {
 	ns, url := startTestServer(t)
 	defer ns.Shutdown()
 
-	publisher, err := NewClient(url)
+	publisher, err := NewClient(url, "test-publisher")
 	if err != nil {
 		t.Fatalf("Failed to create publisher: %v", err)
 	}
 	defer publisher.Close()
 
 	// Create two queue subscribers
-	subscriber1, err := NewClient(url)
+	subscriber1, err := NewClient(url, "test-subscriber1")
 	if err != nil {
 		t.Fatalf("Failed to create subscriber1: %v", err)
 	}
 	defer subscriber1.Close()
 
-	subscriber2, err := NewClient(url)
+	subscriber2, err := NewClient(url, "test-subscriber2")
 	if err != nil {
 		t.Fatalf("Failed to create subscriber2: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestNATSClient_Connection(t *testing.T) {
 	ns, url := startTestServer(t)
 	defer ns.Shutdown()
 
-	client, err := NewClient(url)
+	client, err := NewClient(url, "test-client")
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}

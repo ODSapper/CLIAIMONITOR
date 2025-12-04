@@ -65,6 +65,11 @@ type Store interface {
 
 	// Cleanup
 	CleanupStaleAgents() int
+
+	// NATS and Captain state
+	SetNATSConnected(connected bool)
+	SetCaptainConnected(connected bool)
+	SetCaptainStatus(status string)
 }
 
 // JSONStore implements Store with JSON file persistence
@@ -504,4 +509,28 @@ func (s *JSONStore) CleanupStaleAgents() int {
 	}
 
 	return removedCount
+}
+
+// SetNATSConnected updates NATS connection status
+func (s *JSONStore) SetNATSConnected(connected bool) {
+	s.mu.Lock()
+	s.state.NATSConnected = connected
+	s.mu.Unlock()
+	s.scheduleSave()
+}
+
+// SetCaptainConnected updates Captain connection status
+func (s *JSONStore) SetCaptainConnected(connected bool) {
+	s.mu.Lock()
+	s.state.CaptainConnected = connected
+	s.mu.Unlock()
+	s.scheduleSave()
+}
+
+// SetCaptainStatus updates Captain status (idle, busy, error)
+func (s *JSONStore) SetCaptainStatus(status string) {
+	s.mu.Lock()
+	s.state.CaptainStatus = status
+	s.mu.Unlock()
+	s.scheduleSave()
 }

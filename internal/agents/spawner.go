@@ -253,6 +253,15 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 		return 0, fmt.Errorf("failed to create system prompt: %w", err)
 	}
 
+	// Generate NATS client ID using convention: agent-{configName}-{seq}
+	// Extract sequence from agentID (e.g., "team-coder001" -> 1)
+	var seq int
+	if _, err := fmt.Sscanf(agentID, "team-%*[a-z]%d", &seq); err != nil {
+		// Fallback: use counter
+		seq = s.GetNextSequence(config.Name)
+	}
+	natsClientID := fmt.Sprintf("agent-%s-%d", strings.ToLower(config.Name), seq)
+
 	// Build PowerShell command
 	scriptPath := filepath.Join(s.scriptsPath, "agent-launcher.ps1")
 
@@ -276,6 +285,9 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	}
 
 	cmd := exec.Command("powershell.exe", args...)
+
+	// Set NATS_CLIENT_ID environment variable for the agent process
+	cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
 
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("failed to start agent: %w", err)

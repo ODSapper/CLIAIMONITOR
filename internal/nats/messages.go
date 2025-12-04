@@ -34,6 +34,9 @@ const (
 
 	// SubjectDashboardAlert is used for dashboard alert messages
 	SubjectDashboardAlert = "dashboard.alert"
+
+	// SubjectCaptainStatus is used for Captain status updates
+	SubjectCaptainStatus = "captain.status"
 )
 
 // HeartbeatMessage represents an agent heartbeat message
@@ -95,4 +98,18 @@ type StopApprovalRequest struct {
 type StopApprovalResponse struct {
 	Approved bool   `json:"approved"`
 	Message  string `json:"message"`
+}
+
+// ClientInfo represents a connected NATS client
+type ClientInfo struct {
+	ClientID    string    `json:"client_id"`
+	ConnectedAt time.Time `json:"connected_at"`
+}
+
+// CaptainStatusMessage represents Captain's status update
+type CaptainStatusMessage struct {
+	Status    string    `json:"status"` // idle, busy, error
+	CurrentOp string    `json:"current_op,omitempty"`
+	QueueSize int       `json:"queue_size"`
+	Timestamp time.Time `json:"timestamp"`
 }
