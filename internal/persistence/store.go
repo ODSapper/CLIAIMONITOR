@@ -55,10 +55,6 @@ type Store interface {
 	// Counter for agent naming
 	GetNextAgentNumber(configName string) int
 
-	// Supervisor status
-	SetSupervisorConnected(connected bool)
-	IsSupervisorConnected() bool
-
 	// Human checkin
 	RecordHumanCheckin()
 	GetLastHumanCheckin() time.Time
@@ -440,21 +436,6 @@ func (s *JSONStore) AddJudgment(judgment *types.SupervisorJudgment) {
 	s.state.Judgments = append(s.state.Judgments, judgment)
 	s.mu.Unlock()
 	s.scheduleSave()
-}
-
-// SetSupervisorConnected updates supervisor status
-func (s *JSONStore) SetSupervisorConnected(connected bool) {
-	s.mu.Lock()
-	s.state.SupervisorConnected = connected
-	s.mu.Unlock()
-	s.scheduleSave()
-}
-
-// IsSupervisorConnected returns supervisor connection status
-func (s *JSONStore) IsSupervisorConnected() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state.SupervisorConnected
 }
 
 // RecordHumanCheckin updates last checkin time

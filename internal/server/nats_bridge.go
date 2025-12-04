@@ -47,22 +47,6 @@ func (b *NATSBridge) Stop() {
 func (b *NATSBridge) handleHeartbeat(agentID, status, task, configName, projectPath string) error {
 	log.Printf("[NATS-BRIDGE] Heartbeat from %s: status=%s task=%s", agentID, status, task)
 
-	// Update heartbeat tracking (similar to HTTP handler)
-	b.server.heartbeatMu.Lock()
-	info, exists := b.server.agentHeartbeats[agentID]
-	if !exists {
-		info = &HeartbeatInfo{
-			AgentID:     agentID,
-			ConfigName:  configName,
-			ProjectPath: projectPath,
-		}
-		b.server.agentHeartbeats[agentID] = info
-	}
-	info.Status = status
-	info.CurrentTask = task
-	info.LastSeen = time.Now()
-	b.server.heartbeatMu.Unlock()
-
 	// Update agent in store
 	b.server.store.UpdateAgent(agentID, func(a *types.Agent) {
 		a.Status = types.AgentStatus(status)
@@ -76,9 +60,8 @@ func (b *NATSBridge) handleHeartbeat(agentID, status, task, configName, projectP
 		}
 	})
 
-	// Update database heartbeat
+	// Update database status
 	if b.server.memDB != nil {
-		b.server.memDB.UpdateHeartbeat(agentID)
 		b.server.memDB.UpdateStatus(agentID, status, task)
 	}
 
@@ -103,9 +86,8 @@ func (b *NATSBridge) handleStatusUpdate(agentID, status, message string) error {
 		b.server.metrics.SetAgentActive(agentID)
 	}
 
-	// Update database
+	// Update database status
 	if b.server.memDB != nil {
-		b.server.memDB.UpdateHeartbeat(agentID)
 		b.server.memDB.UpdateStatus(agentID, status, message)
 	}
 
@@ -169,11 +151,6 @@ func (b *NATSBridge) handleShutdownNotify(agentID, reason string, approved, forc
 		a.Status = types.StatusDisconnected
 		a.LastSeen = time.Now()
 	})
-
-	// Remove from heartbeat tracking
-	b.server.heartbeatMu.Lock()
-	delete(b.server.agentHeartbeats, agentID)
-	b.server.heartbeatMu.Unlock()
 
 	// Update database
 	if b.server.memDB != nil {

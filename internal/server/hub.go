@@ -109,17 +109,6 @@ func (h *Hub) BroadcastActivity(activity *types.ActivityLog) {
 	})
 }
 
-// BroadcastSupervisorStatus sends supervisor status update
-func (h *Hub) BroadcastSupervisorStatus(connected bool, agent *types.Agent) {
-	h.BroadcastJSON(types.WSMessage{
-		Type: types.WSTypeSupervisor,
-		Data: map[string]interface{}{
-			"connected": connected,
-			"agent":     agent,
-		},
-	})
-}
-
 // ClientCount returns number of connected clients
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()

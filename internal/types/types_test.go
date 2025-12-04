@@ -81,9 +81,6 @@ func TestNewDashboardState(t *testing.T) {
 	if state == nil {
 		t.Fatal("NewDashboardState returned nil")
 	}
-	if state.SupervisorConnected {
-		t.Error("expected SupervisorConnected = false")
-	}
 	if state.Agents == nil {
 		t.Error("Agents map should be initialized")
 	}

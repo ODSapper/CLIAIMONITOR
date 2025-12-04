@@ -45,11 +45,6 @@ type HeartbeatResponse struct {
 
 // ProcessHeartbeat handles an agent heartbeat and returns instructions
 func (c *AgentComms) ProcessHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, error) {
-	// Update heartbeat in database
-	if err := c.memDB.UpdateHeartbeat(req.AgentID); err != nil {
-		// Log but don't fail - database might not have this agent yet
-	}
-
 	// Update agent status
 	if err := c.memDB.UpdateStatus(req.AgentID, req.Status, req.CurrentTask); err != nil {
 		// Log but don't fail

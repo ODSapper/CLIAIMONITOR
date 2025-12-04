@@ -78,63 +78,6 @@ func TestRegisterAgentWithPID(t *testing.T) {
 	}
 }
 
-// TestUpdateHeartbeat tests heartbeat updates
-func TestUpdateHeartbeat(t *testing.T) {
-	db, cleanup := setupTestDB(t)
-	defer cleanup()
-
-	// Register agent
-	agent := &AgentControl{
-		AgentID:    "test-agent-003",
-		ConfigName: "test-config",
-		Status:     "running",
-	}
-
-	err := db.RegisterAgent(agent)
-	if err != nil {
-		t.Fatalf("RegisterAgent failed: %v", err)
-	}
-
-	// Wait a moment to ensure timestamp difference
-	time.Sleep(10 * time.Millisecond)
-
-	// Update heartbeat
-	err = db.UpdateHeartbeat("test-agent-003")
-	if err != nil {
-		t.Fatalf("UpdateHeartbeat failed: %v", err)
-	}
-
-	// Verify heartbeat was updated
-	retrieved, err := db.GetAgent("test-agent-003")
-	if err != nil {
-		t.Fatalf("GetAgent failed: %v", err)
-	}
-
-	if retrieved.HeartbeatAt == nil {
-		t.Error("Expected HeartbeatAt to be set")
-	}
-
-	// Update again to verify it can be updated multiple times
-	firstHeartbeat := *retrieved.HeartbeatAt
-
-	// Sleep longer to ensure timestamp difference in SQLite (1-second precision)
-	time.Sleep(1 * time.Second)
-
-	err = db.UpdateHeartbeat("test-agent-003")
-	if err != nil {
-		t.Fatalf("Second UpdateHeartbeat failed: %v", err)
-	}
-
-	retrieved, err = db.GetAgent("test-agent-003")
-	if err != nil {
-		t.Fatalf("GetAgent failed: %v", err)
-	}
-
-	// With SQLite's 1-second precision, this should now be different
-	if retrieved.HeartbeatAt.Before(firstHeartbeat) {
-		t.Errorf("Expected heartbeat not to go backwards. First: %v, Second: %v", firstHeartbeat, *retrieved.HeartbeatAt)
-	}
-}
 
 // TestUpdateStatus tests status updates
 func TestUpdateStatus(t *testing.T) {
@@ -427,19 +370,19 @@ func TestGetStaleAgents(t *testing.T) {
 	defer cleanup()
 
 	// Register agents with different heartbeat times
-	now := time.Now()
+	// Use UTC time to match SQLite's datetime('now') which is UTC
+	now := time.Now().UTC()
 
-	// Fresh agent (just registered)
+	// Fresh agent (just registered with current heartbeat)
+	freshHeartbeat := now
 	fresh := &AgentControl{
-		AgentID:    "agent-fresh",
-		ConfigName: "config-1",
-		Status:     "running",
+		AgentID:     "agent-fresh",
+		ConfigName:  "config-1",
+		Status:      "running",
+		HeartbeatAt: &freshHeartbeat,
 	}
 	if err := db.RegisterAgent(fresh); err != nil {
 		t.Fatalf("RegisterAgent failed: %v", err)
-	}
-	if err := db.UpdateHeartbeat("agent-fresh"); err != nil {
-		t.Fatalf("UpdateHeartbeat failed: %v", err)
 	}
 
 	// Stale agent (old heartbeat)
@@ -560,14 +503,8 @@ func TestUpdateNonExistentAgent(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Try to update heartbeat for non-existent agent
-	err := db.UpdateHeartbeat("non-existent-agent")
-	if err == nil {
-		t.Error("Expected error when updating non-existent agent")
-	}
-
 	// Try to update status for non-existent agent
-	err = db.UpdateStatus("non-existent-agent", "running", "task")
+	err := db.UpdateStatus("non-existent-agent", "running", "task")
 	if err == nil {
 		t.Error("Expected error when updating status of non-existent agent")
 	}

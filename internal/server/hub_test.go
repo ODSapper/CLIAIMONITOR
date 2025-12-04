@@ -117,7 +117,6 @@ func TestHubBroadcastState(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	state := types.NewDashboardState()
-	state.SupervisorConnected = true
 
 	hub.BroadcastState(state)
 
@@ -204,40 +203,6 @@ func TestHubBroadcastActivity(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Error("did not receive activity broadcast")
-	}
-}
-
-func TestHubBroadcastSupervisorStatus(t *testing.T) {
-	hub := NewHub()
-	go hub.Run()
-
-	client := &Client{
-		hub:  hub,
-		conn: nil,
-		send: make(chan []byte, 256),
-	}
-
-	hub.Register(client)
-	time.Sleep(10 * time.Millisecond)
-
-	agent := &types.Agent{
-		ID:     "Supervisor",
-		Status: types.StatusConnected,
-	}
-
-	hub.BroadcastSupervisorStatus(true, agent)
-
-	select {
-	case received := <-client.send:
-		var msg types.WSMessage
-		if err := json.Unmarshal(received, &msg); err != nil {
-			t.Fatalf("Failed to decode message: %v", err)
-		}
-		if msg.Type != types.WSTypeSupervisor {
-			t.Errorf("expected type '%s', got '%s'", types.WSTypeSupervisor, msg.Type)
-		}
-	case <-time.After(100 * time.Millisecond):
-		t.Error("did not receive supervisor status broadcast")
 	}
 }
 

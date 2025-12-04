@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
@@ -33,19 +32,19 @@ type Server struct {
 	hub        *Hub
 
 	// Dependencies
-	store          *persistence.JSONStore
-	spawner        *agents.ProcessSpawner
-	mcp            *mcp.Server
-	metrics        *metrics.MetricsCollector
-	alerts         *metrics.AlertChecker
-	config         *types.TeamsConfig
-	projectsConfig *types.ProjectsConfig
-	memDB          memory.MemoryDB
-	notifications  *notifications.Manager
-	captain        *captain.Captain
+	store             *persistence.JSONStore
+	spawner           *agents.ProcessSpawner
+	mcp               *mcp.Server
+	metrics           *metrics.MetricsCollector
+	alerts            *metrics.AlertChecker
+	config            *types.TeamsConfig
+	projectsConfig    *types.ProjectsConfig
+	memDB             memory.MemoryDB
+	notifications     *notifications.Manager
+	captain           *captain.Captain
 	captainSupervisor *captain.CaptainSupervisor
-	cleanup        *CleanupService
-	basePath       string
+	cleanup           *CleanupService
+	basePath          string
 
 	// NATS messaging
 	natsServer *natslib.EmbeddedServer
@@ -65,10 +64,6 @@ type Server struct {
 	// Cleanup service context
 	cleanupCtx    context.Context
 	cleanupCancel context.CancelFunc
-
-	// Heartbeat tracking
-	agentHeartbeats map[string]*HeartbeatInfo
-	heartbeatMu     sync.RWMutex
 }
 
 // NewServer creates a new server instance
@@ -126,26 +121,25 @@ func NewServer(
 	}
 
 	s := &Server{
-		hub:               NewHub(),
-		store:             store,
-		spawner:           spawner,
-		mcp:               mcpServer,
-		metrics:           metricsCollector,
-		alerts:            alertEngine,
-		config:            config,
-		projectsConfig:    projectsConfig,
-		memDB:             memDB,
-		notifications:     notificationMgr,
-		captain:           cap,
-		basePath:          basePath,
-		port:              port,
-		startTime:         time.Now(),
-		stopChan:          make(chan struct{}),
-		ShutdownChan:      make(chan struct{}),
-		agentHeartbeats:   make(map[string]*HeartbeatInfo),
-		natsServer:        natsServer,
-		natsClient:        natsClient,
-		natsBridge:        nil, // initialized after struct creation
+		hub:            NewHub(),
+		store:          store,
+		spawner:        spawner,
+		mcp:            mcpServer,
+		metrics:        metricsCollector,
+		alerts:         alertEngine,
+		config:         config,
+		projectsConfig: projectsConfig,
+		memDB:          memDB,
+		notifications:  notificationMgr,
+		captain:        cap,
+		basePath:       basePath,
+		port:           port,
+		startTime:      time.Now(),
+		stopChan:       make(chan struct{}),
+		ShutdownChan:   make(chan struct{}),
+		natsServer:     natsServer,
+		natsClient:     natsClient,
+		natsBridge:     nil, // initialized after struct creation
 	}
 
 	// Initialize NATS bridge for message handling
@@ -199,11 +193,6 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/stop-requests", s.handleGetStopRequests).Methods("GET")
 	api.HandleFunc("/stop-requests/{id}/respond", s.handleRespondStopRequest).Methods("POST")
 
-	// Heartbeat routes
-	api.HandleFunc("/heartbeat", s.handleHeartbeat).Methods("POST")
-	api.HandleFunc("/heartbeats", s.handleGetHeartbeats).Methods("GET")
-	api.HandleFunc("/heartbeats/{id}", s.handleDeleteHeartbeat).Methods("DELETE")
-
 	// Supervisor API routes
 	supervisorHandler := handlers.NewSupervisorHandler(s.memDB)
 	supervisorHandler.RegisterRoutes(api)
@@ -254,16 +243,9 @@ func (s *Server) setupMCPCallbacks() {
 				a.LastSeen = time.Now()
 			})
 
-			// Update heartbeat in database to prevent stale cleanup
+			// Update status in database
 			if s.memDB != nil {
-				s.memDB.UpdateHeartbeat(agentID)
 				s.memDB.UpdateStatus(agentID, "connected", "")
-			}
-
-			// Check if supervisor
-			if agentID == "Supervisor" {
-				s.store.SetSupervisorConnected(true)
-				s.hub.BroadcastSupervisorStatus(true, s.store.GetAgent(agentID))
 			}
 
 			s.broadcastState()
@@ -277,9 +259,8 @@ func (s *Server) setupMCPCallbacks() {
 				a.LastSeen = time.Now()
 			})
 
-			// Update heartbeat in database to prevent stale cleanup
+			// Update status in database
 			if s.memDB != nil {
-				s.memDB.UpdateHeartbeat(agentID)
 				s.memDB.UpdateStatus(agentID, status, task)
 			}
 
@@ -804,11 +785,6 @@ func (s *Server) setupMCPCallbacks() {
 				a.Status = types.StatusDisconnected
 			})
 
-			if agentID == "Supervisor" {
-				s.store.SetSupervisorConnected(false)
-				s.hub.BroadcastSupervisorStatus(false, nil)
-			}
-
 			s.checkAlerts()
 			s.broadcastState()
 		},
@@ -875,9 +851,6 @@ func (s *Server) Start(addr string) error {
 			log.Printf("[NATS] Bridge started, processing messages")
 		}
 	}
-
-	// Start heartbeat checker for auto-respawn
-	go s.StartHeartbeatChecker(s.cleanupCtx)
 
 	fmt.Printf("Dashboard ready at http://localhost%s\n", addr)
 	return s.httpServer.ListenAndServe()
@@ -982,11 +955,6 @@ func (s *Server) checkAgentHealth() {
 				s.store.UpdateAgent(agentID, func(a *types.Agent) {
 					a.Status = types.StatusDisconnected
 				})
-
-				if agentID == "Supervisor" {
-					s.store.SetSupervisorConnected(false)
-					s.hub.BroadcastSupervisorStatus(false, nil)
-				}
 			}
 		}
 	}

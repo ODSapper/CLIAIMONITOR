@@ -37,45 +37,69 @@ func (m *mockMemoryDB) UpdateStatus(agentID, status, currentTask string) error {
 }
 
 // Stub implementations for other MemoryDB methods
-func (m *mockMemoryDB) DiscoverRepo(basePath string) (*memory.Repo, error)                  { return nil, nil }
-func (m *mockMemoryDB) GetRepo(repoID string) (*memory.Repo, error)                         { return nil, nil }
-func (m *mockMemoryDB) GetRepoByPath(basePath string) (*memory.Repo, error)                 { return nil, nil }
-func (m *mockMemoryDB) UpdateRepoScan(repoID string) error                                  { return nil }
-func (m *mockMemoryDB) SetRepoRescan(repoID string, needsRescan bool) error                 { return nil }
-func (m *mockMemoryDB) StoreRepoFile(file *memory.RepoFile) error                           { return nil }
-func (m *mockMemoryDB) GetRepoFiles(repoID string, fileType string) ([]*memory.RepoFile, error) { return nil, nil }
-func (m *mockMemoryDB) GetRepoFile(repoID, filePath string) (*memory.RepoFile, error)      { return nil, nil }
-func (m *mockMemoryDB) StoreAgentLearning(learning *memory.AgentLearning) error            { return nil }
-func (m *mockMemoryDB) GetAgentLearnings(filter memory.LearnFilter) ([]*memory.AgentLearning, error) { return nil, nil }
-func (m *mockMemoryDB) GetRecentLearnings(limit int) ([]*memory.AgentLearning, error)      { return nil, nil }
-func (m *mockMemoryDB) StoreContextSummary(summary *memory.ContextSummary) error           { return nil }
-func (m *mockMemoryDB) GetRecentSummaries(limit int) ([]*memory.ContextSummary, error)     { return nil, nil }
-func (m *mockMemoryDB) GetSummariesByAgent(agentID string, limit int) ([]*memory.ContextSummary, error) { return nil, nil }
-func (m *mockMemoryDB) GetSummariesBySession(sessionID string) ([]*memory.ContextSummary, error) { return nil, nil }
-func (m *mockMemoryDB) CreateTask(task *memory.WorkflowTask) error                         { return nil }
-func (m *mockMemoryDB) CreateTasks(tasks []*memory.WorkflowTask) error                     { return nil }
-func (m *mockMemoryDB) GetTask(taskID string) (*memory.WorkflowTask, error)                { return nil, nil }
-func (m *mockMemoryDB) GetTasks(filter memory.TaskFilter) ([]*memory.WorkflowTask, error)  { return nil, nil }
-func (m *mockMemoryDB) UpdateTaskStatus(taskID, status, agentID string) error              { return nil }
-func (m *mockMemoryDB) UpdateTask(task *memory.WorkflowTask) error                         { return nil }
-func (m *mockMemoryDB) StoreDecision(decision *memory.HumanDecision) error                 { return nil }
-func (m *mockMemoryDB) GetRecentDecisions(limit int) ([]*memory.HumanDecision, error)      { return nil, nil }
-func (m *mockMemoryDB) GetDecisionsByAgent(agentID string, limit int) ([]*memory.HumanDecision, error) { return nil, nil }
-func (m *mockMemoryDB) CreateDeployment(deployment *memory.Deployment) error               { return nil }
-func (m *mockMemoryDB) GetDeployment(deploymentID int64) (*memory.Deployment, error)       { return nil, nil }
-func (m *mockMemoryDB) GetRecentDeployments(repoID string, limit int) ([]*memory.Deployment, error) { return nil, nil }
-func (m *mockMemoryDB) UpdateDeploymentStatus(deploymentID int64, status string) error     { return nil }
-func (m *mockMemoryDB) RegisterAgent(agent *memory.AgentControl) error                     { return nil }
-func (m *mockMemoryDB) UpdateHeartbeat(agentID string) error                               { return nil }
-func (m *mockMemoryDB) SetShutdownFlag(agentID string, reason string) error                { return nil }
-func (m *mockMemoryDB) ClearShutdownFlag(agentID string) error                             { return nil }
-func (m *mockMemoryDB) MarkStopped(agentID, reason string) error                           { return nil }
-func (m *mockMemoryDB) RemoveAgent(agentID string) error                                   { return nil }
-func (m *mockMemoryDB) GetAgent(agentID string) (*memory.AgentControl, error)              { return nil, nil }
-func (m *mockMemoryDB) GetAllAgents() ([]*memory.AgentControl, error)                      { return nil, nil }
-func (m *mockMemoryDB) GetAgentsByStatus(status string) ([]*memory.AgentControl, error)    { return nil, nil }
-func (m *mockMemoryDB) CheckShutdownFlag(agentID string) (bool, string, error)             { return false, "", nil }
-func (m *mockMemoryDB) Close() error                                                       { return nil }
+func (m *mockMemoryDB) DiscoverRepo(basePath string) (*memory.Repo, error)  { return nil, nil }
+func (m *mockMemoryDB) GetRepo(repoID string) (*memory.Repo, error)         { return nil, nil }
+func (m *mockMemoryDB) GetRepoByPath(basePath string) (*memory.Repo, error) { return nil, nil }
+func (m *mockMemoryDB) UpdateRepoScan(repoID string) error                  { return nil }
+func (m *mockMemoryDB) SetRepoRescan(repoID string, needsRescan bool) error { return nil }
+func (m *mockMemoryDB) StoreRepoFile(file *memory.RepoFile) error           { return nil }
+func (m *mockMemoryDB) GetRepoFiles(repoID string, fileType string) ([]*memory.RepoFile, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetRepoFile(repoID, filePath string) (*memory.RepoFile, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) StoreAgentLearning(learning *memory.AgentLearning) error { return nil }
+func (m *mockMemoryDB) GetAgentLearnings(filter memory.LearnFilter) ([]*memory.AgentLearning, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetRecentLearnings(limit int) ([]*memory.AgentLearning, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) StoreContextSummary(summary *memory.ContextSummary) error { return nil }
+func (m *mockMemoryDB) GetRecentSummaries(limit int) ([]*memory.ContextSummary, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetSummariesByAgent(agentID string, limit int) ([]*memory.ContextSummary, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetSummariesBySession(sessionID string) ([]*memory.ContextSummary, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) CreateTask(task *memory.WorkflowTask) error          { return nil }
+func (m *mockMemoryDB) CreateTasks(tasks []*memory.WorkflowTask) error      { return nil }
+func (m *mockMemoryDB) GetTask(taskID string) (*memory.WorkflowTask, error) { return nil, nil }
+func (m *mockMemoryDB) GetTasks(filter memory.TaskFilter) ([]*memory.WorkflowTask, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) UpdateTaskStatus(taskID, status, agentID string) error { return nil }
+func (m *mockMemoryDB) UpdateTask(task *memory.WorkflowTask) error            { return nil }
+func (m *mockMemoryDB) StoreDecision(decision *memory.HumanDecision) error    { return nil }
+func (m *mockMemoryDB) GetRecentDecisions(limit int) ([]*memory.HumanDecision, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetDecisionsByAgent(agentID string, limit int) ([]*memory.HumanDecision, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) CreateDeployment(deployment *memory.Deployment) error         { return nil }
+func (m *mockMemoryDB) GetDeployment(deploymentID int64) (*memory.Deployment, error) { return nil, nil }
+func (m *mockMemoryDB) GetRecentDeployments(repoID string, limit int) ([]*memory.Deployment, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) UpdateDeploymentStatus(deploymentID int64, status string) error { return nil }
+func (m *mockMemoryDB) RegisterAgent(agent *memory.AgentControl) error                 { return nil }
+func (m *mockMemoryDB) SetShutdownFlag(agentID string, reason string) error            { return nil }
+func (m *mockMemoryDB) ClearShutdownFlag(agentID string) error                         { return nil }
+func (m *mockMemoryDB) MarkStopped(agentID, reason string) error                       { return nil }
+func (m *mockMemoryDB) RemoveAgent(agentID string) error                               { return nil }
+func (m *mockMemoryDB) GetAgent(agentID string) (*memory.AgentControl, error)          { return nil, nil }
+func (m *mockMemoryDB) GetAllAgents() ([]*memory.AgentControl, error)                  { return nil, nil }
+func (m *mockMemoryDB) GetAgentsByStatus(status string) ([]*memory.AgentControl, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) CheckShutdownFlag(agentID string) (bool, string, error) { return false, "", nil }
+func (m *mockMemoryDB) AsLearningDB() memory.LearningDB                        { return nil }
+func (m *mockMemoryDB) Close() error                                           { return nil }
 
 // mockStore is a simple mock implementation of persistence.Store for testing
 type mockStore struct {
@@ -90,42 +114,41 @@ func newMockStore() *mockStore {
 	}
 }
 
-func (m *mockStore) Load() (*types.DashboardState, error)                                   { return m.state, nil }
-func (m *mockStore) Save() error                                                           { return nil }
-func (m *mockStore) GetState() *types.DashboardState                                       { return m.state }
-func (m *mockStore) ResetMetricsHistory() error                                            { return nil }
-func (m *mockStore) AddAgent(agent *types.Agent)                                           { m.state.Agents[agent.ID] = agent }
-func (m *mockStore) UpdateAgent(agentID string, updater func(*types.Agent))                {}
+func (m *mockStore) Load() (*types.DashboardState, error)                   { return m.state, nil }
+func (m *mockStore) Save() error                                            { return nil }
+func (m *mockStore) GetState() *types.DashboardState                        { return m.state }
+func (m *mockStore) ResetMetricsHistory() error                             { return nil }
+func (m *mockStore) AddAgent(agent *types.Agent)                            { m.state.Agents[agent.ID] = agent }
+func (m *mockStore) UpdateAgent(agentID string, updater func(*types.Agent)) {}
 func (m *mockStore) RemoveAgent(agentID string) {
 	m.removedAgents = append(m.removedAgents, agentID)
 	delete(m.state.Agents, agentID)
 }
-func (m *mockStore) GetAgent(agentID string) *types.Agent                                  { return m.state.Agents[agentID] }
-func (m *mockStore) RequestAgentShutdown(agentID string, requestTime time.Time)            {}
-func (m *mockStore) UpdateMetrics(agentID string, metrics *types.AgentMetrics)             {}
-func (m *mockStore) GetMetrics(agentID string) *types.AgentMetrics                         { return nil }
-func (m *mockStore) TakeMetricsSnapshot()                                                  {}
-func (m *mockStore) AddHumanRequest(req *types.HumanInputRequest)                          {}
-func (m *mockStore) AnswerHumanRequest(id string, answer string)                           {}
-func (m *mockStore) GetPendingRequests() []*types.HumanInputRequest                        { return nil }
-func (m *mockStore) AddStopRequest(req *types.StopApprovalRequest)                         {}
-func (m *mockStore) RespondStopRequest(id string, approved bool, response string, reviewedBy string) {}
-func (m *mockStore) GetPendingStopRequests() []*types.StopApprovalRequest                  { return nil }
-func (m *mockStore) GetStopRequestByID(id string) *types.StopApprovalRequest               { return nil }
-func (m *mockStore) AddAlert(alert *types.Alert)                                           {}
-func (m *mockStore) AcknowledgeAlert(id string)                                            {}
-func (m *mockStore) ClearAllAlerts()                                                       {}
-func (m *mockStore) GetActiveAlerts() []*types.Alert                                       { return nil }
-func (m *mockStore) AddActivity(activity *types.ActivityLog)                               {}
-func (m *mockStore) AddJudgment(judgment *types.SupervisorJudgment)                        {}
-func (m *mockStore) GetNextAgentNumber(configName string) int                              { return 1 }
-func (m *mockStore) SetSupervisorConnected(connected bool)                                 {}
-func (m *mockStore) IsSupervisorConnected() bool                                           { return false }
-func (m *mockStore) RecordHumanCheckin()                                                   {}
-func (m *mockStore) GetLastHumanCheckin() time.Time                                        { return time.Time{} }
-func (m *mockStore) SetThresholds(thresholds types.AlertThresholds)                        {}
-func (m *mockStore) GetThresholds() types.AlertThresholds                                  { return types.AlertThresholds{} }
-func (m *mockStore) CleanupStaleAgents() int                                               { return 0 }
+func (m *mockStore) GetAgent(agentID string) *types.Agent                       { return m.state.Agents[agentID] }
+func (m *mockStore) RequestAgentShutdown(agentID string, requestTime time.Time) {}
+func (m *mockStore) UpdateMetrics(agentID string, metrics *types.AgentMetrics)  {}
+func (m *mockStore) GetMetrics(agentID string) *types.AgentMetrics              { return nil }
+func (m *mockStore) TakeMetricsSnapshot()                                       {}
+func (m *mockStore) AddHumanRequest(req *types.HumanInputRequest)               {}
+func (m *mockStore) AnswerHumanRequest(id string, answer string)                {}
+func (m *mockStore) GetPendingRequests() []*types.HumanInputRequest             { return nil }
+func (m *mockStore) AddStopRequest(req *types.StopApprovalRequest)              {}
+func (m *mockStore) RespondStopRequest(id string, approved bool, response string, reviewedBy string) {
+}
+func (m *mockStore) GetPendingStopRequests() []*types.StopApprovalRequest    { return nil }
+func (m *mockStore) GetStopRequestByID(id string) *types.StopApprovalRequest { return nil }
+func (m *mockStore) AddAlert(alert *types.Alert)                             {}
+func (m *mockStore) AcknowledgeAlert(id string)                              {}
+func (m *mockStore) ClearAllAlerts()                                         {}
+func (m *mockStore) GetActiveAlerts() []*types.Alert                         { return nil }
+func (m *mockStore) AddActivity(activity *types.ActivityLog)                 {}
+func (m *mockStore) AddJudgment(judgment *types.SupervisorJudgment)          {}
+func (m *mockStore) GetNextAgentNumber(configName string) int                { return 1 }
+func (m *mockStore) RecordHumanCheckin()                                     {}
+func (m *mockStore) GetLastHumanCheckin() time.Time                          { return time.Time{} }
+func (m *mockStore) SetThresholds(thresholds types.AlertThresholds)          {}
+func (m *mockStore) GetThresholds() types.AlertThresholds                    { return types.AlertThresholds{} }
+func (m *mockStore) CleanupStaleAgents() int                                 { return 0 }
 
 func TestNewCleanupService(t *testing.T) {
 	mockDB := &mockMemoryDB{}

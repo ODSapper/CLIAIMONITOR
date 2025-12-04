@@ -45,7 +45,6 @@ func TestLoadExistingFile(t *testing.T) {
 
 	// Write test state
 	testJSON := `{
-		"supervisor_connected": true,
 		"agents": {
 			"TestAgent": {
 				"id": "TestAgent",
@@ -67,9 +66,6 @@ func TestLoadExistingFile(t *testing.T) {
 	state, err := store.Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
-	}
-	if !state.SupervisorConnected {
-		t.Error("expected SupervisorConnected = true")
 	}
 	if len(state.Agents) != 1 {
 		t.Errorf("expected 1 agent, got %d", len(state.Agents))
@@ -296,21 +292,6 @@ func TestJudgments(t *testing.T) {
 	state := store.GetState()
 	if len(state.Judgments) != 1 {
 		t.Errorf("expected 1 judgment, got %d", len(state.Judgments))
-	}
-}
-
-func TestSupervisorStatus(t *testing.T) {
-	store := NewJSONStore(filepath.Join(t.TempDir(), "state.json"))
-	store.Load()
-
-	if store.IsSupervisorConnected() {
-		t.Error("expected supervisor disconnected initially")
-	}
-
-	store.SetSupervisorConnected(true)
-
-	if !store.IsSupervisorConnected() {
-		t.Error("expected supervisor connected after SetSupervisorConnected(true)")
 	}
 }
 

@@ -50,7 +50,6 @@ type MemoryDB interface {
 
 	// Agent control operations
 	RegisterAgent(agent *AgentControl) error
-	UpdateHeartbeat(agentID string) error
 	UpdateStatus(agentID, status, currentTask string) error
 	SetShutdownFlag(agentID string, reason string) error
 	ClearShutdownFlag(agentID string) error

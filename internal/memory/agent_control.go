@@ -10,7 +10,6 @@ import (
 type AgentControlRepository interface {
 	// Write operations
 	RegisterAgent(agent *AgentControl) error
-	UpdateHeartbeat(agentID string) error
 	UpdateStatus(agentID, status, currentTask string) error
 	SetShutdownFlag(agentID string, reason string) error
 	ClearShutdownFlag(agentID string) error
@@ -85,27 +84,6 @@ func (m *SQLiteMemoryDB) RegisterAgent(agent *AgentControl) error {
 
 	if err != nil {
 		return fmt.Errorf("failed to register agent: %w", err)
-	}
-
-	return nil
-}
-
-// UpdateHeartbeat updates the heartbeat timestamp for an agent
-func (m *SQLiteMemoryDB) UpdateHeartbeat(agentID string) error {
-	query := `UPDATE agent_control SET heartbeat_at = CURRENT_TIMESTAMP WHERE agent_id = ?`
-
-	result, err := m.db.Exec(query, agentID)
-	if err != nil {
-		return fmt.Errorf("failed to update heartbeat: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to check affected rows: %w", err)
-	}
-
-	if rows == 0 {
-		return fmt.Errorf("agent not found: %s", agentID)
 	}
 
 	return nil
