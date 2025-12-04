@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/CLIAIMONITOR/internal/mcp"
 	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/metrics"
+	natslib "github.com/CLIAIMONITOR/internal/nats"
 	"github.com/CLIAIMONITOR/internal/notifications"
 	"github.com/CLIAIMONITOR/internal/persistence"
 	"github.com/CLIAIMONITOR/internal/router"
@@ -43,6 +46,11 @@ type Server struct {
 	captainSupervisor *captain.CaptainSupervisor
 	cleanup        *CleanupService
 	basePath       string
+
+	// NATS messaging
+	natsServer *natslib.EmbeddedServer
+	natsClient *natslib.Client
+	natsBridge *NATSBridge
 
 	// Instance metadata
 	port      int
@@ -88,6 +96,35 @@ func NewServer(
 	// Initialize Captain orchestrator
 	cap := captain.NewCaptain(basePath, spawner, memDB, agentConfigs)
 
+	// Initialize embedded NATS server
+	natsConfig := natslib.EmbeddedServerConfig{
+		Port:      4222,
+		JetStream: true,
+		DataDir:   filepath.Join(basePath, "data", "nats"),
+	}
+	natsServer, err := natslib.NewEmbeddedServer(natsConfig)
+	if err != nil {
+		log.Printf("[NATS] Warning: Failed to create NATS server: %v", err)
+	} else {
+		if err := natsServer.Start(); err != nil {
+			log.Printf("[NATS] Warning: Failed to start NATS server: %v", err)
+		} else {
+			log.Printf("[NATS] Embedded server started on %s", natsServer.URL())
+		}
+	}
+
+	// Create NATS client
+	var natsClient *natslib.Client
+	if natsServer != nil && natsServer.IsRunning() {
+		client, err := natslib.NewClient(natsServer.URL())
+		if err != nil {
+			log.Printf("[NATS] Warning: Failed to create client: %v", err)
+		} else {
+			natsClient = client
+			log.Printf("[NATS] Client connected")
+		}
+	}
+
 	s := &Server{
 		hub:               NewHub(),
 		store:             store,
@@ -106,6 +143,19 @@ func NewServer(
 		stopChan:          make(chan struct{}),
 		ShutdownChan:      make(chan struct{}),
 		agentHeartbeats:   make(map[string]*HeartbeatInfo),
+		natsServer:        natsServer,
+		natsClient:        natsClient,
+		natsBridge:        nil, // initialized after struct creation
+	}
+
+	// Initialize NATS bridge for message handling
+	if s.natsClient != nil {
+		s.natsBridge = NewNATSBridge(s, s.natsClient)
+	}
+
+	// Pass NATS URL to spawner
+	if s.natsServer != nil && s.natsServer.IsRunning() {
+		s.spawner.SetNATSURL(s.natsServer.URL())
 	}
 
 	s.setupRoutes()
@@ -132,6 +182,7 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/agents/cleanup", s.handleCleanupAgents).Methods("POST")
 	api.HandleFunc("/agents/db", s.handleGetAgentsFromDB).Methods("GET")
 	api.HandleFunc("/human-input/{id}", s.handleAnswerHumanInput).Methods("POST")
+	api.HandleFunc("/alerts", s.handleGetAlerts).Methods("GET")
 	api.HandleFunc("/alerts/clear", s.handleClearAllAlerts).Methods("POST")
 	api.HandleFunc("/alerts/{id}/ack", s.handleAcknowledgeAlert).Methods("POST")
 	api.HandleFunc("/thresholds", s.handleUpdateThresholds).Methods("PUT")
@@ -816,6 +867,15 @@ func (s *Server) Start(addr string) error {
 	// Start auto-cleanup service
 	go s.cleanup.Start(s.cleanupCtx)
 
+	// Start NATS message bridge
+	if s.natsBridge != nil {
+		if err := s.natsBridge.Start(); err != nil {
+			log.Printf("[NATS] Warning: Failed to start NATS bridge: %v", err)
+		} else {
+			log.Printf("[NATS] Bridge started, processing messages")
+		}
+	}
+
 	// Start heartbeat checker for auto-respawn
 	go s.StartHeartbeatChecker(s.cleanupCtx)
 
@@ -830,6 +890,20 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Stop cleanup service
 	if s.cleanupCancel != nil {
 		s.cleanupCancel()
+	}
+
+	// Stop NATS bridge
+	if s.natsBridge != nil {
+		s.natsBridge.Stop()
+	}
+
+	// Shutdown NATS
+	if s.natsClient != nil {
+		s.natsClient.Close()
+	}
+	if s.natsServer != nil {
+		s.natsServer.Shutdown()
+		log.Printf("[NATS] Server shutdown complete")
 	}
 
 	// Save state

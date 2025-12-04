@@ -31,6 +31,7 @@ type ProcessSpawner struct {
 	mu             sync.RWMutex
 	basePath       string // CLIAIMONITOR directory
 	mcpServerURL   string
+	natsURL        string // NATS server URL for agent connections
 	promptsPath    string
 	scriptsPath    string
 	configsPath    string
@@ -53,6 +54,16 @@ func NewSpawner(basePath string, mcpServerURL string, memDB memory.MemoryDB) *Pr
 		memDB:         memDB,
 		heartbeatPIDs: make(map[string]int),
 	}
+}
+
+// SetNATSURL sets the NATS URL for agent connections
+func (s *ProcessSpawner) SetNATSURL(url string) {
+	s.natsURL = url
+}
+
+// GetNATSURL returns the configured NATS URL
+func (s *ProcessSpawner) GetNATSURL() string {
+	return s.natsURL
 }
 
 // GenerateAgentID creates a team-compatible agent ID in format: team-{type}{seq}
@@ -87,23 +98,32 @@ type MCPConfig struct {
 // MCPServerConfig defines an MCP server connection
 type MCPServerConfig struct {
 	Type    string            `json:"type"`
-	URL     string            `json:"url"`
+	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+	// NATS connection info
+	NATSURL string `json:"nats_url,omitempty"`
 }
 
 // createMCPConfig creates agent-specific MCP config file with project context
 func (s *ProcessSpawner) createMCPConfig(agentID string, projectPath string, accessLevel types.AccessLevel) (string, error) {
+	mcpServer := MCPServerConfig{
+		Type: "sse",
+		URL:  s.mcpServerURL,
+		Headers: map[string]string{
+			"X-Agent-ID":     agentID,
+			"X-Project-Path": projectPath,
+			"X-Access-Level": string(accessLevel),
+		},
+	}
+
+	// Add NATS URL if available
+	if s.natsURL != "" {
+		mcpServer.NATSURL = s.natsURL
+	}
+
 	config := MCPConfig{
 		MCPServers: map[string]MCPServerConfig{
-			"cliaimonitor": {
-				Type: "sse",
-				URL:  s.mcpServerURL,
-				Headers: map[string]string{
-					"X-Agent-ID":     agentID,
-					"X-Project-Path": projectPath,
-					"X-Access-Level": string(accessLevel),
-				},
-			},
+			"cliaimonitor": mcpServer,
 		},
 	}
 
@@ -287,9 +307,14 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 			log.Printf("Warning: Failed to register agent in DB: %v", err)
 		}
 
-		// Spawn heartbeat script
-		if err := s.spawnHeartbeatScript(agentID); err != nil {
-			log.Printf("Warning: Failed to spawn heartbeat script: %v", err)
+		// Only spawn PowerShell heartbeat if NATS is not available
+		// NATS handles heartbeats natively via pub/sub
+		if s.natsURL == "" {
+			if err := s.spawnHeartbeatScript(agentID); err != nil {
+				log.Printf("Warning: Failed to spawn heartbeat script: %v", err)
+			}
+		} else {
+			log.Printf("[AGENT] Skipping PowerShell heartbeat - using NATS for agent %s", agentID)
 		}
 	}
 
@@ -354,7 +379,7 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 		}
 	}
 
-	// 2. Kill heartbeat script
+	// 2. Kill heartbeat script (only exists if NATS was not available)
 	s.mu.Lock()
 	if pid, ok := s.heartbeatPIDs[agentID]; ok {
 		if err := instance.KillProcess(pid); err != nil {
@@ -362,6 +387,7 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 		}
 		delete(s.heartbeatPIDs, agentID)
 	}
+	// Note: If NATS is enabled, no heartbeat script exists - that's expected
 	s.mu.Unlock()
 
 	// 3. Mark stopped in DB
@@ -377,12 +403,21 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 	s.mu.Unlock()
 
 	// 5. Try to kill the agent process using PID file (preferred method)
+	// PID file contains PowerShell launcher PID - we need to kill both the launcher AND its claude.exe child
 	pid, err := s.GetAgentPIDFromFile(agentID)
 	if err == nil && pid > 0 {
-		log.Printf("Killing agent %s using PID file (PID: %d)", agentID, pid)
-		if err := instance.KillProcess(pid); err != nil {
-			log.Printf("Warning: Failed to kill agent by PID: %v", err)
+		log.Printf("Killing agent %s launcher (PID: %d) and child processes", agentID, pid)
+
+		// First, kill any claude.exe child processes of this launcher
+		if err := s.KillChildClaude(pid); err != nil {
+			log.Printf("Warning: Failed to kill claude.exe child: %v", err)
 		}
+
+		// Then kill the PowerShell launcher itself
+		if err := instance.KillProcess(pid); err != nil {
+			log.Printf("Warning: Failed to kill launcher by PID: %v", err)
+		}
+
 		// Clean up PID file
 		s.CleanupAgentPIDFile(agentID)
 		return nil
@@ -395,6 +430,18 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 		return err
 	}
 
+	return nil
+}
+
+// KillChildClaude kills any claude.exe processes that are children of the given parent PID
+func (s *ProcessSpawner) KillChildClaude(parentPID int) error {
+	// Use PowerShell to find and kill claude.exe child processes
+	cmd := exec.Command("powershell", "-Command",
+		fmt.Sprintf(`Get-CimInstance Win32_Process -Filter "ParentProcessId=%d AND Name='claude.exe'" | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`, parentPID))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to kill child claude: %w (output: %s)", err, string(output))
+	}
 	return nil
 }
 

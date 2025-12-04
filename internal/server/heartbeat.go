@@ -6,11 +6,13 @@ import (
 	"log"
 	"os"
 	"time"
+
+	"github.com/CLIAIMONITOR/internal/types"
 )
 
 const (
-	HeartbeatCheckInterval = 60 * time.Second
-	StaleThreshold         = 120 * time.Second
+	HeartbeatCheckInterval = 15 * time.Second
+	StaleThreshold         = 45 * time.Second
 )
 
 // StartHeartbeatChecker runs a background goroutine that checks for stale agents
@@ -33,11 +35,12 @@ func (s *Server) StartHeartbeatChecker(ctx context.Context) {
 }
 
 // checkStaleAgents scans all registered heartbeats for stale entries
+// Also checks dashboard agents that have no active heartbeat
 func (s *Server) checkStaleAgents() {
 	s.heartbeatMu.RLock()
 	now := time.Now()
 
-	// Collect stale agents (don't mutate map while iterating with read lock)
+	// Collect stale agents from heartbeat map (don't mutate map while iterating with read lock)
 	var staleAgents []struct {
 		agentID string
 		info    *HeartbeatInfo
@@ -51,6 +54,35 @@ func (s *Server) checkStaleAgents() {
 				agentID string
 				info    *HeartbeatInfo
 			}{agentID, &infoCopy})
+		}
+	}
+
+	// Also check dashboard agents that have no active heartbeat entry
+	// These are agents persisted in state.json but whose heartbeat monitors are dead
+	state := s.store.GetState()
+	for agentID, agent := range state.Agents {
+		// Skip if agent is already disconnected
+		if agent.Status == types.StatusDisconnected {
+			continue
+		}
+
+		// Check if this agent has an active heartbeat entry
+		if _, hasHeartbeat := s.agentHeartbeats[agentID]; !hasHeartbeat {
+			// No heartbeat entry - check if LastSeen is stale
+			if now.Sub(agent.LastSeen) > StaleThreshold {
+				log.Printf("[HEARTBEAT] Agent %s has no heartbeat and LastSeen is stale, marking disconnected", agentID)
+				staleAgents = append(staleAgents, struct {
+					agentID string
+					info    *HeartbeatInfo
+				}{agentID, &HeartbeatInfo{
+					AgentID:     agentID,
+					ConfigName:  agent.ConfigName,
+					ProjectPath: agent.ProjectPath,
+					Status:      string(agent.Status),
+					CurrentTask: agent.CurrentTask,
+					LastSeen:    agent.LastSeen,
+				}})
+			}
 		}
 	}
 	s.heartbeatMu.RUnlock()
@@ -149,10 +181,25 @@ func (s *Server) handleStaleAgent(agentID string, info *HeartbeatInfo) {
 	s.cleanupStaleHeartbeat(agentID)
 }
 
-// cleanupStaleHeartbeat removes a stale heartbeat entry from the map
+// cleanupStaleHeartbeat removes a stale agent completely - kills process and removes from dashboard
 func (s *Server) cleanupStaleHeartbeat(agentID string) {
+	// Remove from heartbeat map
 	s.heartbeatMu.Lock()
 	delete(s.agentHeartbeats, agentID)
 	s.heartbeatMu.Unlock()
-	log.Printf("[HEARTBEAT] Cleaned up heartbeat entry for agent %s", agentID)
+
+	// Kill the agent process if still running
+	if err := s.spawner.StopAgent(agentID); err != nil {
+		log.Printf("[HEARTBEAT] Note: Could not stop agent %s process: %v", agentID, err)
+	}
+
+	// Cleanup config and prompt files
+	s.spawner.CleanupAgentFiles(agentID)
+
+	// Remove from dashboard completely (not just mark disconnected)
+	s.store.RemoveAgent(agentID)
+	s.metrics.RemoveAgent(agentID)
+	s.broadcastState()
+
+	log.Printf("[HEARTBEAT] Removed stale agent %s from dashboard and killed process", agentID)
 }

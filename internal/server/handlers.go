@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -251,6 +252,15 @@ func (s *Server) handleAnswerHumanInput(w http.ResponseWriter, r *http.Request) 
 
 	s.broadcastState()
 	s.respondJSON(w, map[string]bool{"success": true})
+}
+
+// handleGetAlerts returns active alerts
+func (s *Server) handleGetAlerts(w http.ResponseWriter, r *http.Request) {
+	alerts := s.store.GetActiveAlerts()
+	s.respondJSON(w, map[string]interface{}{
+		"count":  len(alerts),
+		"alerts": alerts,
+	})
 }
 
 // handleAcknowledgeAlert acknowledges an alert
@@ -534,6 +544,43 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Log deprecation warning (once per agent per session to avoid log spam)
+	log.Printf("[HEARTBEAT] DEPRECATED: HTTP heartbeat from %s - consider migrating to NATS", req.AgentID)
+
+	// Add deprecation header to response
+	w.Header().Set("X-Deprecated", "true")
+	w.Header().Set("X-Deprecated-Message", "HTTP heartbeat is deprecated, migrate to NATS pub/sub")
+
+	// Check if agent has shutdown_requested - if so, tell heartbeat to stop and cleanup
+	state := s.store.GetState()
+	if existingAgent := state.Agents[req.AgentID]; existingAgent != nil && existingAgent.ShutdownRequested {
+		log.Printf("[HEARTBEAT] Agent %s has shutdown_requested, telling heartbeat to stop", req.AgentID)
+
+		// Remove from heartbeat map
+		s.heartbeatMu.Lock()
+		delete(s.agentHeartbeats, req.AgentID)
+		s.heartbeatMu.Unlock()
+
+		// Cleanup the agent completely
+		go func() {
+			s.spawner.StopAgent(req.AgentID)
+			s.spawner.CleanupAgentFiles(req.AgentID)
+			s.store.RemoveAgent(req.AgentID)
+			s.metrics.RemoveAgent(req.AgentID)
+			s.broadcastState()
+			log.Printf("[HEARTBEAT] Cleaned up shutdown-requested agent %s", req.AgentID)
+		}()
+
+		// Tell the heartbeat script to stop
+		s.respondJSON(w, map[string]interface{}{
+			"ok":        false,
+			"stop":      true,
+			"reason":    "shutdown_requested",
+			"timestamp": time.Now(),
+		})
+		return
+	}
+
 	// Update heartbeat map
 	s.heartbeatMu.Lock()
 	s.agentHeartbeats[req.AgentID] = &HeartbeatInfo{
@@ -545,6 +592,31 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		LastSeen:    time.Now(),
 	}
 	s.heartbeatMu.Unlock()
+
+	// Also register/update agent on dashboard state so it appears in UI
+	now := time.Now()
+	if state.Agents[req.AgentID] == nil {
+		// New agent - register it using AddAgent (not UpdateAgent which only works for existing)
+		s.store.AddAgent(&types.Agent{
+			ID:          req.AgentID,
+			ConfigName:  req.ConfigName,
+			Status:      types.AgentStatus(req.Status),
+			CurrentTask: req.CurrentTask,
+			ProjectPath: req.ProjectPath,
+			SpawnedAt:   now,
+			LastSeen:    now,
+		})
+		s.broadcastState()
+	} else {
+		// Existing agent - update heartbeat info
+		s.store.UpdateAgent(req.AgentID, func(a *types.Agent) {
+			a.Status = types.AgentStatus(req.Status)
+			if req.CurrentTask != "" {
+				a.CurrentTask = req.CurrentTask
+			}
+			a.LastSeen = now
+		})
+	}
 
 	s.respondJSON(w, map[string]interface{}{
 		"ok":        true,

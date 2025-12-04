@@ -148,7 +148,7 @@ if (Test-Path $heartbeatScriptPath) {
             "-File", "`"$heartbeatScriptPath`"",
             "-AgentID", "`"$AgentID`"",
             "-ServerURL", "http://localhost:3000",
-            "-IntervalSeconds", "30",
+            "-IntervalSeconds", "15",
             "-CurrentTask", "initializing"
         ) `
         -WindowStyle Hidden `
