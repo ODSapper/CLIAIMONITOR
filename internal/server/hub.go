@@ -109,6 +109,14 @@ func (h *Hub) BroadcastActivity(activity *types.ActivityLog) {
 	})
 }
 
+// BroadcastEscalation sends an escalation message to all clients
+func (h *Hub) BroadcastEscalation(escalation interface{}) {
+	h.BroadcastJSON(types.WSMessage{
+		Type: types.WSTypeEscalation,
+		Data: escalation,
+	})
+}
+
 // ClientCount returns number of connected clients
 func (h *Hub) ClientCount() int {
 	h.mu.RLock()

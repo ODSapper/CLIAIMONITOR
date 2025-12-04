@@ -53,4 +53,5 @@ const (
 	WSTypeAlert       = "alert"
 	WSTypeActivity    = "activity"
 	WSTypeSupervisor  = "supervisor_status"
+	WSTypeEscalation  = "escalation"
 )

@@ -228,6 +228,11 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/captain/terminal/status", s.handleCaptainTerminalStatus).Methods("GET")
 	api.HandleFunc("/captain/terminal/restart", s.handleCaptainTerminalRestart).Methods("POST")
 
+	// Escalation & Captain Control endpoints
+	api.HandleFunc("/escalation/{id}/respond", s.handleSubmitEscalationResponse).Methods("POST")
+	api.HandleFunc("/captain/command", s.handleSendCaptainCommand).Methods("POST")
+	api.HandleFunc("/nats/status", s.handleGetNATSStatus).Methods("GET")
+
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
 

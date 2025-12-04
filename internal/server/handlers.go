@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
+	natslib "github.com/CLIAIMONITOR/internal/nats"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -508,6 +509,124 @@ func (s *Server) respondError(w http.ResponseWriter, status int, message string)
 
 func formatAgentNumber(n int) string {
 	return fmt.Sprintf("%03d", n)
+}
+
+// Escalation & Captain Control Handlers
+
+// handleSubmitEscalationResponse handles POST /api/escalation/{id}/respond
+// Publishes human response to NATS subject escalation.response.{id}
+func (s *Server) handleSubmitEscalationResponse(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	escalationID := vars["id"]
+
+	var req struct {
+		Response string `json:"response"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Validate response
+	if req.Response == "" {
+		s.respondError(w, http.StatusBadRequest, "Response cannot be empty")
+		return
+	}
+
+	// Check if NATS client is available
+	if s.natsClient == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "NATS client not available")
+		return
+	}
+
+	// Create escalation response message
+	responseMsg := natslib.EscalationResponseMessage{
+		ID:        escalationID,
+		Response:  req.Response,
+		From:      "human",
+		Timestamp: time.Now(),
+	}
+
+	// Publish to escalation.response.{id} subject
+	subject := fmt.Sprintf(natslib.SubjectEscalationResponse, escalationID)
+	if err := s.natsClient.PublishJSON(subject, responseMsg); err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to publish response: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "Response published to NATS",
+	})
+}
+
+// handleSendCaptainCommand handles POST /api/captain/command
+// Publishes command to NATS subject captain.commands
+func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Type    string                 `json:"type"`
+		Payload map[string]interface{} `json:"payload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Validate command type
+	validTypes := map[string]bool{
+		"spawn_agent": true,
+		"kill_agent":  true,
+		"pause":       true,
+		"resume":      true,
+	}
+	if !validTypes[req.Type] {
+		s.respondError(w, http.StatusBadRequest, "Invalid command type (must be spawn_agent, kill_agent, pause, or resume)")
+		return
+	}
+
+	// Check if NATS client is available
+	if s.natsClient == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "NATS client not available")
+		return
+	}
+
+	// Create captain command message
+	commandMsg := natslib.CaptainCommandMessage{
+		Type:    req.Type,
+		Payload: req.Payload,
+		From:    "server",
+	}
+
+	// Publish to captain.commands subject
+	if err := s.natsClient.PublishJSON(natslib.SubjectCaptainCommands, commandMsg); err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to publish command: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"success": true,
+		"message": "Command published to Captain",
+		"type":    req.Type,
+	})
+}
+
+// handleGetNATSStatus handles GET /api/nats/status
+// Returns NATS connection status and list of connected clients
+func (s *Server) handleGetNATSStatus(w http.ResponseWriter, r *http.Request) {
+	connected := false
+	var clients []natslib.ClientInfo
+
+	// Check if NATS server is running
+	if s.natsServer != nil && s.natsServer.IsRunning() {
+		connected = true
+		// Get connected clients
+		clients = s.natsServer.GetConnectedClients()
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"connected": connected,
+		"clients":   clients,
+	})
 }
 
 // Captain Terminal Supervisor Handlers
