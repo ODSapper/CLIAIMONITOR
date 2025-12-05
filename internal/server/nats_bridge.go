@@ -171,6 +171,9 @@ func (b *NATSBridge) handleCaptainStatus(status, currentOp string, queueSize int
 	// Update Captain status in store
 	b.server.store.SetCaptainStatus(status)
 
+	// Mark Captain as connected when we receive status updates
+	b.server.store.SetCaptainConnected(true)
+
 	// Broadcast updated state to dashboard
 	b.server.broadcastState()
 	return nil

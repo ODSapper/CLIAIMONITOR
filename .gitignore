@@ -19,6 +19,7 @@ vendor/
 .vscode/
 *.swp
 *.swo
+*.code-workspace
 
 # OS
 .DS_Store
@@ -35,6 +36,7 @@ configs/prompts/active/*.md
 
 # Runtime data
 data/
+!data/captain-prompt.md
 *.db
 *.db-shm
 *.db-wal

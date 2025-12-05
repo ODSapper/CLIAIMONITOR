@@ -54,7 +54,7 @@ Real-time dashboard state (JSON). Check this for:
 - MSS: Firewall/IPS (Go) at ../MSS - Security server
 - MSS-AI: AI agent system (Go) at ../mss-ai
 - Planner: Task management API at ../planner
-- CLIAIMONITOR: This system at C:\Users\Admin\Documents\VS Projects\CLIAIMONITOR
+- CLIAIMONITOR: This system at C:\Users\Admin\Documents\VS Projects\cliaimonitor
 
 ## Available Agent Types
 Spawn these via the dashboard or API:
