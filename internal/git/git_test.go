@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,37 @@ func TestGitOperationsInTempRepo(t *testing.T) {
 	}
 	if current != branch {
 		t.Errorf("expected branch %q, got %q", branch, current)
+	}
+}
+
+// Task 2B: PR Body Generation Test
+func TestPRBodyGeneration(t *testing.T) {
+	pr := PRInfo{
+		Title:   "Fix authentication bypass",
+		Summary: "Added input validation to prevent auth bypass",
+		TaskIDs: []string{"TASK-001"},
+		Agents:  []string{"SNTGreen", "SNTPurple"},
+		Metrics: PRMetrics{
+			TokensUsed:  23450,
+			TimeMinutes: 45,
+		},
+	}
+
+	body := pr.GenerateBody()
+
+	if !strings.Contains(body, "## Summary") {
+		t.Error("body should contain Summary section")
+	}
+	if !strings.Contains(body, "TASK-001") {
+		t.Error("body should contain task ID")
+	}
+	if !strings.Contains(body, "SNTGreen") {
+		t.Error("body should contain agent name")
+	}
+	if !strings.Contains(body, "23,450") {
+		t.Error("body should contain token count")
+	}
+	if !strings.Contains(body, "team-coop") {
+		t.Error("body should contain team identifier")
 	}
 }
