@@ -9,6 +9,7 @@ class Dashboard {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
         this.currentView = 'dashboard';
+        this.tasks = [];
 
         this.init();
     }
@@ -19,8 +20,11 @@ class Dashboard {
         this.loadInitialState();
         this.loadProjects();
         this.loadSessionStats();
+        this.loadTasks();
         // Update stats every 30 seconds
         setInterval(() => this.loadSessionStats(), 30000);
+        // Update tasks every 10 seconds
+        setInterval(() => this.loadTasks(), 10000);
     }
 
     // WebSocket Connection
@@ -377,6 +381,10 @@ class Dashboard {
         document.getElementById('activity-filter').addEventListener('change', (e) => {
             this.renderActivityLog(e.target.value);
         });
+
+        // Task modal bindings
+        document.getElementById('new-task-btn')?.addEventListener('click', () => this.openTaskModal());
+        document.getElementById('task-form')?.addEventListener('submit', (e) => this.createTask(e));
     }
 
     // Rendering
@@ -717,10 +725,211 @@ class Dashboard {
         return num.toString();
     }
 
+    // Agent-centric dashboard functions
+
+    // Render agent cards
+    renderAgentCards() {
+        const container = document.getElementById('agent-cards');
+        if (!container) return;
+
+        if (!this.state || !this.state.agents) {
+            container.innerHTML = '<p class="empty-state">No agents connected</p>';
+            return;
+        }
+
+        const agents = Object.values(this.state.agents);
+        if (agents.length === 0) {
+            container.innerHTML = '<p class="empty-state">No agents connected</p>';
+            return;
+        }
+
+        container.innerHTML = agents.map(agent => {
+            const agentTasks = this.getAgentTasks(agent.id);
+            const currentTask = agentTasks.find(t => t.status === 'in_progress');
+            const queuedTasks = agentTasks.filter(t => t.status === 'assigned');
+
+            return `
+                <div class="agent-card ${agent.status}" style="border-color: ${agent.color}">
+                    <div class="agent-header">
+                        <span class="agent-status-dot" style="background: ${this.getStatusColor(agent.status)}"></span>
+                        <span class="agent-name">${this.escapeHtml(agent.config_name || agent.id)}</span>
+                        <span class="agent-role">${this.escapeHtml(agent.role || '')}</span>
+                    </div>
+                    <div class="agent-current-task">
+                        ${currentTask ? `
+                            <div class="current-task">
+                                <span class="task-indicator">▶</span>
+                                <span class="task-id">${this.escapeHtml(currentTask.id)}</span>
+                                <span class="task-title">${this.escapeHtml(currentTask.title)}</span>
+                                <span class="task-time">${this.formatDuration(currentTask.started_at)}</span>
+                            </div>
+                        ` : `<span class="idle-state">idle</span>`}
+                    </div>
+                    <div class="agent-queue">
+                        ${queuedTasks.slice(0, 3).map(t => `
+                            <div class="queued-task">
+                                <span class="queue-indicator">◦</span>
+                                <span class="task-id">${this.escapeHtml(t.id)}</span>
+                            </div>
+                        `).join('')}
+                        ${queuedTasks.length > 3 ? `<span class="more-tasks">+${queuedTasks.length - 3} more</span>` : ''}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    getAgentTasks(agentId) {
+        if (!this.tasks) return [];
+        return this.tasks.filter(t => t.assigned_to === agentId);
+    }
+
+    getStatusColor(status) {
+        const colors = {
+            'connected': '#00cc66',
+            'working': '#00cc66',
+            'idle': '#999',
+            'blocked': '#ff9900',
+            'disconnected': '#cc3333',
+            'error': '#cc3333'
+        };
+        return colors[status] || '#999';
+    }
+
+    formatDuration(startTime) {
+        if (!startTime) return '';
+        const start = new Date(startTime);
+        const now = new Date();
+        const diff = Math.floor((now - start) / 1000);
+
+        if (diff < 60) return `${diff}s`;
+        if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+        return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`;
+    }
+
+    // Load and render tasks
+    async loadTasks() {
+        try {
+            const response = await fetch('/api/tasks');
+            const data = await response.json();
+            this.tasks = data.tasks || [];
+            this.renderPendingQueue();
+            this.renderAgentCards();
+            this.updateSummary();
+        } catch (error) {
+            console.error('Failed to load tasks:', error);
+        }
+    }
+
+    renderPendingQueue() {
+        const tbody = document.getElementById('pending-queue-body');
+        if (!tbody) return;
+
+        const pending = (this.tasks || []).filter(t => t.status === 'pending');
+
+        const pendingCount = document.getElementById('pending-count');
+        if (pendingCount) pendingCount.textContent = pending.length;
+
+        if (pending.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No pending tasks</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = pending.map(task => `
+            <tr>
+                <td><span class="priority-badge p${task.priority}">P${task.priority}</span></td>
+                <td>${this.escapeHtml(task.title)}</td>
+                <td>${this.escapeHtml(task.repo || 'local')}</td>
+                <td>${task.status}</td>
+                <td>${this.formatAge(task.created_at)}</td>
+                <td>
+                    <button class="btn btn-small" onclick="dashboard.assignTask('${task.id}')">Assign</button>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    formatAge(timestamp) {
+        const created = new Date(timestamp);
+        const now = new Date();
+        const diff = Math.floor((now - created) / 1000);
+
+        if (diff < 60) return 'just now';
+        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+        return `${Math.floor(diff / 86400)}d ago`;
+    }
+
+    updateSummary() {
+        const tasks = this.tasks || [];
+        const agents = this.state?.agents ? Object.values(this.state.agents) : [];
+
+        const summaryActive = document.getElementById('summary-active');
+        const summaryPending = document.getElementById('summary-pending');
+        const summaryReview = document.getElementById('summary-review');
+        const summaryTokens = document.getElementById('summary-tokens');
+        const summaryCost = document.getElementById('summary-cost');
+
+        if (summaryActive) summaryActive.textContent = agents.filter(a => a.status === 'working').length;
+        if (summaryPending) summaryPending.textContent = tasks.filter(t => t.status === 'pending').length;
+        if (summaryReview) summaryReview.textContent = tasks.filter(t => t.status === 'review').length;
+
+        // Token/cost from session stats
+        const stats = this.state?.session_stats || {};
+        if (summaryTokens) summaryTokens.textContent = this.formatNumberWithCommas(stats.total_tokens_used || 0);
+        if (summaryCost) summaryCost.textContent = `$${(stats.total_estimated_cost || 0).toFixed(2)}`;
+    }
+
+    formatNumberWithCommas(n) {
+        return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    }
+
+    // Task modal
+    openTaskModal() {
+        document.getElementById('task-modal').style.display = 'flex';
+    }
+
+    closeTaskModal() {
+        document.getElementById('task-modal').style.display = 'none';
+        document.getElementById('task-form').reset();
+    }
+
+    async createTask(e) {
+        e.preventDefault();
+
+        const task = {
+            title: document.getElementById('task-title').value,
+            description: document.getElementById('task-description').value,
+            priority: parseInt(document.getElementById('task-priority').value),
+            repo: document.getElementById('task-repo').value
+        };
+
+        try {
+            const response = await fetch('/api/tasks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(task)
+            });
+
+            if (response.ok) {
+                this.closeTaskModal();
+                this.loadTasks();
+            } else {
+                alert('Failed to create task');
+            }
+        } catch (error) {
+            console.error('Create task error:', error);
+            alert('Failed to create task');
+        }
+    }
+
 }
 
 // Initialize
 const dashboard = new Dashboard();
+
+// Make closeTaskModal global for onclick
+window.closeTaskModal = () => dashboard.closeTaskModal();
 
 // ============================================================
 // Notification Banner Controller
