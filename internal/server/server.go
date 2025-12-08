@@ -20,6 +20,7 @@ import (
 	"github.com/CLIAIMONITOR/internal/notifications"
 	"github.com/CLIAIMONITOR/internal/persistence"
 	"github.com/CLIAIMONITOR/internal/router"
+	"github.com/CLIAIMONITOR/internal/tasks"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/CLIAIMONITOR/web"
 	"github.com/gorilla/mux"
@@ -45,6 +46,10 @@ type Server struct {
 	captainSupervisor *captain.CaptainSupervisor
 	cleanup           *CleanupService
 	basePath          string
+
+	// Task system
+	taskQueue *tasks.Queue
+	taskStore *tasks.Store
 
 	// NATS messaging
 	natsServer *natslib.EmbeddedServer
@@ -159,6 +164,24 @@ func NewServer(
 		s.store.SetNATSConnected(false)
 	}
 
+	// Initialize task system
+	s.taskQueue = tasks.NewQueue()
+	s.taskStore = tasks.NewStore(memDB.(*memory.SQLiteMemoryDB).DB())
+	if err := s.taskStore.Init(); err != nil {
+		log.Printf("[TASKS] Warning: Failed to initialize task store: %v", err)
+	} else {
+		// Load persisted tasks into queue
+		savedTasks, err := s.taskStore.GetAll()
+		if err != nil {
+			log.Printf("[TASKS] Warning: Failed to load tasks: %v", err)
+		} else {
+			for _, t := range savedTasks {
+				s.taskQueue.Add(t)
+			}
+			log.Printf("[TASKS] Loaded %d persisted tasks", len(savedTasks))
+		}
+	}
+
 	s.setupRoutes()
 	s.setupMCPCallbacks()
 
@@ -207,6 +230,15 @@ func (s *Server) setupRoutes() {
 	// Coordination API routes (Captain's decision engine)
 	coordinationHandler := handlers.NewCoordinationHandler(s.memDB, s.spawner, s.getAgentConfigsMap())
 	coordinationHandler.RegisterRoutes(api)
+
+	// Task management routes
+	taskHandler := handlers.NewTasksHandler(s.taskQueue, s.taskStore)
+	api.HandleFunc("/tasks", taskHandler.HandleList).Methods("GET")
+	api.HandleFunc("/tasks", taskHandler.HandleCreate).Methods("POST")
+	api.HandleFunc("/tasks/{id}", taskHandler.HandleGet).Methods("GET")
+	api.HandleFunc("/tasks/{id}", taskHandler.HandleUpdate).Methods("PATCH", "PUT")
+	api.HandleFunc("/tasks/{id}", taskHandler.HandleDelete).Methods("DELETE")
+	api.HandleFunc("/agents/{agent_id}/tasks", taskHandler.HandleAgentTasks).Methods("GET")
 
 	// Captain orchestration routes
 	captainHandler := handlers.NewCaptainHandler(s.captain, s.store)

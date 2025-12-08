@@ -137,6 +137,11 @@ func (m *SQLiteMemoryDB) migrate() error {
 	return nil
 }
 
+// DB returns the underlying sql.DB connection for use with other stores
+func (m *SQLiteMemoryDB) DB() *sql.DB {
+	return m.db
+}
+
 // Close closes the database connection
 func (m *SQLiteMemoryDB) Close() error {
 	if m.db != nil {
