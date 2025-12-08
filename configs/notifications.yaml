@@ -1,0 +1,107 @@
+# CLIAIMONITOR Notifications Configuration
+# Configure notification channels for events, alerts, and agent signals
+# All channels are disabled by default - enable and configure as needed
+
+slack:
+  # Enable/disable Slack notifications
+  enabled: false
+
+  # Slack webhook URL - get from https://api.slack.com/apps
+  # Format: https://hooks.slack.com/services/YOUR/WEBHOOK/URL
+  webhook_url: ""
+
+  # Channel to post to (optional, overrides webhook default)
+  # Use # prefix for channels: #alerts, #agents, etc.
+  channel: "#alerts"
+
+  # Bot display name in Slack
+  username: "CLIAIMONITOR"
+
+  # Bot emoji or custom emoji URL
+  # Examples: :robot_face:, :bell:, :warning:
+  icon_emoji: ":robot_face:"
+
+  # Event types to notify on
+  # Valid: message, agent_signal, alert, task, recon
+  events:
+    - alert
+    - agent_signal
+
+  # Minimum priority level to send (1=critical only, 2=critical+high, 3=critical+high+normal)
+  # Priority levels: 1=critical, 2=high, 3=normal, 4=low, 5=info
+  min_priority: 2
+
+discord:
+  # Enable/disable Discord notifications
+  enabled: false
+
+  # Discord webhook URL - get from Server Settings > Webhooks
+  # Format: https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
+  webhook_url: ""
+
+  # Bot display name in Discord
+  username: "CLIAIMONITOR"
+
+  # Bot avatar image URL (optional)
+  # Use full URL to an image: https://example.com/avatar.png
+  avatar_url: ""
+
+  # Event types to notify on
+  # Valid: message, agent_signal, alert, task, recon
+  events:
+    - alert
+    - agent_signal
+
+  # Minimum priority level to send (1=critical only, 2=critical+high, 3=critical+high+normal)
+  min_priority: 2
+
+email:
+  # Enable/disable Email notifications
+  enabled: false
+
+  # SMTP server host
+  # Examples: smtp.gmail.com, mail.example.com, localhost
+  smtp_host: ""
+
+  # SMTP server port
+  # Common: 25 (plain), 465 (TLS/SSL), 587 (STARTTLS)
+  smtp_port: 587
+
+  # SMTP authentication username
+  username: ""
+
+  # SMTP authentication password
+  # WARNING: Store in environment variable for production
+  # Use ${SMTP_PASSWORD} to reference env var
+  password: ""
+
+  # Email address to send from
+  # Format: noreply@example.com or "CLIAIMONITOR" <noreply@example.com>
+  from: ""
+
+  # Recipient email addresses (at least one required)
+  to:
+    - ""
+
+  # Event types to notify on
+  # Valid: message, agent_signal, alert, task, recon
+  events:
+    - alert
+    - agent_signal
+
+  # Minimum priority level to send (1=critical only, 2=critical+high, 3=critical+high+normal)
+  min_priority: 3
+
+# Priority levels reference:
+# 1 = Critical: System failures, security issues, critical agent errors
+# 2 = High: Agent blocked, escalation needed, high resource usage
+# 3 = Normal: Task completed, agent spawned/stopped, threshold warnings
+# 4 = Low: Status updates, idle notifications
+# 5 = Info: Debug messages, informational events
+
+# Event types reference:
+# message = Chat messages from Captain or dashboard
+# agent_signal = Agent heartbeat, status change, or signal
+# alert = System alerts and threshold breaches
+# task = Task assignment, completion, or reassignment
+# recon = Reconnaissance operations and findings
