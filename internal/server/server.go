@@ -12,6 +12,7 @@ import (
 
 	"github.com/CLIAIMONITOR/internal/agents"
 	"github.com/CLIAIMONITOR/internal/captain"
+	"github.com/CLIAIMONITOR/internal/events"
 	"github.com/CLIAIMONITOR/internal/handlers"
 	"github.com/CLIAIMONITOR/internal/mcp"
 	"github.com/CLIAIMONITOR/internal/memory"
@@ -50,6 +51,10 @@ type Server struct {
 	// Task system
 	taskQueue *tasks.Queue
 	taskStore *tasks.Store
+
+	// Event bus for real-time notifications
+	eventBus   *events.Bus
+	eventStore *events.SQLiteStore
 
 	// NATS messaging
 	natsServer *natslib.EmbeddedServer
@@ -160,8 +165,11 @@ func NewServer(
 	// Initialize NATS connection status in store
 	if s.natsServer != nil && s.natsServer.IsRunning() {
 		s.store.SetNATSConnected(true)
+		s.store.SetCaptainConnected(true) // Captain available when NATS is up
+		log.Printf("[CAPTAIN] Captain connected (NATS available)")
 	} else {
 		s.store.SetNATSConnected(false)
+		s.store.SetCaptainConnected(false)
 	}
 
 	// Initialize task system
@@ -181,6 +189,24 @@ func NewServer(
 			log.Printf("[TASKS] Loaded %d persisted tasks", len(savedTasks))
 		}
 	}
+
+	// Initialize event store using the same database connection
+	var eventStore *events.SQLiteStore
+	if sqliteDB, ok := memDB.(*memory.SQLiteMemoryDB); ok {
+		var err error
+		eventStore, err = events.NewSQLiteStore(sqliteDB.DB())
+		if err != nil {
+			log.Printf("[EVENTS] Warning: Failed to initialize event store: %v", err)
+		}
+	}
+
+	// Initialize event bus (works with nil store)
+	eventBus := events.NewBus(eventStore)
+	log.Printf("[EVENTS] Event bus initialized (store: %v)", eventStore != nil)
+
+	// Assign to server struct
+	s.eventBus = eventBus
+	s.eventStore = eventStore
 
 	s.setupRoutes()
 	s.setupMCPCallbacks()
@@ -259,6 +285,15 @@ func (s *Server) setupRoutes() {
 	// Captain Supervisor (terminal process) endpoints
 	api.HandleFunc("/captain/terminal/status", s.handleCaptainTerminalStatus).Methods("GET")
 	api.HandleFunc("/captain/terminal/restart", s.handleCaptainTerminalRestart).Methods("POST")
+
+	// Captain health endpoint
+	api.HandleFunc("/captain/health", s.handleCaptainHealth).Methods("GET")
+
+	// Captain context endpoints (for session persistence)
+	api.HandleFunc("/captain/context", s.handleGetCaptainContext).Methods("GET")
+	api.HandleFunc("/captain/context", s.handleSetCaptainContext).Methods("POST")
+	api.HandleFunc("/captain/context/{key}", s.handleDeleteCaptainContext).Methods("DELETE")
+	api.HandleFunc("/captain/context/summary", s.handleGetCaptainContextSummary).Methods("GET")
 
 	// Escalation & Captain Control endpoints
 	api.HandleFunc("/escalation/{id}/respond", s.handleSubmitEscalationResponse).Methods("POST")
@@ -809,6 +844,98 @@ func (s *Server) setupMCPCallbacks() {
 			}
 			return result, nil
 		},
+
+		// Captain context callbacks
+		OnSaveContext: func(key, value string, priority, maxAgeHours int) (interface{}, error) {
+			if err := s.memDB.SetContext(key, value, priority, maxAgeHours); err != nil {
+				return nil, fmt.Errorf("failed to save context: %w", err)
+			}
+			return map[string]interface{}{
+				"success": true,
+				"key":     key,
+				"message": "Context saved to memory.db",
+			}, nil
+		},
+
+		OnGetContext: func(key string) (interface{}, error) {
+			ctx, err := s.memDB.GetContext(key)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get context: %w", err)
+			}
+			if ctx == nil {
+				return map[string]interface{}{
+					"found": false,
+					"key":   key,
+				}, nil
+			}
+			return map[string]interface{}{
+				"found":         true,
+				"key":           ctx.Key,
+				"value":         ctx.Value,
+				"priority":      ctx.Priority,
+				"max_age_hours": ctx.MaxAgeHours,
+				"updated_at":    ctx.UpdatedAt,
+			}, nil
+		},
+
+		OnGetAllContext: func() (interface{}, error) {
+			contexts, err := s.memDB.GetAllContext()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get all context: %w", err)
+			}
+			var items []map[string]interface{}
+			for _, ctx := range contexts {
+				items = append(items, map[string]interface{}{
+					"key":           ctx.Key,
+					"value":         ctx.Value,
+					"priority":      ctx.Priority,
+					"max_age_hours": ctx.MaxAgeHours,
+					"updated_at":    ctx.UpdatedAt,
+				})
+			}
+			return map[string]interface{}{
+				"contexts": items,
+				"count":    len(items),
+			}, nil
+		},
+
+		OnLogSession: func(sessionID, eventType, summary, details, agentID string) (interface{}, error) {
+			if err := s.memDB.LogSessionEvent(sessionID, eventType, summary, details, agentID); err != nil {
+				return nil, fmt.Errorf("failed to log session event: %w", err)
+			}
+			return map[string]interface{}{
+				"success":    true,
+				"session_id": sessionID,
+				"event_type": eventType,
+			}, nil
+		},
+
+		OnGetCaptainMessages: func() (interface{}, error) {
+			messages := s.store.GetUnreadCaptainMessages()
+			var items []map[string]interface{}
+			for _, msg := range messages {
+				items = append(items, map[string]interface{}{
+					"id":         msg.ID,
+					"type":       msg.Type,
+					"text":       msg.Text,
+					"payload":    msg.Payload,
+					"from":       msg.From,
+					"created_at": msg.CreatedAt,
+				})
+			}
+			return map[string]interface{}{
+				"messages": items,
+				"count":    len(items),
+			}, nil
+		},
+
+		OnMarkMessagesRead: func(ids []string) (interface{}, error) {
+			s.store.MarkCaptainMessagesRead(ids)
+			return map[string]interface{}{
+				"success":      true,
+				"marked_count": len(ids),
+			}, nil
+		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
@@ -869,6 +996,12 @@ func (s *Server) setupMCPCallbacks() {
 		})
 		s.broadcastState()
 	})
+
+	// Register event bus tools for real-time notifications
+	if s.eventBus != nil {
+		mcp.RegisterWaitForEventsTool(s.mcp, s.eventBus)
+		log.Printf("[MCP] Registered wait_for_events tool")
+	}
 }
 
 // Start starts the HTTP server
