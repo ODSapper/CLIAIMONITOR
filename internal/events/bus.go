@@ -1,7 +1,10 @@
 package events
 
 import (
+	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // Subscription represents a subscription to events
@@ -18,11 +21,20 @@ type EventStore interface {
 	MarkDelivered(eventID string) error
 }
 
+// Backpressure configuration constants
+const (
+	// MaxBackpressureRetries is the number of times to retry sending before dropping
+	MaxBackpressureRetries = 3
+	// BackpressureRetryDelay is the delay between retry attempts
+	BackpressureRetryDelay = 10 * time.Millisecond
+)
+
 // Bus manages event subscriptions and publishing
 type Bus struct {
-	subscribers map[string][]*Subscription // target -> subscriptions
-	store       EventStore                 // Optional persistent store
-	mu          sync.RWMutex               // Protects subscribers map
+	subscribers   map[string][]*Subscription // target -> subscriptions
+	store         EventStore                 // Optional persistent store
+	mu            sync.RWMutex               // Protects subscribers map
+	droppedEvents uint64                     // Counter for dropped events (atomic)
 }
 
 // NewBus creates a new event bus
@@ -117,15 +129,40 @@ func (b *Bus) Publish(event *Event) {
 	// Send to all matching subscriptions
 	for _, sub := range targetSubs {
 		if b.matchesTypes(event.Type, sub.Types) {
-			// Non-blocking send
-			select {
-			case sub.Ch <- *event:
-				// Event sent successfully
-			default:
-				// Channel full, drop event to avoid blocking
-			}
+			b.sendWithBackpressure(sub, event)
 		}
 	}
+}
+
+// sendWithBackpressure attempts to send an event to a subscriber with retries.
+// If the channel is full, it retries a few times before logging and dropping the event.
+// The event is still persisted to the store (if available) and can be retrieved later.
+func (b *Bus) sendWithBackpressure(sub *Subscription, event *Event) {
+	// First attempt - non-blocking
+	select {
+	case sub.Ch <- *event:
+		return // Success on first try
+	default:
+		// Channel full, apply backpressure with retries
+	}
+
+	// Retry with brief delays to allow channel to drain
+	for retry := 1; retry <= MaxBackpressureRetries; retry++ {
+		time.Sleep(BackpressureRetryDelay)
+		select {
+		case sub.Ch <- *event:
+			log.Printf("[EVENTS] Event delivered after %d retry(ies): type=%s, target=%s, id=%s",
+				retry, event.Type, event.Target, event.ID)
+			return
+		default:
+			// Still full, continue retrying
+		}
+	}
+
+	// All retries exhausted, drop the event
+	dropped := atomic.AddUint64(&b.droppedEvents, 1)
+	log.Printf("[EVENTS] WARNING: Dropped event after %d retries (channel full): type=%s, target=%s, source=%s, id=%s (total dropped: %d)",
+		MaxBackpressureRetries, event.Type, event.Target, event.Source, event.ID, dropped)
 }
 
 // GetPendingEvents retrieves pending events from the store for a specific target
@@ -135,6 +172,21 @@ func (b *Bus) GetPendingEvents(target string, types []EventType) ([]*Event, erro
 	}
 
 	return b.store.GetPending(target, types)
+}
+
+// MarkDelivered marks an event as delivered so it won't be returned by GetPendingEvents
+func (b *Bus) MarkDelivered(eventID string) error {
+	if b.store == nil {
+		return nil
+	}
+
+	return b.store.MarkDelivered(eventID)
+}
+
+// DroppedEventCount returns the total number of events that were dropped
+// due to full subscriber channels
+func (b *Bus) DroppedEventCount() uint64 {
+	return atomic.LoadUint64(&b.droppedEvents)
 }
 
 // matchesTypes checks if an event type matches the subscription filter
