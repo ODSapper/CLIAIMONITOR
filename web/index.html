@@ -3,189 +3,154 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CLITCOMMANDER</title>
+    <title>CLIAIMONITOR - team-coop</title>
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <!-- Notification Banner -->
     <div id="notification-banner" class="notification-banner" style="display: none;">
         <div class="notification-content">
-            <span class="notification-icon">🔔</span>
+            <span class="notification-icon"></span>
             <span id="notification-message" class="notification-message"></span>
-            <button id="notification-dismiss" class="notification-dismiss" title="Dismiss notification">
-                &times;
-            </button>
+            <button id="notification-dismiss" class="notification-dismiss">&times;</button>
         </div>
     </div>
 
     <div id="app">
-        <!-- Header -->
         <header class="header">
-            <h1>CLITCOMMANDER</h1>
+            <h1>CLIAIMONITOR</h1>
             <div class="header-controls">
                 <div class="status-bar">
                     <span class="status-indicator" id="nats-status">NATS: <span class="dot"></span></span>
                     <span class="status-indicator" id="captain-status">Captain: <span class="dot"></span> <span class="status-text">--</span></span>
-                    <span class="status-indicator" id="agent-count">Agents: <span class="count">0</span></span>
                 </div>
-                <button id="mute-toggle" class="btn btn-icon" title="Toggle Sound">
-                    🔔
-                </button>
+                <button id="new-task-btn" class="btn btn-primary">+ New Task</button>
+                <button id="mute-toggle" class="btn btn-icon" title="Toggle Sound">🔔</button>
             </div>
         </header>
 
-        <!-- Session Stats Summary -->
-        <section class="panel stats-panel">
-            <h2>Session Statistics</h2>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <span class="stat-label">Session Uptime</span>
-                    <span id="stat-uptime" class="stat-value">-</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Agents Spawned</span>
-                    <span id="stat-agents-spawned" class="stat-value">0</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Total Tokens</span>
-                    <span id="stat-total-tokens" class="stat-value">0</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Estimated Cost</span>
-                    <span id="stat-total-cost" class="stat-value">$0.00</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Completed Tasks</span>
-                    <span id="stat-completed-tasks" class="stat-value">0</span>
-                </div>
+        <!-- Summary Bar -->
+        <section class="summary-bar">
+            <div class="summary-item">
+                <span class="summary-label">Active</span>
+                <span id="summary-active" class="summary-value">0</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Pending</span>
+                <span id="summary-pending" class="summary-value">0</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">In Review</span>
+                <span id="summary-review" class="summary-value">0</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Tokens Today</span>
+                <span id="summary-tokens" class="summary-value">0</span>
+            </div>
+            <div class="summary-item">
+                <span class="summary-label">Est. Cost</span>
+                <span id="summary-cost" class="summary-value">$0.00</span>
             </div>
         </section>
 
-        <!-- Tab Navigation -->
-        <nav class="tab-navigation">
-            <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
-        </nav>
-
-        <!-- Dashboard View -->
-        <div id="dashboard-view" class="view active">
-        <!-- Activity Log (Top) -->
-        <section class="panel activity-panel">
-            <h2>
-                Activity Log
-                <select id="activity-filter">
-                    <option value="">All Agents</option>
-                </select>
-            </h2>
-            <div id="activity-log" class="activity-log">
-                <!-- Activity entries populated by JS -->
+        <!-- Agent Cards -->
+        <section class="agent-lanes">
+            <div id="agent-cards" class="agent-cards-grid">
+                <!-- Agent cards populated by JS -->
             </div>
         </section>
 
-        <!-- Main Content -->
-        <main class="main-content">
-            <!-- Left Column -->
-            <div class="left-column">
-                <!-- Team Agents -->
-                <section class="panel agents-panel">
-                    <h2>Team Agents</h2>
-                    <div id="agents-grid" class="agents-grid">
-                        <!-- Agent cards populated by JS -->
-                    </div>
-                </section>
+        <!-- Pending Queue -->
+        <section class="panel pending-queue-panel">
+            <h2>Pending Queue <span id="pending-count" class="badge">0</span></h2>
+            <table class="task-table">
+                <thead>
+                    <tr>
+                        <th>Priority</th>
+                        <th>Title</th>
+                        <th>Repo</th>
+                        <th>Status</th>
+                        <th>Age</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="pending-queue-body">
+                    <!-- Tasks populated by JS -->
+                </tbody>
+            </table>
+        </section>
 
-                <!-- Spawn Controls -->
-                <section class="panel controls-panel">
-                    <h2>Spawn Agent</h2>
-                    <div class="spawn-controls">
-                        <select id="agent-type-select">
-                            <option value="">Select agent type...</option>
-                            <option value="SNTGreen">SNTGreen (Go Developer)</option>
-                            <option value="SNTPurple">SNTPurple (Code Auditor)</option>
-                            <option value="SNTRed">SNTRed (Engineer)</option>
-                            <option value="OpusGreen">OpusGreen (Go Developer)</option>
-                            <option value="OpusPurple">OpusPurple (Code Auditor)</option>
-                            <option value="OpusRed">OpusRed (Security)</option>
+        <!-- Bottom Row: Alerts & Metrics -->
+        <div class="bottom-row">
+            <section class="panel alerts-panel">
+                <h2>Alerts <span id="alert-count" class="badge">0</span></h2>
+                <div id="alerts-list" class="alerts-list"></div>
+            </section>
+
+            <section class="panel metrics-panel">
+                <h2>Team Metrics</h2>
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <span class="metric-label">Tasks Completed</span>
+                        <span id="metric-tasks" class="metric-value">0</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Avg Tokens/Task</span>
+                        <span id="metric-tokens-per-task" class="metric-value">0</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Avg Time/Task</span>
+                        <span id="metric-time-per-task" class="metric-value">--</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Review Rejections</span>
+                        <span id="metric-rejections" class="metric-value">0</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- New Task Modal -->
+    <div id="task-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <h2>New Task</h2>
+            <form id="task-form">
+                <div class="form-group">
+                    <label for="task-title">Title</label>
+                    <input type="text" id="task-title" required>
+                </div>
+                <div class="form-group">
+                    <label for="task-description">Description</label>
+                    <textarea id="task-description" rows="3"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="task-priority">Priority</label>
+                        <select id="task-priority">
+                            <option value="1">P1 - Critical</option>
+                            <option value="2">P2 - High</option>
+                            <option value="3" selected>P3 - Standard</option>
+                            <option value="4">P4 - Enhancement</option>
+                            <option value="5">P5 - Normal</option>
+                            <option value="6">P6 - Low</option>
+                            <option value="7">P7 - Background</option>
                         </select>
-                        <select id="agent-count-select">
-                            <option value="1">1 Agent</option>
-                            <option value="2">2 Agents</option>
-                            <option value="3">3 Agents</option>
-                            <option value="4">4 Agents</option>
-                            <option value="5">5 Agents</option>
+                    </div>
+                    <div class="form-group">
+                        <label for="task-repo">Repository</label>
+                        <select id="task-repo">
+                            <option value="">Local</option>
+                            <option value="MAH">MAH</option>
+                            <option value="MSS">MSS</option>
+                            <option value="mss-ai">mss-ai</option>
                         </select>
-                        <select id="project-select">
-                            <option value="">Select project...</option>
-                            <!-- Projects populated by JS -->
-                        </select>
-                        <button id="spawn-btn" class="btn btn-success" disabled>Spawn</button>
                     </div>
-                </section>
-            </div>
-
-            <!-- Right Column -->
-            <div class="right-column">
-                <!-- Alerts -->
-                <section class="panel alerts-panel">
-                    <h2>
-                        Alerts
-                        <span id="alert-count" class="badge">0</span>
-                        <button id="clear-alerts-btn" class="btn btn-small" title="Clear all alerts">Clear All</button>
-                    </h2>
-                    <div id="alerts-list" class="alerts-list">
-                        <!-- Alerts populated by JS -->
-                    </div>
-                </section>
-
-                <!-- Escalations Panel -->
-                <section class="panel escalations-panel">
-                    <h2>
-                        Escalations
-                        <span id="escalation-count" class="badge">0</span>
-                    </h2>
-                    <div id="escalations-list" class="escalations-list">
-                        <!-- Escalations populated by JS -->
-                    </div>
-                </section>
-
-                <!-- Human Input Requests -->
-                <section class="panel human-input-panel">
-                    <h2>
-                        Human Input Required
-                        <span id="human-input-count" class="badge">0</span>
-                    </h2>
-                    <div id="human-input-list" class="human-input-list">
-                        <!-- Human input requests populated by JS -->
-                    </div>
-                </section>
-
-                <!-- Metrics -->
-                <section class="panel metrics-panel">
-                    <h2>Metrics & Thresholds</h2>
-                    <div class="thresholds-form">
-                        <div class="threshold-row">
-                            <label>Failed Tests Max:</label>
-                            <input type="number" id="threshold-failed-tests" min="0" value="5">
-                        </div>
-                        <div class="threshold-row">
-                            <label>Idle Time (sec):</label>
-                            <input type="number" id="threshold-idle-time" min="0" value="600">
-                        </div>
-                        <div class="threshold-row">
-                            <label>Token Usage Max:</label>
-                            <input type="number" id="threshold-tokens" min="0" value="100000">
-                        </div>
-                        <div class="threshold-row">
-                            <label>Consecutive Rejects:</label>
-                            <input type="number" id="threshold-rejects" min="0" value="3">
-                        </div>
-                        <div class="threshold-actions">
-                            <button id="save-thresholds" class="btn btn-primary">Save Thresholds</button>
-                            <button id="reset-metrics" class="btn btn-warning">Reset History</button>
-                        </div>
-                    </div>
-                </section>
-            </div>
-        </main>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn" onclick="closeTaskModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Task</button>
+                </div>
+            </form>
         </div>
     </div>
 
