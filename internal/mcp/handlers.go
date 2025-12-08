@@ -3,6 +3,7 @@ package mcp
 import (
 	"time"
 
+	"github.com/CLIAIMONITOR/internal/events"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/google/uuid"
 )
@@ -41,6 +42,16 @@ type ToolCallbacks struct {
 
 	// Skill Router callbacks (replaces PowerShell heartbeat)
 	OnSkillQuery func(agentID, query string, limit int) (interface{}, error)
+
+	// Captain context callbacks (for session persistence)
+	OnSaveContext   func(key, value string, priority, maxAgeHours int) (interface{}, error)
+	OnGetContext    func(key string) (interface{}, error)
+	OnGetAllContext func() (interface{}, error)
+	OnLogSession    func(sessionID, eventType, summary, details, agentID string) (interface{}, error)
+
+	// Captain messages callbacks (human -> Captain chat)
+	OnGetCaptainMessages   func() (interface{}, error)
+	OnMarkMessagesRead     func(ids []string) (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -683,4 +694,218 @@ func registerSkillRouterTools(s *Server, callbacks ToolCallbacks) {
 			return callbacks.OnSkillQuery(agentID, query, limit)
 		},
 	})
+
+	// Register Captain context tools
+	registerContextTools(s, callbacks)
+}
+
+// registerContextTools adds Captain context persistence tools
+func registerContextTools(s *Server, callbacks ToolCallbacks) {
+	// save_context - Save context to memory.db for persistence across restarts
+	s.RegisterTool(ToolDefinition{
+		Name:        "save_context",
+		Description: "Save context to memory.db for persistence across restarts. Use this to remember important information between sessions.",
+		Parameters: map[string]ParameterDef{
+			"key":           {Type: "string", Description: "Context key (e.g., 'current_focus', 'recent_work', 'pending_tasks')", Required: true},
+			"value":         {Type: "string", Description: "The context content to save", Required: true},
+			"priority":      {Type: "number", Description: "Priority 1-10, higher = more important to preserve (default: 5)", Required: false},
+			"max_age_hours": {Type: "number", Description: "Auto-expire after this many hours, 0 = never expire (default: 24)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSaveContext == nil {
+				return map[string]interface{}{"error": "Context persistence not configured"}, nil
+			}
+			key, _ := params["key"].(string)
+			value, _ := params["value"].(string)
+			priority := 5
+			if p, ok := params["priority"].(float64); ok {
+				priority = int(p)
+			}
+			maxAgeHours := 24
+			if m, ok := params["max_age_hours"].(float64); ok {
+				maxAgeHours = int(m)
+			}
+			return callbacks.OnSaveContext(key, value, priority, maxAgeHours)
+		},
+	})
+
+	// get_context - Get a specific context entry
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_context",
+		Description: "Get a specific context entry from memory.db.",
+		Parameters: map[string]ParameterDef{
+			"key": {Type: "string", Description: "Context key to retrieve", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetContext == nil {
+				return map[string]interface{}{"error": "Context persistence not configured"}, nil
+			}
+			key, _ := params["key"].(string)
+			return callbacks.OnGetContext(key)
+		},
+	})
+
+	// get_all_context - Get all saved context entries
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_all_context",
+		Description: "Get all saved context entries from memory.db. Use this at startup to restore session state.",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetAllContext == nil {
+				return map[string]interface{}{"error": "Context persistence not configured"}, nil
+			}
+			return callbacks.OnGetAllContext()
+		},
+	})
+
+	// log_session - Log a significant event to the session log
+	s.RegisterTool(ToolDefinition{
+		Name:        "log_session",
+		Description: "Log a significant event to the session log for historical tracking.",
+		Parameters: map[string]ParameterDef{
+			"event_type": {Type: "string", Description: "Event type: startup, command, spawn, decision, error, shutdown", Required: true},
+			"summary":    {Type: "string", Description: "Brief summary of the event", Required: true},
+			"details":    {Type: "string", Description: "Optional detailed information", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnLogSession == nil {
+				return map[string]interface{}{"error": "Session logging not configured"}, nil
+			}
+			eventType, _ := params["event_type"].(string)
+			summary, _ := params["summary"].(string)
+			details, _ := params["details"].(string)
+			// Use agent ID as session ID
+			return callbacks.OnLogSession(agentID, eventType, summary, details, agentID)
+		},
+	})
+
+	// get_captain_messages - Captain polls for messages from human
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_captain_messages",
+		Description: "Get unread messages from human sent via dashboard chat. Captain should poll this periodically.",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetCaptainMessages == nil {
+				return map[string]interface{}{"messages": []interface{}{}, "count": 0}, nil
+			}
+			return callbacks.OnGetCaptainMessages()
+		},
+	})
+
+	// mark_messages_read - Captain marks messages as read after processing
+	s.RegisterTool(ToolDefinition{
+		Name:        "mark_messages_read",
+		Description: "Mark captain messages as read after processing them.",
+		Parameters: map[string]ParameterDef{
+			"message_ids": {Type: "array", Description: "Array of message IDs to mark as read", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnMarkMessagesRead == nil {
+				return map[string]interface{}{"error": "Message marking not configured"}, nil
+			}
+			// Extract message IDs from params
+			var ids []string
+			if idsRaw, ok := params["message_ids"].([]interface{}); ok {
+				for _, id := range idsRaw {
+					if s, ok := id.(string); ok {
+						ids = append(ids, s)
+					}
+				}
+			}
+			return callbacks.OnMarkMessagesRead(ids)
+		},
+	})
+}
+
+// RegisterWaitForEventsTool registers the wait_for_events tool for real-time event polling
+func RegisterWaitForEventsTool(s *Server, bus *events.Bus) {
+	s.RegisterTool(ToolDefinition{
+		Name:        "wait_for_events",
+		Description: "Wait for events to be published to this agent. Blocks until an event arrives or timeout occurs. Use this for real-time notifications.",
+		Parameters: map[string]ParameterDef{
+			"timeout_seconds": {
+				Type:        "number",
+				Description: "Timeout in seconds (default: 60, min: 1, max: 300)",
+				Required:    false,
+			},
+			"event_types": {
+				Type:        "array",
+				Description: "Optional array of event types to filter (e.g., ['message', 'alert', 'task']). If not provided, all event types are received.",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			// Parse timeout with clamping
+			timeout := 60.0 // Default 60 seconds
+			if t, ok := params["timeout_seconds"].(float64); ok {
+				timeout = t
+			}
+
+			// Clamp timeout between 1 and 300 seconds
+			if timeout < 1 {
+				timeout = 1
+			}
+			if timeout > 300 {
+				timeout = 300
+			}
+
+			timeoutDuration := time.Duration(timeout) * time.Second
+
+			// Parse event types filter
+			var eventTypes []events.EventType
+			if typesRaw, ok := params["event_types"].([]interface{}); ok {
+				for _, t := range typesRaw {
+					if typeStr, ok := t.(string); ok {
+						eventTypes = append(eventTypes, events.EventType(typeStr))
+					}
+				}
+			}
+
+			// Check for pending events first (replay from store)
+			if pending, err := bus.GetPendingEvents(agentID, eventTypes); err == nil && len(pending) > 0 {
+				// Return the first pending event
+				firstEvent := pending[0]
+				return map[string]interface{}{
+					"status":        "event_received",
+					"event":         eventToMap(firstEvent),
+					"pending_count": len(pending) - 1,
+				}, nil
+			}
+
+			// Subscribe to bus for real-time events
+			ch := bus.Subscribe(agentID, eventTypes)
+			defer bus.Unsubscribe(agentID, ch)
+
+			// Wait for event or timeout
+			select {
+			case event := <-ch:
+				// Event received
+				return map[string]interface{}{
+					"status":        "event_received",
+					"event":         eventToMap(&event),
+					"pending_count": 0,
+				}, nil
+
+			case <-time.After(timeoutDuration):
+				// Timeout
+				return map[string]interface{}{
+					"status":  "timeout",
+					"message": "No events received within timeout period",
+				}, nil
+			}
+		},
+	})
+}
+
+// eventToMap converts an Event to a map for JSON serialization
+func eventToMap(event *events.Event) map[string]interface{} {
+	return map[string]interface{}{
+		"id":         event.ID,
+		"type":       string(event.Type),
+		"source":     event.Source,
+		"target":     event.Target,
+		"priority":   event.Priority,
+		"payload":    event.Payload,
+		"created_at": event.CreatedAt.Format(time.RFC3339),
+	}
 }
