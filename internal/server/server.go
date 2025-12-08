@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -19,12 +20,14 @@ import (
 	"github.com/CLIAIMONITOR/internal/metrics"
 	natslib "github.com/CLIAIMONITOR/internal/nats"
 	"github.com/CLIAIMONITOR/internal/notifications"
+	"github.com/CLIAIMONITOR/internal/notifications/external"
 	"github.com/CLIAIMONITOR/internal/persistence"
 	"github.com/CLIAIMONITOR/internal/router"
 	"github.com/CLIAIMONITOR/internal/tasks"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/CLIAIMONITOR/web"
 	"github.com/gorilla/mux"
+	"gopkg.in/yaml.v3"
 )
 
 // Server is the main HTTP server
@@ -53,8 +56,9 @@ type Server struct {
 	taskStore *tasks.Store
 
 	// Event bus for real-time notifications
-	eventBus   *events.Bus
-	eventStore *events.SQLiteStore
+	eventBus     *events.Bus
+	eventStore   *events.SQLiteStore
+	notifyRouter *notifications.Router
 
 	// NATS messaging
 	natsServer *natslib.EmbeddedServer
@@ -74,6 +78,32 @@ type Server struct {
 	// Cleanup service context
 	cleanupCtx    context.Context
 	cleanupCancel context.CancelFunc
+}
+
+// loadNotificationConfig loads notification configuration from YAML file
+func loadNotificationConfig(configPath string) *types.NotificationsConfig {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		log.Printf("[NOTIFY] Config not found at %s, notifications disabled", configPath)
+		return nil
+	}
+
+	var config types.NotificationsConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		log.Printf("[NOTIFY] Failed to parse config: %v", err)
+		return nil
+	}
+
+	return &config
+}
+
+// parseEventTypes converts string event types to events.EventType
+func parseEventTypes(types []string) []events.EventType {
+	result := make([]events.EventType, 0, len(types))
+	for _, t := range types {
+		result = append(result, events.EventType(t))
+	}
+	return result
 }
 
 // NewServer creates a new server instance
@@ -207,6 +237,63 @@ func NewServer(
 	// Assign to server struct
 	s.eventBus = eventBus
 	s.eventStore = eventStore
+
+	// Initialize notification router
+	notifyRouter := notifications.NewRouter(nil)
+
+	// Load notification config
+	configPath := filepath.Join(basePath, "configs", "notifications.yaml")
+	if notifyConfig := loadNotificationConfig(configPath); notifyConfig != nil {
+		if notifyConfig.Slack.Enabled && notifyConfig.Slack.WebhookURL != "" {
+			notifyRouter.AddChannel(external.NewSlackNotifier(external.SlackConfig{
+				WebhookURL:  notifyConfig.Slack.WebhookURL,
+				Channel:     notifyConfig.Slack.Channel,
+				Username:    notifyConfig.Slack.Username,
+				IconEmoji:   notifyConfig.Slack.IconEmoji,
+				EventTypes:  parseEventTypes(notifyConfig.Slack.EventTypes),
+				MinPriority: notifyConfig.Slack.MinPriority,
+			}))
+			log.Printf("[NOTIFY] Slack channel enabled")
+		}
+		if notifyConfig.Discord.Enabled && notifyConfig.Discord.WebhookURL != "" {
+			notifyRouter.AddChannel(external.NewDiscordNotifier(external.DiscordConfig{
+				WebhookURL:  notifyConfig.Discord.WebhookURL,
+				Username:    notifyConfig.Discord.Username,
+				AvatarURL:   notifyConfig.Discord.AvatarURL,
+				EventTypes:  parseEventTypes(notifyConfig.Discord.EventTypes),
+				MinPriority: notifyConfig.Discord.MinPriority,
+			}))
+			log.Printf("[NOTIFY] Discord channel enabled")
+		}
+		if notifyConfig.Email.Enabled && notifyConfig.Email.SMTPHost != "" {
+			notifyRouter.AddChannel(external.NewEmailNotifier(external.EmailConfig{
+				SMTPHost:    notifyConfig.Email.SMTPHost,
+				SMTPPort:    notifyConfig.Email.SMTPPort,
+				Username:    notifyConfig.Email.Username,
+				Password:    notifyConfig.Email.Password,
+				From:        notifyConfig.Email.From,
+				To:          notifyConfig.Email.To,
+				EventTypes:  parseEventTypes(notifyConfig.Email.EventTypes),
+				MinPriority: notifyConfig.Email.MinPriority,
+			}))
+			log.Printf("[NOTIFY] Email channel enabled")
+		}
+	}
+	log.Printf("[NOTIFY] Router initialized with %d channels", len(notifyRouter.GetChannels()))
+
+	// Assign to server struct
+	s.notifyRouter = notifyRouter
+
+	// Start notification routing goroutine
+	if s.eventBus != nil && s.notifyRouter != nil {
+		go func() {
+			sub := s.eventBus.Subscribe("all", nil)
+			log.Printf("[NOTIFY] Started routing events to notification channels")
+			for event := range sub {
+				s.notifyRouter.Route(event)
+			}
+		}()
+	}
 
 	s.setupRoutes()
 	s.setupMCPCallbacks()
