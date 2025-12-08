@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
@@ -15,8 +17,90 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// AllowedOrigins contains the list of allowed WebSocket origins
+// Default: localhost only. Can be configured via CLIAIMONITOR_ALLOWED_ORIGINS env var
+// Example: CLIAIMONITOR_ALLOWED_ORIGINS=http://myhost.local:3000,https://dashboard.example.com
+var allowedOrigins = initAllowedOrigins()
+
+func initAllowedOrigins() []string {
+	// Always allow localhost on common ports
+	defaults := []string{
+		"http://localhost:3000",
+		"http://localhost:8080",
+		"http://127.0.0.1:3000",
+		"http://127.0.0.1:8080",
+	}
+
+	// Add origins from environment variable
+	envOrigins := os.Getenv("CLIAIMONITOR_ALLOWED_ORIGINS")
+	if envOrigins != "" {
+		for _, origin := range strings.Split(envOrigins, ",") {
+			origin = strings.TrimSpace(origin)
+			if origin != "" {
+				defaults = append(defaults, origin)
+			}
+		}
+	}
+
+	return defaults
+}
+
+// checkWebSocketOrigin validates the Origin header for WebSocket connections
+// to prevent CSRF attacks. Allows localhost origins and configured domains.
+func checkWebSocketOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+
+	// No origin header means same-origin request (browser doesn't send Origin
+	// for same-origin requests in some cases)
+	if origin == "" {
+		return true
+	}
+
+	// Parse the origin URL
+	originURL, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	// Allow all localhost origins (any port)
+	host := originURL.Hostname()
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+
+	// Check against configured allowed origins
+	for _, allowed := range allowedOrigins {
+		if origin == allowed {
+			return true
+		}
+
+		// Parse allowed origin for more flexible matching
+		allowedURL, err := url.Parse(allowed)
+		if err != nil {
+			continue
+		}
+
+		// Match host (without port requirement if port not specified in allowed)
+		if originURL.Hostname() == allowedURL.Hostname() {
+			// If allowed origin has a port, require exact match
+			if allowedURL.Port() != "" {
+				if originURL.Port() == allowedURL.Port() && originURL.Scheme == allowedURL.Scheme {
+					return true
+				}
+			} else {
+				// No port in allowed origin, just match host and scheme
+				if originURL.Scheme == allowedURL.Scheme {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: checkWebSocketOrigin,
 }
 
 // handleWebSocket upgrades to WebSocket and manages connection
@@ -321,6 +405,31 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check NATS connection
+	natsConnected := false
+	if s.natsClient != nil {
+		natsConnected = s.natsClient.IsConnected()
+	}
+
+	// Check memory database health
+	memoryHealth := map[string]interface{}{
+		"connected": false,
+	}
+	if s.memDB != nil {
+		if health, err := s.memDB.Health(); err == nil {
+			memoryHealth = map[string]interface{}{
+				"connected":         health.Connected,
+				"schema_version":    health.SchemaVersion,
+				"agent_count":       health.AgentCount,
+				"task_count":        health.TaskCount,
+				"learning_count":    health.LearningCount,
+				"context_count":     health.ContextCount,
+				"last_context_save": health.LastContextSave,
+				"db_size_bytes":     health.DBSizeBytes,
+			}
+		}
+	}
+
 	health := map[string]interface{}{
 		"status":         "ok",
 		"timestamp":      time.Now().UTC().Format(time.RFC3339),
@@ -336,6 +445,9 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 			"total":  len(state.Alerts),
 			"active": activeAlerts,
 		},
+		"nats_connected":    natsConnected,
+		"captain_connected": state.CaptainConnected,
+		"memory_db":         memoryHealth,
 	}
 
 	s.respondJSON(w, health)
@@ -578,9 +690,10 @@ func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request
 		"kill_agent":  true,
 		"pause":       true,
 		"resume":      true,
+		"message":     true, // Allow human messages to Captain
 	}
 	if !validTypes[req.Type] {
-		s.respondError(w, http.StatusBadRequest, "Invalid command type (must be spawn_agent, kill_agent, pause, or resume)")
+		s.respondError(w, http.StatusBadRequest, "Invalid command type (must be spawn_agent, kill_agent, pause, resume, or message)")
 		return
 	}
 
@@ -594,13 +707,26 @@ func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request
 	commandMsg := natslib.CaptainCommandMessage{
 		Type:    req.Type,
 		Payload: req.Payload,
-		From:    "server",
+		From:    "human",
 	}
 
 	// Publish to captain.commands subject
 	if err := s.natsClient.PublishJSON(natslib.SubjectCaptainCommands, commandMsg); err != nil {
 		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to publish command: %v", err))
 		return
+	}
+
+	// For message type, also log as activity
+	if req.Type == "message" {
+		if text, ok := req.Payload["text"].(string); ok {
+			s.store.AddActivity(&types.ActivityLog{
+				ID:        fmt.Sprintf("activity-%d", time.Now().UnixNano()),
+				AgentID:   "Human",
+				Action:    "message_to_captain",
+				Details:   text,
+				Timestamp: time.Now(),
+			})
+		}
 	}
 
 	s.respondJSON(w, map[string]interface{}{
@@ -668,4 +794,205 @@ func (s *Server) handleCaptainTerminalRestart(w http.ResponseWriter, r *http.Req
 		"success": true,
 		"message": "Captain restart initiated",
 	})
+}
+
+// Captain Context Handlers
+
+// handleGetCaptainContext returns all Captain context entries
+func (s *Server) handleGetCaptainContext(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	contexts, err := s.memDB.GetAllContext()
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get context: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"contexts": contexts,
+		"count":    len(contexts),
+	})
+}
+
+// handleSetCaptainContext sets a context entry
+func (s *Server) handleSetCaptainContext(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	var req struct {
+		Key         string `json:"key"`
+		Value       string `json:"value"`
+		Priority    int    `json:"priority"`
+		MaxAgeHours int    `json:"max_age_hours"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.Key == "" {
+		s.respondError(w, http.StatusBadRequest, "Key is required")
+		return
+	}
+
+	// Default priority to 5 if not specified
+	if req.Priority == 0 {
+		req.Priority = 5
+	}
+
+	if err := s.memDB.SetContext(req.Key, req.Value, req.Priority, req.MaxAgeHours); err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to set context: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"success": true,
+		"key":     req.Key,
+	})
+}
+
+// handleDeleteCaptainContext deletes a context entry
+func (s *Server) handleDeleteCaptainContext(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	vars := mux.Vars(r)
+	key := vars["key"]
+
+	if err := s.memDB.DeleteContext(key); err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete context: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"success": true,
+		"key":     key,
+	})
+}
+
+// handleGetCaptainContextSummary returns formatted context for Captain startup
+func (s *Server) handleGetCaptainContextSummary(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	// Clean expired context first
+	cleaned, _ := s.memDB.CleanExpiredContext()
+
+	contexts, err := s.memDB.GetAllContext()
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get context: %v", err))
+		return
+	}
+
+	// Build formatted summary
+	summary := ""
+	if len(contexts) > 0 {
+		summary = "=== CAPTAIN CONTEXT (from memory.db) ===\n\n"
+		for _, ctx := range contexts {
+			summary += fmt.Sprintf("[%s] (priority: %d)\n%s\n\n", ctx.Key, ctx.Priority, ctx.Value)
+		}
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"summary":         summary,
+		"context_count":   len(contexts),
+		"expired_cleaned": cleaned,
+	})
+}
+
+// handleGetMetricsByModel returns aggregated metrics per model
+func (s *Server) handleGetMetricsByModel(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	modelFilter := r.URL.Query().Get("model")
+
+	metrics, err := s.memDB.GetMetricsByModel(modelFilter)
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get metrics: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"metrics": metrics,
+		"count":   len(metrics),
+	})
+}
+
+// handleGetMetricsByAgentType returns aggregated metrics by agent type (captain, sgt, spawned_window, subagent)
+func (s *Server) handleGetMetricsByAgentType(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	metrics, err := s.memDB.GetMetricsByAgentType()
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get metrics: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"metrics": metrics,
+		"count":   len(metrics),
+	})
+}
+
+// handleGetMetricsByAgent returns per-agent metrics breakdown
+func (s *Server) handleGetMetricsByAgent(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	metrics, err := s.memDB.GetMetricsByAgent()
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get metrics: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"metrics": metrics,
+		"count":   len(metrics),
+	})
+}
+
+// handleCaptainHealth returns Captain health status
+func (s *Server) handleCaptainHealth(w http.ResponseWriter, r *http.Request) {
+	natsConnected := false
+	if s.natsClient != nil {
+		natsConnected = s.natsClient.IsConnected()
+	}
+
+	// Check memory database health
+	memoryConnected := false
+	memorySchemaVersion := 0
+	if s.memDB != nil {
+		if health, err := s.memDB.Health(); err == nil {
+			memoryConnected = health.Connected
+			memorySchemaVersion = health.SchemaVersion
+		}
+	}
+
+	response := map[string]interface{}{
+		"nats_connected":        natsConnected,
+		"captain_connected":     s.store.GetState().CaptainConnected,
+		"status":                s.store.GetState().CaptainStatus,
+		"memory_db_connected":   memoryConnected,
+		"memory_schema_version": memorySchemaVersion,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
