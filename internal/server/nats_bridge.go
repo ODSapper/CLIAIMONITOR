@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/CLIAIMONITOR/internal/events"
 	natslib "github.com/CLIAIMONITOR/internal/nats"
 	"github.com/CLIAIMONITOR/internal/types"
 )
@@ -28,6 +29,7 @@ func NewNATSBridge(s *Server, client *natslib.Client) *NATSBridge {
 		OnStopApproval:      bridge.handleStopApproval,
 		OnShutdownNotify:    bridge.handleShutdownNotify,
 		OnCaptainStatus:     bridge.handleCaptainStatus,
+		OnCaptainCommand:    bridge.handleCaptainCommand,
 		OnEscalationForward: bridge.handleEscalationForward,
 		OnSystemBroadcast:   bridge.handleSystemBroadcast,
 	}
@@ -66,6 +68,22 @@ func (b *NATSBridge) handleHeartbeat(agentID, status, task, configName, projectP
 	// Update database status
 	if b.server.memDB != nil {
 		b.server.memDB.UpdateStatus(agentID, status, task)
+	}
+
+	// Publish agent signals to event bus
+	if b.server.eventBus != nil && (status == "blocked" || status == "error") {
+		event := events.NewEvent(
+			events.EventAgentSignal,
+			agentID,
+			"Captain",
+			events.PriorityHigh,
+			map[string]interface{}{
+				"signal": status,
+				"task":   task,
+			},
+		)
+		b.server.eventBus.Publish(event)
+		log.Printf("[NATS-BRIDGE] Published agent signal to bus: %s status=%s", agentID, status)
 	}
 
 	b.server.broadcastState()
@@ -173,6 +191,72 @@ func (b *NATSBridge) handleCaptainStatus(status, currentOp string, queueSize int
 
 	// Mark Captain as connected when we receive status updates
 	b.server.store.SetCaptainConnected(true)
+
+	// Broadcast updated state to dashboard
+	b.server.broadcastState()
+	return nil
+}
+
+// handleCaptainCommand processes commands from dashboard to Captain
+func (b *NATSBridge) handleCaptainCommand(cmdType string, payload map[string]interface{}, from string) error {
+	log.Printf("[NATS-BRIDGE] Captain command received: type=%s from=%s", cmdType, from)
+
+	// Extract text from payload for message types
+	text := ""
+	if payload != nil {
+		if t, ok := payload["text"].(string); ok {
+			text = t
+		}
+	}
+
+	// Create CaptainMessage and store it
+	msg := &types.CaptainMessage{
+		ID:        fmt.Sprintf("capmsg-%d", time.Now().UnixNano()),
+		Type:      cmdType,
+		Text:      text,
+		Payload:   payload,
+		From:      from,
+		CreatedAt: time.Now(),
+		Read:      false,
+	}
+
+	b.server.store.AddCaptainMessage(msg)
+	log.Printf("[NATS-BRIDGE] Stored captain message: id=%s type=%s", msg.ID, msg.Type)
+
+	// Publish to event bus for real-time delivery
+	if b.server.eventBus != nil {
+		event := events.NewEvent(
+			events.EventMessage,
+			from,
+			"Captain",
+			events.PriorityNormal,
+			map[string]interface{}{
+				"message_id": msg.ID,
+				"type":       cmdType,
+				"text":       text,
+				"payload":    payload,
+			},
+		)
+		b.server.eventBus.Publish(event)
+		log.Printf("[NATS-BRIDGE] Published event to bus: %s", event.ID)
+	}
+
+	// Push notify Captain via MCP SSE
+	if b.server.mcp != nil {
+		notification := map[string]interface{}{
+			"id":         msg.ID,
+			"type":       msg.Type,
+			"text":       msg.Text,
+			"payload":    msg.Payload,
+			"from":       msg.From,
+			"created_at": msg.CreatedAt,
+		}
+		if err := b.server.mcp.NotifyAgent("Captain", "captain/message", notification); err != nil {
+			log.Printf("[NATS-BRIDGE] Failed to notify Captain via MCP: %v", err)
+		} else {
+			log.Printf("[NATS-BRIDGE] Notified Captain via MCP: id=%s", msg.ID)
+		}
+	}
 
 	// Broadcast updated state to dashboard
 	b.server.broadcastState()
