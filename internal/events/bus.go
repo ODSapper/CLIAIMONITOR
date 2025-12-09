@@ -100,7 +100,10 @@ func (b *Bus) Unsubscribe(target string, ch <-chan Event) {
 func (b *Bus) Publish(event *Event) {
 	// Persist to store if available
 	if b.store != nil {
-		_ = b.store.Save(event) // Ignore errors for now
+		if err := b.store.Save(event); err != nil {
+			log.Printf("[EVENTS] ERROR: Failed to persist event to store: type=%s, target=%s, id=%s, error=%v",
+				event.Type, event.Target, event.ID, err)
+		}
 	}
 
 	b.mu.RLock()

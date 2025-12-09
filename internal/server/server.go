@@ -810,13 +810,15 @@ func (s *Server) setupMCPCallbacks() {
 
 			// Publish to event bus so Captain's wait_for_events receives it
 			if s.eventBus != nil {
-				s.eventBus.Publish(&events.Event{
+				event := &events.Event{
 					Type:      events.EventType("agent_signal"),
 					Source:    agentID,
 					Target:    "Captain",
 					Payload:   map[string]interface{}{"signal": signal, "context": context},
 					CreatedAt: time.Now(),
-				})
+				}
+				s.eventBus.Publish(event)
+				log.Printf("[SERVER] Published agent_signal event: agent=%s, signal=%s, target=Captain", agentID, signal)
 			}
 
 			s.broadcastState()
