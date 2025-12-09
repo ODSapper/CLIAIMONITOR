@@ -31,6 +31,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// MaxReviewCycles is the maximum number of review-rework cycles before escalation
+	MaxReviewCycles = 3
+)
+
 // Server is the main HTTP server
 type Server struct {
 	httpServer *http.Server
@@ -1235,13 +1240,59 @@ func (s *Server) setupMCPCallbacks() {
 		},
 
 		OnSubmitReviewResult: func(agentID string, assignmentID int64, approved bool, feedback string) (interface{}, error) {
-			status := "approved"
-			if !approved {
-				status = "rejected"
+			// Get current assignment to check review_attempt count
+			assignment, err := s.memDB.GetAssignment(assignmentID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get assignment: %w", err)
+			}
+			if assignment == nil {
+				return nil, fmt.Errorf("assignment %d not found", assignmentID)
 			}
 
-			if err := s.memDB.CompleteAssignment(assignmentID, status, feedback); err != nil {
-				return nil, err
+			status := "approved"
+			message := "Review complete. Captain will process result."
+
+			if !approved {
+				// Check if we've exceeded max review cycles
+				if assignment.ReviewAttempt >= MaxReviewCycles {
+					// Escalate to human
+					status = "escalated"
+					message = fmt.Sprintf("ESCALATED: Assignment exceeded %d review cycles. Human review required.", MaxReviewCycles)
+
+					// Create escalation for Captain
+					s.store.AddActivity(&types.ActivityLog{
+						ID:        fmt.Sprintf("escalation-%d", time.Now().UnixNano()),
+						AgentID:   agentID,
+						Action:    "escalated_for_human_review",
+						Details:   fmt.Sprintf("Assignment %d escalated after %d failed reviews. Last feedback: %s", assignmentID, assignment.ReviewAttempt, feedback),
+						Timestamp: time.Now(),
+					})
+
+					// Mark as escalated
+					if err := s.memDB.CompleteAssignment(assignmentID, status, feedback); err != nil {
+						return nil, err
+					}
+
+					log.Printf("[REVIEW-ESCALATION] Assignment %d exceeded %d review cycles, escalating to human", assignmentID, MaxReviewCycles)
+				} else {
+					// Request rework - increments review_attempt and sets status to "rework"
+					status = "rework"
+					message = fmt.Sprintf("Code needs rework (attempt %d/%d). Assignment returned to coder.", assignment.ReviewAttempt+1, MaxReviewCycles)
+
+					if err := s.memDB.RequestRework(assignmentID, feedback); err != nil {
+						return nil, err
+					}
+
+					log.Printf("[REVIEW-REJECTED] Assignment %d needs rework, attempt %d/%d", assignmentID, assignment.ReviewAttempt+1, MaxReviewCycles)
+				}
+			} else {
+				// Approved
+				log.Printf("[REVIEW-APPROVED] Assignment %d approved after %d attempt(s)", assignmentID, assignment.ReviewAttempt)
+
+				// Mark as approved
+				if err := s.memDB.CompleteAssignment(assignmentID, status, feedback); err != nil {
+					return nil, err
+				}
 			}
 
 			// Log activity
@@ -1249,17 +1300,20 @@ func (s *Server) setupMCPCallbacks() {
 				ID:        fmt.Sprintf("review-result-%d", time.Now().UnixNano()),
 				AgentID:   agentID,
 				Action:    "submitted_review_result",
-				Details:   fmt.Sprintf("Assignment %d reviewed: %s", assignmentID, status),
+				Details:   fmt.Sprintf("Assignment %d reviewed: %s (attempt %d)", assignmentID, status, assignment.ReviewAttempt),
 				Timestamp: time.Now(),
 			})
 
 			s.broadcastState()
 
 			return map[string]interface{}{
-				"status":        status,
-				"assignment_id": assignmentID,
-				"feedback":      feedback,
-				"message":       "Review complete. Captain will process result.",
+				"status":         status,
+				"assignment_id":  assignmentID,
+				"feedback":       feedback,
+				"review_attempt": assignment.ReviewAttempt,
+				"max_cycles":     MaxReviewCycles,
+				"escalated":      status == "escalated",
+				"message":        message,
 			}, nil
 		},
 

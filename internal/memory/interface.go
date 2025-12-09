@@ -64,8 +64,59 @@ type MemoryDB interface {
 	// Learning memory access
 	AsLearningDB() LearningDB
 
+	// Captain context operations
+	SetContext(key, value string, priority int, maxAgeHours int) error
+	GetContext(key string) (*CaptainContext, error)
+	GetAllContext() ([]*CaptainContext, error)
+	GetContextByPriority(minPriority int) ([]*CaptainContext, error)
+	DeleteContext(key string) error
+	CleanExpiredContext() (int, error)
+
+	// Captain session log
+	LogSessionEvent(sessionID, eventType, summary, details, agentID string) error
+	GetSessionLog(sessionID string, limit int) ([]*SessionLogEntry, error)
+	GetRecentSessionLog(limit int) ([]*SessionLogEntry, error)
+
+	// Metrics history
+	RecordMetricsHistory(agentID, model string, tokensUsed int64, estimatedCost float64, taskID string) error
+
+	// Metrics analysis
+	GetMetricsByModel(modelFilter string) ([]*ModelMetrics, error)
+	GetMetricsByAgentType() ([]*AgentTypeMetrics, error)
+	GetMetricsByAgent() ([]*AgentMetricsSummary, error)
+	RecordMetricsWithType(agentID, model, agentType, parentAgent string, tokensUsed int64, estimatedCost float64, taskID string, assignmentID *int64) error
+
+	// Task assignments (SGT workflow)
+	CreateAssignment(assignment *TaskAssignment) error
+	GetAssignment(id int64) (*TaskAssignment, error)
+	GetAssignmentsByTask(taskID string) ([]*TaskAssignment, error)
+	GetAssignmentsByAgent(agentID string, status string) ([]*TaskAssignment, error)
+	GetActiveAssignment(agentID string) (*TaskAssignment, error)
+	UpdateAssignmentStatus(id int64, status string) error
+	CompleteAssignment(id int64, status string, feedback string) error
+	RequestRework(id int64, feedback string) error // Increment review_attempt, set status to "rework"
+	AddWorker(worker *AssignmentWorker) error
+	UpdateWorkerStatus(id int64, status, result string, tokensUsed int64) error
+	GetWorkersByAssignment(assignmentID int64) ([]*AssignmentWorker, error)
+
+	// Health check
+	Health() (*HealthStatus, error)
+
 	// Lifecycle
 	Close() error
+}
+
+// HealthStatus represents the health of the memory database
+type HealthStatus struct {
+	Connected       bool   `json:"connected"`
+	SchemaVersion   int    `json:"schema_version"`
+	AgentCount      int    `json:"agent_count"`
+	TaskCount       int    `json:"task_count"`
+	LearningCount   int    `json:"learning_count"`
+	ContextCount    int    `json:"context_count"`
+	DBPath          string `json:"db_path"`
+	DBSizeBytes     int64  `json:"db_size_bytes"`
+	LastContextSave string `json:"last_context_save,omitempty"`
 }
 
 // Repo represents a discovered repository
@@ -182,3 +233,78 @@ type Deployment struct {
 	AgentConfigs   string // JSON array
 	Result         string
 }
+
+// CaptainContext stores key-value context for Captain resumption
+type CaptainContext struct {
+	ID          int64
+	Key         string
+	Value       string
+	Priority    int       // 1-10, higher = more important
+	MaxAgeHours int       // Auto-expire after this many hours (0 = never)
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// SessionLogEntry records significant Captain events
+type SessionLogEntry struct {
+	ID        int64
+	SessionID string
+	EventType string // 'startup', 'command', 'spawn', 'decision', 'error', 'shutdown'
+	Summary   string
+	Details   string
+	AgentID   string
+	CreatedAt time.Time
+}
+
+// ModelMetrics represents aggregated metrics per model from the metrics_by_model view
+type ModelMetrics struct {
+	Model              string  `json:"model"`
+	ReportCount        int     `json:"report_count"`
+	TotalTokens        int64   `json:"total_tokens"`
+	TotalCost          float64 `json:"total_cost"`
+	AvgTokensPerReport float64 `json:"avg_tokens_per_report"`
+}
+
+// TaskAssignment tracks task handoffs between Captain and SGTs
+type TaskAssignment struct {
+	ID             int64
+	TaskID         string
+	AssignedTo     string
+	AssignedBy     string
+	AssignmentType string
+	Status         string
+	BranchName     string
+	ReviewFeedback string
+	ReviewAttempt  int
+	WorkerCount    int
+	StartedAt      *time.Time
+	CompletedAt    *time.Time
+	CreatedAt      time.Time
+}
+
+// AssignmentWorker tracks sub-agent work within an assignment
+type AssignmentWorker struct {
+	ID              int64
+	AssignmentID    int64
+	WorkerType      string
+	WorkerID        string
+	TaskDescription string
+	Status          string
+	Result          string
+	TokensUsed      int64
+	StartedAt       *time.Time
+	CompletedAt     *time.Time
+	CreatedAt       time.Time
+}
+
+// Common context keys for Captain
+const (
+	CtxKeyCurrentFocus   = "current_focus"    // What Captain is currently working on
+	CtxKeyRecentWork     = "recent_work"      // Summary of recent completed work
+	CtxKeyPendingTasks   = "pending_tasks"    // Tasks waiting to be done
+	CtxKeyActiveAgents   = "active_agents"    // Currently spawned agents and their tasks
+	CtxKeyUserPrefs      = "user_preferences" // Human's stated preferences
+	CtxKeyLastSession    = "last_session"     // Summary of previous session
+	CtxKeyKnownIssues    = "known_issues"     // Issues discovered but not yet fixed
+	CtxKeyProjectContext = "project_context"  // Key project information
+)

@@ -99,7 +99,32 @@ func (m *mockMemoryDB) GetAgentsByStatus(status string) ([]*memory.AgentControl,
 }
 func (m *mockMemoryDB) CheckShutdownFlag(agentID string) (bool, string, error) { return false, "", nil }
 func (m *mockMemoryDB) AsLearningDB() memory.LearningDB                        { return nil }
-func (m *mockMemoryDB) Close() error                                           { return nil }
+func (m *mockMemoryDB) Health() (*memory.HealthStatus, error) {
+	return &memory.HealthStatus{Connected: true, SchemaVersion: 8, ContextCount: 0}, nil
+}
+
+// Captain context stubs
+func (m *mockMemoryDB) SetContext(key, value string, priority int, maxAgeHours int) error {
+	return nil
+}
+func (m *mockMemoryDB) GetContext(key string) (*memory.CaptainContext, error)         { return nil, nil }
+func (m *mockMemoryDB) GetAllContext() ([]*memory.CaptainContext, error)              { return nil, nil }
+func (m *mockMemoryDB) GetContextByPriority(minPriority int) ([]*memory.CaptainContext, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) DeleteContext(key string) error    { return nil }
+func (m *mockMemoryDB) CleanExpiredContext() (int, error) { return 0, nil }
+func (m *mockMemoryDB) LogSessionEvent(sessionID, eventType, summary, details, agentID string) error {
+	return nil
+}
+func (m *mockMemoryDB) GetSessionLog(sessionID string, limit int) ([]*memory.SessionLogEntry, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetRecentSessionLog(limit int) ([]*memory.SessionLogEntry, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryDB) Close() error { return nil }
 
 // mockStore is a simple mock implementation of persistence.Store for testing
 type mockStore struct {
@@ -137,6 +162,9 @@ func (m *mockStore) RespondStopRequest(id string, approved bool, response string
 }
 func (m *mockStore) GetPendingStopRequests() []*types.StopApprovalRequest    { return nil }
 func (m *mockStore) GetStopRequestByID(id string) *types.StopApprovalRequest { return nil }
+func (m *mockStore) AddCaptainMessage(msg *types.CaptainMessage)             {}
+func (m *mockStore) GetUnreadCaptainMessages() []*types.CaptainMessage       { return nil }
+func (m *mockStore) MarkCaptainMessagesRead(ids []string)                    {}
 func (m *mockStore) AddAlert(alert *types.Alert)                             {}
 func (m *mockStore) AcknowledgeAlert(id string)                              {}
 func (m *mockStore) ClearAllAlerts()                                         {}
@@ -422,4 +450,48 @@ func TestCleanupUpdateStatusError(t *testing.T) {
 	if len(mockStore.removedAgents) != 1 {
 		t.Errorf("expected 1 agent removed from store, got %d", len(mockStore.removedAgents))
 	}
+}
+
+// These methods were added by Task 5 and 6 subagents
+func (m *mockMemoryDB) RecordMetricsHistory(agentID, model string, tokensUsed int64, estimatedCost float64, taskID string) error {
+	return nil
+}
+func (m *mockMemoryDB) GetMetricsByModel(modelFilter string) ([]*memory.ModelMetrics, error) {
+	return nil, nil
+}
+
+// Task assignment stubs (SGT workflow)
+func (m *mockMemoryDB) CreateAssignment(assignment *memory.TaskAssignment) error { return nil }
+func (m *mockMemoryDB) GetAssignment(id int64) (*memory.TaskAssignment, error)  { return nil, nil }
+func (m *mockMemoryDB) GetAssignmentsByTask(taskID string) ([]*memory.TaskAssignment, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetAssignmentsByAgent(agentID string, status string) ([]*memory.TaskAssignment, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetActiveAssignment(agentID string) (*memory.TaskAssignment, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) UpdateAssignmentStatus(id int64, status string) error { return nil }
+func (m *mockMemoryDB) CompleteAssignment(id int64, status string, feedback string) error {
+	return nil
+}
+func (m *mockMemoryDB) RequestRework(id int64, feedback string) error { return nil }
+func (m *mockMemoryDB) AddWorker(worker *memory.AssignmentWorker) error { return nil }
+func (m *mockMemoryDB) UpdateWorkerStatus(id int64, status, result string, tokensUsed int64) error {
+	return nil
+}
+func (m *mockMemoryDB) GetWorkersByAssignment(assignmentID int64) ([]*memory.AssignmentWorker, error) {
+	return nil, nil
+}
+
+// New metrics analysis methods
+func (m *mockMemoryDB) GetMetricsByAgentType() ([]*memory.AgentTypeMetrics, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) GetMetricsByAgent() ([]*memory.AgentMetricsSummary, error) {
+	return nil, nil
+}
+func (m *mockMemoryDB) RecordMetricsWithType(agentID, model, agentType, parentAgent string, tokensUsed int64, estimatedCost float64, taskID string, assignmentID *int64) error {
+	return nil
 }
