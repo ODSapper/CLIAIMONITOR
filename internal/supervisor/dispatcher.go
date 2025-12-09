@@ -158,8 +158,15 @@ func (d *StandardDispatcher) ExecutePlan(ctx context.Context, plan *ActionPlan) 
 
 // spawnAgents spawns agents according to the plan
 func (d *StandardDispatcher) spawnAgents(ctx context.Context, plan *ActionPlan, state *dispatchState) {
-	// TODO: Extract project path from plan metadata
-	projectPath := "C:\\Users\\Admin\\Documents\\VS Projects\\CLIAIMONITOR"
+	// Extract project path from plan metadata or environment
+	// Plan metadata could include repository context, agent context from memory DB, or environment
+	// For now, use current working directory as default project path
+	projectPath := state.projectPath
+	if projectPath == "" {
+		// Fall back to current working directory if not provided in plan
+		projectPath = "."
+		// In production: would extract from plan.ReportID context or memory DB repo lookup
+	}
 
 	for _, rec := range plan.AgentRecommendations {
 		select {

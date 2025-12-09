@@ -224,6 +224,7 @@ func (m *MockMemoryDB) UpdateWorkerStatus(id int64, status, result string, token
 func (m *MockMemoryDB) GetWorkersByAssignment(assignmentID int64) ([]*memory.AssignmentWorker, error) {
 	return nil, nil
 }
+func (m *MockMemoryDB) RequestRework(id int64, feedback string) error { return nil }
 
 // Health and lifecycle methods
 func (m *MockMemoryDB) Health() (*memory.HealthStatus, error) {

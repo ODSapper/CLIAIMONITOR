@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -130,7 +131,49 @@ func (d *StandardScaleUpDetector) ScaleUp(ctx context.Context) error {
 	// Wait a moment for server to start
 	time.Sleep(2 * time.Second)
 
-	// TODO: Verify server is responding by checking health endpoint
+	// Verify server is responding by checking health endpoint
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	maxRetries := 5
+	for i := 0; i < maxRetries; i++ {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("health check timeout while starting CLIAIMONITOR")
+		default:
+		}
+
+		// Check if server is responding
+		healthErr := healthCheck(d.port)
+		if healthErr == nil {
+			// Server is ready
+			return nil
+		}
+
+		if i < maxRetries-1 {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	return fmt.Errorf("CLIAIMONITOR did not become healthy within timeout")
+}
+
+// healthCheck verifies the server is responding
+func healthCheck(port int) error {
+	url := fmt.Sprintf("http://localhost:%d/api/health", port)
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("health check returned status %d", resp.StatusCode)
+	}
 
 	return nil
 }

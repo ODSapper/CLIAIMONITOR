@@ -112,9 +112,11 @@ func main() {
 	// Access learning layer interface for RAG-style queries
 	learningDB := memoryDB.AsLearningDB()
 
-	// TODO: Integrate LM Studio embeddings when available
+	// NOTE: LM Studio embeddings integration deferred
+	// Embedding provider would enable semantic search across memory
+	// To implement: Configure embedding provider with LM Studio if available
 	// embeddingProvider := memory.NewLMStudioEmbedding("http://localhost:1234/v1", "qwen2.5-coder-7b-instruct")
-	// Configure embedding provider for semantic search
+	// Currently using basic text search - semantic search can be added when LM Studio is reliably available
 
 	_ = learningDB // learningDB is now available for use in agents/handlers
 	fmt.Println("  Memory system initialized (operational + learning layers)")

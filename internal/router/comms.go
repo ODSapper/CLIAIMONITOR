@@ -57,13 +57,19 @@ func (c *AgentComms) ProcessHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse
 		log.Printf("[COMMS] Warning: Failed to check shutdown flag for agent %s: %v", req.AgentID, err)
 	}
 
+	// NOTE: Message queue not yet implemented in MemoryDB
+	// HasMessages always returns false until message queue storage is added
+	// Future: Add message table to track agent-to-agent messages
+	hasMessages := false
+	messageCount := 0
+
 	return &HeartbeatResponse{
 		OK:           true,
 		Timestamp:    time.Now(),
 		ShouldStop:   shouldStop,
 		StopReason:   stopReason,
-		HasMessages:  false, // TODO: implement message queue
-		MessageCount: 0,
+		HasMessages:  hasMessages,
+		MessageCount: messageCount,
 	}, nil
 }
 
