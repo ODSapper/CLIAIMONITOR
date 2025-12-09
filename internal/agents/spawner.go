@@ -391,7 +391,7 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 		}
 	}
 
-	// 2. Kill heartbeat script (only exists if NATS was not available)
+	// 2. Kill heartbeat script from in-memory tracking
 	s.mu.Lock()
 	if pid, ok := s.heartbeatPIDs[agentID]; ok {
 		if err := instance.KillProcess(pid); err != nil {
@@ -399,47 +399,53 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 		}
 		delete(s.heartbeatPIDs, agentID)
 	}
-	// Note: If NATS is enabled, no heartbeat script exists - that's expected
 	s.mu.Unlock()
 
-	// 3. Mark stopped in DB
+	// 3. Also kill heartbeat from PID file (spawned by launcher script)
+	if err := s.KillHeartbeatFromPIDFile(agentID); err != nil {
+		log.Printf("Warning: Failed to kill heartbeat from PID file: %v", err)
+	}
+
+	// 4. Mark stopped in DB
 	if s.memDB != nil {
 		if err := s.memDB.MarkStopped(agentID, reason); err != nil {
 			log.Printf("Warning: Failed to mark agent stopped: %v", err)
 		}
 	}
 
-	// 4. Remove from running agents map
+	// 5. Remove from running agents map
 	s.mu.Lock()
 	delete(s.runningAgents, agentID)
 	s.mu.Unlock()
 
-	// 5. Try to kill the agent process using PID file (preferred method)
-	// PID file contains PowerShell launcher PID - we need to kill both the launcher AND its claude.exe child
+	// 6. Try to kill the agent process using PID file (preferred method)
+	// PID file contains PowerShell process PID inside the terminal
 	pid, err := s.GetAgentPIDFromFile(agentID)
 	if err == nil && pid > 0 {
-		log.Printf("Killing agent %s launcher (PID: %d) and child processes", agentID, pid)
+		log.Printf("Killing agent %s (PID: %d) and child processes", agentID, pid)
 
-		// First, kill any claude.exe child processes of this launcher
+		// Kill any claude.exe child processes
 		if err := s.KillChildClaude(pid); err != nil {
 			log.Printf("Warning: Failed to kill claude.exe child: %v", err)
 		}
 
-		// Then kill the PowerShell launcher itself
+		// Kill the PowerShell process (this closes the terminal tab)
 		if err := instance.KillProcess(pid); err != nil {
-			log.Printf("Warning: Failed to kill launcher by PID: %v", err)
+			log.Printf("Warning: Failed to kill PowerShell by PID: %v", err)
 		}
 
 		// Clean up PID file
 		s.CleanupAgentPIDFile(agentID)
-		return nil
 	}
 
-	// 6. Fallback: Kill by window title
-	log.Printf("PID file not found for %s, trying window title fallback", agentID)
+	// 7. Also try killing by window title (catches any stragglers)
 	if err := s.KillByWindowTitle(agentID); err != nil {
 		log.Printf("Warning: Failed to kill agent by window title: %v", err)
-		return err
+	}
+
+	// 8. Kill any remaining powershell processes with our temp script
+	if err := s.KillByTempScript(agentID); err != nil {
+		log.Printf("Warning: Failed to kill by temp script: %v", err)
 	}
 
 	return nil
@@ -481,6 +487,33 @@ func (s *ProcessSpawner) CleanupAgentPIDFile(agentID string) error {
 	return nil
 }
 
+// KillHeartbeatFromPIDFile kills the heartbeat process using its PID file
+func (s *ProcessSpawner) KillHeartbeatFromPIDFile(agentID string) error {
+	pidFile := filepath.Join(s.basePath, "data", "pids", agentID+"-heartbeat.pid")
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No heartbeat PID file, that's fine
+		}
+		return fmt.Errorf("failed to read heartbeat PID file: %w", err)
+	}
+
+	pidStr := strings.TrimSpace(string(data))
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return fmt.Errorf("invalid heartbeat PID in file: %w", err)
+	}
+
+	log.Printf("Killing heartbeat process for %s (PID: %d)", agentID, pid)
+	if err := instance.KillProcess(pid); err != nil {
+		log.Printf("Warning: Failed to kill heartbeat PID %d: %v", pid, err)
+	}
+
+	// Clean up heartbeat PID file
+	os.Remove(pidFile)
+	return nil
+}
+
 // KillByWindowTitle finds and kills a process by its window title (fallback method)
 func (s *ProcessSpawner) KillByWindowTitle(agentID string) error {
 	title := fmt.Sprintf("CLIAIMONITOR-%s", agentID)
@@ -490,6 +523,19 @@ func (s *ProcessSpawner) KillByWindowTitle(agentID string) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to kill by window title: %w (output: %s)", err, string(output))
+	}
+	return nil
+}
+
+// KillByTempScript kills any PowerShell processes running our agent's temp launcher script
+func (s *ProcessSpawner) KillByTempScript(agentID string) error {
+	tempScriptName := fmt.Sprintf("cliaimonitor-%s-launcher.ps1", agentID)
+	// Find and kill any powershell.exe with our temp script in command line
+	cmd := exec.Command("powershell.exe", "-Command",
+		fmt.Sprintf(`Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like '*%s*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`, tempScriptName))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to kill by temp script: %w (output: %s)", err, string(output))
 	}
 	return nil
 }
