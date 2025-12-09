@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
@@ -324,6 +325,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/alerts/{id}/ack", s.handleAcknowledgeAlert).Methods("POST")
 	api.HandleFunc("/thresholds", s.handleUpdateThresholds).Methods("PUT")
 	api.HandleFunc("/metrics/reset", s.handleResetMetrics).Methods("POST")
+	api.HandleFunc("/metrics/by-model", s.handleGetMetricsByModel).Methods("GET")
+	api.HandleFunc("/metrics/by-agent-type", s.handleGetMetricsByAgentType).Methods("GET")
+	api.HandleFunc("/metrics/by-agent", s.handleGetMetricsByAgent).Methods("GET")
 	api.HandleFunc("/health", s.handleHealthCheck).Methods("GET")
 	api.HandleFunc("/shutdown", s.handleShutdown).Methods("POST")
 	api.HandleFunc("/stats", s.handleGetStats).Methods("GET")
@@ -444,6 +448,29 @@ func (s *Server) setupMCPCallbacks() {
 		OnReportMetrics: func(agentID string, m *types.AgentMetrics) (interface{}, error) {
 			s.metrics.UpdateAgentMetrics(agentID, m)
 			s.store.UpdateMetrics(agentID, m)
+
+			// Persist to SQLite for historical tracking
+			// Determine agent type based on ID pattern
+			agentType := memory.AgentTypeSpawnedWindow
+			if strings.HasPrefix(agentID, "Captain") {
+				agentType = memory.AgentTypeCaptain
+			} else if strings.Contains(agentID, "sgt") || strings.Contains(agentID, "SGT") {
+				agentType = memory.AgentTypeSGT
+			}
+
+			if err := s.memDB.RecordMetricsWithType(
+				agentID,
+				m.Model,
+				agentType,
+				"",    // parent agent (SGTs don't have parents, workers do)
+				m.TokensUsed,
+				m.EstimatedCost,
+				m.TaskID,
+				nil, // assignment ID - could be tracked if needed
+			); err != nil {
+				fmt.Printf("[METRICS] Warning: failed to persist metrics to DB: %v\n", err)
+			}
+
 			s.checkAlerts()
 			s.broadcastState()
 			return map[string]string{"status": "recorded"}, nil
@@ -534,8 +561,33 @@ func (s *Server) setupMCPCallbacks() {
 		},
 
 		OnRespondStopRequest: func(id string, approved bool, response string) (interface{}, error) {
+			// Get the request first to find the agent ID
+			req := s.store.GetStopRequestByID(id)
+			if req == nil {
+				return nil, fmt.Errorf("stop request not found: %s", id)
+			}
+
 			s.store.RespondStopRequest(id, approved, response, "supervisor")
 			s.broadcastState()
+
+			// Publish event to the requesting agent via event bus
+			if s.eventBus != nil {
+				event := events.NewEvent(
+					events.EventStopApproval,
+					"supervisor",
+					req.AgentID,
+					events.PriorityHigh,
+					map[string]interface{}{
+						"request_id":  id,
+						"approved":    approved,
+						"response":    response,
+						"reviewed_by": "supervisor",
+					},
+				)
+				s.eventBus.Publish(event)
+				log.Printf("[SERVER] Published stop_approval event to %s: approved=%v", req.AgentID, approved)
+			}
+
 			return map[string]string{"status": "responded", "approved": fmt.Sprintf("%v", approved)}, nil
 		},
 
@@ -755,6 +807,17 @@ func (s *Server) setupMCPCallbacks() {
 				Severity:  "info",
 				CreatedAt: time.Now(),
 			})
+
+			// Publish to event bus so Captain's wait_for_events receives it
+			if s.eventBus != nil {
+				s.eventBus.Publish(&events.Event{
+					Type:      events.EventType("agent_signal"),
+					Source:    agentID,
+					Target:    "Captain",
+					Payload:   map[string]interface{}{"signal": signal, "context": context},
+					CreatedAt: time.Now(),
+				})
+			}
 
 			s.broadcastState()
 			return map[string]interface{}{
@@ -1023,6 +1086,236 @@ func (s *Server) setupMCPCallbacks() {
 				"marked_count": len(ids),
 			}, nil
 		},
+
+		OnSendCaptainResponse: func(text string) (interface{}, error) {
+			s.store.AddCaptainMessage(&types.CaptainMessage{
+				ID:        fmt.Sprintf("captain-msg-%d", time.Now().UnixNano()),
+				Type:      "response",
+				Text:      text,
+				From:      "captain",
+				CreatedAt: time.Now(),
+			})
+			s.broadcastState()
+			return map[string]interface{}{
+				"success": true,
+				"message": "Response sent to dashboard",
+			}, nil
+		},
+
+		OnGetMetricsByModel: func(modelFilter string) (interface{}, error) {
+			metrics, err := s.memDB.GetMetricsByModel(modelFilter)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get metrics by model: %w", err)
+			}
+			return map[string]interface{}{
+				"metrics": metrics,
+				"count":   len(metrics),
+			}, nil
+		},
+
+		// SGT workflow callbacks
+		OnDispatchTask: func(taskID, assignTo, assignmentType, branchName string) (interface{}, error) {
+			assignment := &memory.TaskAssignment{
+				TaskID:         taskID,
+				AssignedTo:     assignTo,
+				AssignedBy:     "Captain",
+				AssignmentType: assignmentType,
+				Status:         "pending",
+				BranchName:     branchName,
+				ReviewAttempt:  1,
+			}
+			if err := s.memDB.CreateAssignment(assignment); err != nil {
+				return nil, err
+			}
+
+			// Log activity
+			s.store.AddActivity(&types.ActivityLog{
+				ID:        fmt.Sprintf("dispatch-%d", time.Now().UnixNano()),
+				AgentID:   "Captain",
+				Action:    "dispatched_task",
+				Details:   fmt.Sprintf("Task %s assigned to %s (type: %s)", taskID, assignTo, assignmentType),
+				Timestamp: time.Now(),
+			})
+
+			s.broadcastState()
+
+			return map[string]interface{}{
+				"status":        "dispatched",
+				"assignment_id": assignment.ID,
+				"assigned_to":   assignTo,
+			}, nil
+		},
+
+		OnAcceptAssignment: func(agentID string, assignmentID int64) (interface{}, error) {
+			if err := s.memDB.UpdateAssignmentStatus(assignmentID, "in_progress"); err != nil {
+				return nil, err
+			}
+
+			// Log activity
+			s.store.AddActivity(&types.ActivityLog{
+				ID:        fmt.Sprintf("accept-%d", time.Now().UnixNano()),
+				AgentID:   agentID,
+				Action:    "accepted_assignment",
+				Details:   fmt.Sprintf("Assignment %d accepted", assignmentID),
+				Timestamp: time.Now(),
+			})
+
+			s.broadcastState()
+
+			return map[string]interface{}{
+				"status":        "accepted",
+				"assignment_id": assignmentID,
+			}, nil
+		},
+
+		OnGetMyAssignment: func(agentID string) (interface{}, error) {
+			// First check for pending assignments
+			assignments, err := s.memDB.GetAssignmentsByAgent(agentID, "pending")
+			if err != nil {
+				return nil, err
+			}
+			if len(assignments) > 0 {
+				return map[string]interface{}{"assignment": assignments[0]}, nil
+			}
+
+			// Then check for active (in_progress) assignments
+			active, err := s.memDB.GetActiveAssignment(agentID)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]interface{}{"assignment": active}, nil
+		},
+
+		OnLogWorker: func(agentID string, assignmentID int64, workerType, description string) (interface{}, error) {
+			worker := &memory.AssignmentWorker{
+				AssignmentID:    assignmentID,
+				WorkerType:      workerType,
+				TaskDescription: description,
+				Status:          "pending",
+			}
+			if err := s.memDB.AddWorker(worker); err != nil {
+				return nil, err
+			}
+
+			return map[string]interface{}{
+				"status":    "logged",
+				"worker_id": worker.ID,
+			}, nil
+		},
+
+		OnSubmitForReview: func(agentID string, assignmentID int64, branchName string) (interface{}, error) {
+			if err := s.memDB.CompleteAssignment(assignmentID, "completed", ""); err != nil {
+				return nil, err
+			}
+
+			// Log activity
+			s.store.AddActivity(&types.ActivityLog{
+				ID:        fmt.Sprintf("review-%d", time.Now().UnixNano()),
+				AgentID:   agentID,
+				Action:    "submitted_for_review",
+				Details:   fmt.Sprintf("Assignment %d submitted for review (branch: %s)", assignmentID, branchName),
+				Timestamp: time.Now(),
+			})
+
+			s.broadcastState()
+
+			return map[string]interface{}{
+				"status":        "submitted",
+				"assignment_id": assignmentID,
+				"branch_name":   branchName,
+				"message":       "Work submitted. Captain will route to reviewer.",
+			}, nil
+		},
+
+		OnSubmitReviewResult: func(agentID string, assignmentID int64, approved bool, feedback string) (interface{}, error) {
+			status := "approved"
+			if !approved {
+				status = "rejected"
+			}
+
+			if err := s.memDB.CompleteAssignment(assignmentID, status, feedback); err != nil {
+				return nil, err
+			}
+
+			// Log activity
+			s.store.AddActivity(&types.ActivityLog{
+				ID:        fmt.Sprintf("review-result-%d", time.Now().UnixNano()),
+				AgentID:   agentID,
+				Action:    "submitted_review_result",
+				Details:   fmt.Sprintf("Assignment %d reviewed: %s", assignmentID, status),
+				Timestamp: time.Now(),
+			})
+
+			s.broadcastState()
+
+			return map[string]interface{}{
+				"status":        status,
+				"assignment_id": assignmentID,
+				"feedback":      feedback,
+				"message":       "Review complete. Captain will process result.",
+			}, nil
+		},
+
+		OnCompleteWorker: func(agentID string, workerID int64, status, result, model string, tokensUsed int64) (interface{}, error) {
+			// Update worker status
+			if err := s.memDB.UpdateWorkerStatus(workerID, status, result, tokensUsed); err != nil {
+				return nil, err
+			}
+
+			// Calculate cost based on model
+			costPer1kTokens := 0.003 // Default for sonnet
+			if strings.Contains(model, "haiku") {
+				costPer1kTokens = 0.00025
+			} else if strings.Contains(model, "opus") {
+				costPer1kTokens = 0.015
+			}
+			estimatedCost := float64(tokensUsed) / 1000.0 * costPer1kTokens
+
+			// Record metrics with subagent type
+			workerAgentID := fmt.Sprintf("worker-%d", workerID)
+			if err := s.memDB.RecordMetricsWithType(
+				workerAgentID,
+				model,
+				memory.AgentTypeSubagent,
+				agentID, // parent is the SGT
+				tokensUsed,
+				estimatedCost,
+				"",  // no task ID
+				nil, // assignment can be looked up from worker
+			); err != nil {
+				// Log but don't fail
+				fmt.Printf("[METRICS] Warning: failed to record worker metrics: %v\n", err)
+			}
+
+			return map[string]interface{}{
+				"status":         "recorded",
+				"worker_id":      workerID,
+				"tokens_used":    tokensUsed,
+				"estimated_cost": estimatedCost,
+			}, nil
+		},
+
+		OnGetMetricsByAgentType: func() (interface{}, error) {
+			metrics, err := s.memDB.GetMetricsByAgentType()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get metrics by agent type: %w", err)
+			}
+			return map[string]interface{}{
+				"metrics": metrics,
+				"count":   len(metrics),
+			}, nil
+		},
+
+		OnGetMetricsByAgent: func() (interface{}, error) {
+			metrics, err := s.memDB.GetMetricsByAgent()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get metrics by agent: %w", err)
+			}
+			return map[string]interface{}{
+				"metrics": metrics,
+				"count":   len(metrics),
+			}, nil
+		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
@@ -1087,7 +1380,8 @@ func (s *Server) setupMCPCallbacks() {
 	// Register event bus tools for real-time notifications
 	if s.eventBus != nil {
 		mcp.RegisterWaitForEventsTool(s.mcp, s.eventBus)
-		log.Printf("[MCP] Registered wait_for_events tool")
+		mcp.RegisterSendToAgentTool(s.mcp, s.eventBus)
+		log.Printf("[MCP] Registered wait_for_events and send_to_agent tools")
 	}
 }
 

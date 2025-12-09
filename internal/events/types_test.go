@@ -151,7 +151,7 @@ func TestNewEvent(t *testing.T) {
 func TestAllEventTypes(t *testing.T) {
 	types := AllEventTypes()
 
-	expectedCount := 5
+	expectedCount := 6
 	if len(types) != expectedCount {
 		t.Errorf("AllEventTypes returned %d types, want %d", len(types), expectedCount)
 	}
@@ -168,6 +168,7 @@ func TestAllEventTypes(t *testing.T) {
 		EventAlert,
 		EventTask,
 		EventRecon,
+		EventStopApproval,
 	}
 
 	for _, expected := range expectedTypes {

@@ -52,6 +52,23 @@ type ToolCallbacks struct {
 	// Captain messages callbacks (human -> Captain chat)
 	OnGetCaptainMessages   func() (interface{}, error)
 	OnMarkMessagesRead     func(ids []string) (interface{}, error)
+	OnSendCaptainResponse  func(text string) (interface{}, error)
+
+	// Metrics analysis callbacks
+	OnGetMetricsByModel func(modelFilter string) (interface{}, error)
+
+	// SGT workflow callbacks
+	OnDispatchTask       func(taskID, assignTo, assignmentType, branchName string) (interface{}, error)
+	OnAcceptAssignment   func(agentID string, assignmentID int64) (interface{}, error)
+	OnGetMyAssignment    func(agentID string) (interface{}, error)
+	OnLogWorker          func(agentID string, assignmentID int64, workerType, description string) (interface{}, error)
+	OnSubmitForReview    func(agentID string, assignmentID int64, branchName string) (interface{}, error)
+	OnSubmitReviewResult func(agentID string, assignmentID int64, approved bool, feedback string) (interface{}, error)
+	OnCompleteWorker     func(agentID string, workerID int64, status, result, model string, tokensUsed int64) (interface{}, error)
+
+	// Metrics by agent type
+	OnGetMetricsByAgentType func() (interface{}, error)
+	OnGetMetricsByAgent     func() (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -165,7 +182,7 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 	})
 
 	// request_stop_approval - Agent requests permission to stop
-	// This tool BLOCKS until approval is received, then returns the response
+	// Returns immediately with request_id. Agent should use wait_for_events to receive the response.
 	s.RegisterTool(ToolDefinition{
 		Name:        "request_stop_approval",
 		Description: "Request approval from supervisor before stopping work. MUST be called before stopping for ANY reason. This will WAIT for approval and return the supervisor's response with any new task assignment.",
@@ -195,31 +212,12 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 				return nil, err
 			}
 
-			// Poll for approval response (max 10 minutes, check every 5 seconds)
-			maxWait := 10 * time.Minute
-			pollInterval := 5 * time.Second
-			deadline := time.Now().Add(maxWait)
-
-			for time.Now().Before(deadline) {
-				// Check if request has been reviewed
-				updated := callbacks.OnGetStopRequestByID(req.ID)
-				if updated != nil && updated.Reviewed {
-					// Return the approval response
-					return map[string]interface{}{
-						"status":      "reviewed",
-						"approved":    updated.Approved,
-						"response":    updated.Response,
-						"reviewed_by": updated.ReviewedBy,
-						"next_task":   updated.Response, // Response typically contains next task if not approved to stop
-					}, nil
-				}
-				time.Sleep(pollInterval)
-			}
-
-			// Timeout - return timeout status
+			// Return immediately with request ID
+			// Agent should call wait_for_events with event_types=["stop_approval"] to receive the response
 			return map[string]interface{}{
-				"status":  "timeout",
-				"message": "No response received within 10 minutes. You may proceed with caution or try again.",
+				"status":     "pending",
+				"request_id": req.ID,
+				"message":    "Stop approval request submitted. Call wait_for_events with event_types=[\"stop_approval\"] to receive the supervisor's response.",
 			}, nil
 		},
 	})
@@ -815,6 +813,216 @@ func registerContextTools(s *Server, callbacks ToolCallbacks) {
 			return callbacks.OnMarkMessagesRead(ids)
 		},
 	})
+
+	// send_captain_response - Captain sends a response to the dashboard chat
+	s.RegisterTool(ToolDefinition{
+		Name:        "send_captain_response",
+		Description: "Send a response message to the dashboard chat. Use this to reply to human messages.",
+		Parameters: map[string]ParameterDef{
+			"text": {Type: "string", Description: "The response message to send to the dashboard", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSendCaptainResponse == nil {
+				return map[string]interface{}{"error": "Captain response not configured"}, nil
+			}
+			text, _ := params["text"].(string)
+			if text == "" {
+				return map[string]interface{}{"error": "text parameter required"}, nil
+			}
+			return callbacks.OnSendCaptainResponse(text)
+		},
+	})
+
+	// Register metrics tools
+	registerMetricsTools(s, callbacks)
+}
+
+// registerMetricsTools adds metrics analysis tools
+func registerMetricsTools(s *Server, callbacks ToolCallbacks) {
+	// get_metrics_by_model - Get aggregated metrics per model for cost comparison
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_metrics_by_model",
+		Description: "Get aggregated token usage and cost metrics grouped by model. Useful for comparing costs across different models (e.g., haiku vs sonnet vs opus). Returns report count, total tokens, total cost, and average tokens per report for each model.",
+		Parameters: map[string]ParameterDef{
+			"model": {
+				Type:        "string",
+				Description: "Optional model filter (e.g., 'claude-3-5-sonnet-20241022'). If not provided, returns metrics for all models.",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetMetricsByModel == nil {
+				return map[string]interface{}{"error": "Metrics analysis not configured"}, nil
+			}
+			modelFilter, _ := params["model"].(string)
+			return callbacks.OnGetMetricsByModel(modelFilter)
+		},
+	})
+
+	// Register SGT workflow tools
+	registerSGTWorkflowTools(s, callbacks)
+}
+
+// registerSGTWorkflowTools adds task dispatch and review tools for SGT workflow
+func registerSGTWorkflowTools(s *Server, callbacks ToolCallbacks) {
+	// dispatch_task - Captain assigns task to SGT
+	s.RegisterTool(ToolDefinition{
+		Name:        "dispatch_task",
+		Description: "Dispatch a task to an SGT agent for implementation or review. Only Captain should use this.",
+		Parameters: map[string]ParameterDef{
+			"task_id":         {Type: "string", Description: "The task ID to dispatch", Required: true},
+			"assign_to":       {Type: "string", Description: "Agent ID to assign to (e.g., 'SGT-Green', 'SGT-Purple')", Required: true},
+			"assignment_type": {Type: "string", Description: "Type: 'implementation', 'review', or 'rework'", Required: true},
+			"branch_name":     {Type: "string", Description: "Git branch name for this work", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnDispatchTask == nil {
+				return map[string]interface{}{"error": "Task dispatch not configured"}, nil
+			}
+			taskID, _ := params["task_id"].(string)
+			assignTo, _ := params["assign_to"].(string)
+			assignmentType, _ := params["assignment_type"].(string)
+			branchName, _ := params["branch_name"].(string)
+			return callbacks.OnDispatchTask(taskID, assignTo, assignmentType, branchName)
+		},
+	})
+
+	// accept_assignment - SGT accepts dispatched work
+	s.RegisterTool(ToolDefinition{
+		Name:        "accept_assignment",
+		Description: "Accept a task assignment and begin work. SGTs use this to acknowledge receipt.",
+		Parameters: map[string]ParameterDef{
+			"assignment_id": {Type: "number", Description: "The assignment ID to accept", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnAcceptAssignment == nil {
+				return map[string]interface{}{"error": "Assignment acceptance not configured"}, nil
+			}
+			assignmentID := int64(params["assignment_id"].(float64))
+			return callbacks.OnAcceptAssignment(agentID, assignmentID)
+		},
+	})
+
+	// get_my_assignment - SGT checks for pending assignments
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_my_assignment",
+		Description: "Get your current active assignment. SGTs use this to check for work.",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetMyAssignment == nil {
+				return map[string]interface{}{"error": "Assignment retrieval not configured"}, nil
+			}
+			return callbacks.OnGetMyAssignment(agentID)
+		},
+	})
+
+	// log_worker - SGT logs sub-agent work
+	s.RegisterTool(ToolDefinition{
+		Name:        "log_worker",
+		Description: "Log a sub-agent task for tracking. SGTs use this when spawning haiku/sonnet workers.",
+		Parameters: map[string]ParameterDef{
+			"assignment_id": {Type: "number", Description: "The parent assignment ID", Required: true},
+			"worker_type":   {Type: "string", Description: "Type: 'haiku', 'sonnet', or 'subagent'", Required: true},
+			"description":   {Type: "string", Description: "What this worker is doing", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnLogWorker == nil {
+				return map[string]interface{}{"error": "Worker logging not configured"}, nil
+			}
+			assignmentID := int64(params["assignment_id"].(float64))
+			workerType, _ := params["worker_type"].(string)
+			description, _ := params["description"].(string)
+			return callbacks.OnLogWorker(agentID, assignmentID, workerType, description)
+		},
+	})
+
+	// submit_for_review - SGT Green submits completed work
+	s.RegisterTool(ToolDefinition{
+		Name:        "submit_for_review",
+		Description: "Submit completed implementation for review. SGT Green uses this when code is ready.",
+		Parameters: map[string]ParameterDef{
+			"assignment_id": {Type: "number", Description: "The assignment ID", Required: true},
+			"branch_name":   {Type: "string", Description: "Git branch with the changes", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSubmitForReview == nil {
+				return map[string]interface{}{"error": "Review submission not configured"}, nil
+			}
+			assignmentID := int64(params["assignment_id"].(float64))
+			branchName, _ := params["branch_name"].(string)
+			return callbacks.OnSubmitForReview(agentID, assignmentID, branchName)
+		},
+	})
+
+	// submit_review_result - SGT Purple submits review verdict
+	s.RegisterTool(ToolDefinition{
+		Name:        "submit_review_result",
+		Description: "Submit review verdict. SGT Purple uses this after reviewing code.",
+		Parameters: map[string]ParameterDef{
+			"assignment_id": {Type: "number", Description: "The assignment ID being reviewed", Required: true},
+			"approved":      {Type: "boolean", Description: "Whether the code passes review", Required: true},
+			"feedback":      {Type: "string", Description: "Review feedback (required if not approved)", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSubmitReviewResult == nil {
+				return map[string]interface{}{"error": "Review result submission not configured"}, nil
+			}
+			assignmentID := int64(params["assignment_id"].(float64))
+			approved, _ := params["approved"].(bool)
+			feedback, _ := params["feedback"].(string)
+			return callbacks.OnSubmitReviewResult(agentID, assignmentID, approved, feedback)
+		},
+	})
+
+	// complete_worker - SGT marks a sub-agent task as complete with metrics
+	s.RegisterTool(ToolDefinition{
+		Name:        "complete_worker",
+		Description: "Mark a sub-agent worker task as complete. Use this to track sub-agent token usage when they finish.",
+		Parameters: map[string]ParameterDef{
+			"worker_id":   {Type: "number", Description: "The worker ID from log_worker", Required: true},
+			"status":      {Type: "string", Description: "Result status: 'completed' or 'failed'", Required: true},
+			"result":      {Type: "string", Description: "Summary of what the worker accomplished", Required: false},
+			"model":       {Type: "string", Description: "Model used (e.g., 'claude-3-5-haiku-20241022')", Required: true},
+			"tokens_used": {Type: "number", Description: "Estimated tokens used by this worker", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnCompleteWorker == nil {
+				return map[string]interface{}{"error": "Worker completion not configured"}, nil
+			}
+			workerID := int64(params["worker_id"].(float64))
+			status, _ := params["status"].(string)
+			result, _ := params["result"].(string)
+			model, _ := params["model"].(string)
+			tokensUsed := int64(params["tokens_used"].(float64))
+			return callbacks.OnCompleteWorker(agentID, workerID, status, result, model, tokensUsed)
+		},
+	})
+
+	// get_metrics_by_agent_type - Get breakdown by captain/sgt/spawned/subagent
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_metrics_by_agent_type",
+		Description: "Get aggregated metrics by agent type (captain, sgt, spawned_window, subagent). Useful for understanding where costs are going.",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetMetricsByAgentType == nil {
+				return map[string]interface{}{"error": "Agent type metrics not configured"}, nil
+			}
+			return callbacks.OnGetMetricsByAgentType()
+		},
+	})
+
+	// get_metrics_by_agent - Get per-agent metrics breakdown
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_metrics_by_agent",
+		Description: "Get metrics for each individual agent. Shows tokens, cost, and parent relationship for sub-agents.",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetMetricsByAgent == nil {
+				return map[string]interface{}{"error": "Agent metrics not configured"}, nil
+			}
+			return callbacks.OnGetMetricsByAgent()
+		},
+	})
 }
 
 // RegisterWaitForEventsTool registers the wait_for_events tool for real-time event polling
@@ -865,6 +1073,8 @@ func RegisterWaitForEventsTool(s *Server, bus *events.Bus) {
 			if pending, err := bus.GetPendingEvents(agentID, eventTypes); err == nil && len(pending) > 0 {
 				// Return the first pending event
 				firstEvent := pending[0]
+				// Mark as delivered so it won't be returned again
+				bus.MarkDelivered(firstEvent.ID)
 				return map[string]interface{}{
 					"status":        "event_received",
 					"event":         eventToMap(firstEvent),
@@ -893,6 +1103,94 @@ func RegisterWaitForEventsTool(s *Server, bus *events.Bus) {
 					"message": "No events received within timeout period",
 				}, nil
 			}
+		},
+	})
+}
+
+// RegisterSendToAgentTool registers the send_to_agent tool for Captain-to-SGT messaging
+func RegisterSendToAgentTool(s *Server, bus *events.Bus) {
+	s.RegisterTool(ToolDefinition{
+		Name:        "send_to_agent",
+		Description: "Send a message or task assignment to a specific agent. The target agent will receive this via wait_for_events. Use this to assign new work to persistent agents without spawning new windows.",
+		Parameters: map[string]ParameterDef{
+			"target_agent": {
+				Type:        "string",
+				Description: "The agent ID to send the message to (e.g., 'team-sgtgreen001')",
+				Required:    true,
+			},
+			"message_type": {
+				Type:        "string",
+				Description: "Type of message: 'new_task', 'instruction', 'stop', 'ping'",
+				Required:    true,
+			},
+			"task_id": {
+				Type:        "string",
+				Description: "Task ID if assigning a new task",
+				Required:    false,
+			},
+			"assignment_id": {
+				Type:        "number",
+				Description: "Assignment ID if this is a dispatched task",
+				Required:    false,
+			},
+			"content": {
+				Type:        "string",
+				Description: "Message content or task description",
+				Required:    true,
+			},
+			"branch_name": {
+				Type:        "string",
+				Description: "Git branch name for task work",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			targetAgent, _ := params["target_agent"].(string)
+			messageType, _ := params["message_type"].(string)
+			content, _ := params["content"].(string)
+			taskID, _ := params["task_id"].(string)
+			branchName, _ := params["branch_name"].(string)
+
+			if targetAgent == "" {
+				return map[string]interface{}{"error": "target_agent is required"}, nil
+			}
+			if messageType == "" {
+				return map[string]interface{}{"error": "message_type is required"}, nil
+			}
+			if content == "" {
+				return map[string]interface{}{"error": "content is required"}, nil
+			}
+
+			payload := map[string]interface{}{
+				"message_type": messageType,
+				"content":      content,
+			}
+			if taskID != "" {
+				payload["task_id"] = taskID
+			}
+			if branchName != "" {
+				payload["branch_name"] = branchName
+			}
+			if assignmentID, ok := params["assignment_id"].(float64); ok {
+				payload["assignment_id"] = int(assignmentID)
+			}
+
+			event := &events.Event{
+				Type:      events.EventType("agent_message"),
+				Source:    agentID,
+				Target:    targetAgent,
+				Priority:  events.PriorityHigh,
+				Payload:   payload,
+				CreatedAt: time.Now(),
+			}
+			bus.Publish(event)
+
+			return map[string]interface{}{
+				"status":       "sent",
+				"target_agent": targetAgent,
+				"message_type": messageType,
+				"event_id":     event.ID,
+			}, nil
 		},
 	})
 }

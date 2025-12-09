@@ -11,11 +11,12 @@ type EventType string
 
 // Event type constants
 const (
-	EventMessage     EventType = "message"
-	EventAgentSignal EventType = "agent_signal"
-	EventAlert       EventType = "alert"
-	EventTask        EventType = "task"
-	EventRecon       EventType = "recon"
+	EventMessage      EventType = "message"
+	EventAgentSignal  EventType = "agent_signal"
+	EventAlert        EventType = "alert"
+	EventTask         EventType = "task"
+	EventRecon        EventType = "recon"
+	EventStopApproval EventType = "stop_approval" // Response to stop approval request
 )
 
 // Priority constants for events
@@ -58,5 +59,6 @@ func AllEventTypes() []EventType {
 		EventAlert,
 		EventTask,
 		EventRecon,
+		EventStopApproval,
 	}
 }
