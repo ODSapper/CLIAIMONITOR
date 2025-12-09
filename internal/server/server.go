@@ -747,6 +747,7 @@ func (s *Server) setupMCPCallbacks() {
 		OnReportProgress: func(agentID string, progress map[string]interface{}) (interface{}, error) {
 			// Update agent status with progress
 			s.store.UpdateAgent(agentID, func(a *types.Agent) {
+				a.Status = types.StatusWorking
 				a.CurrentTask = fmt.Sprintf("Scanning: %v (%v%% complete)", progress["phase"], progress["percent_complete"])
 				a.LastSeen = time.Now()
 			})
