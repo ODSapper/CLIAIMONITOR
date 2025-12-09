@@ -21,6 +21,12 @@ import (
 // This prevents DoS attacks via large payloads
 const MaxPayloadSize = 1 * 1024 * 1024 // 1MB
 
+// Agent shutdown timeout constants
+const (
+	// GracefulStopTimeout is the duration to wait for graceful agent shutdown before force-killing
+	GracefulStopTimeout = 60 * time.Second
+)
+
 // AllowedOrigins contains the list of allowed WebSocket origins
 // Default: localhost only. Can be configured via CLIAIMONITOR_ALLOWED_ORIGINS env var
 // Example: CLIAIMONITOR_ALLOWED_ORIGINS=http://myhost.local:3000,https://dashboard.example.com
@@ -123,7 +129,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	client := &Client{
 		hub:  s.hub,
 		conn: conn,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, WebSocketBufferSize),
 	}
 
 	s.hub.Register(client)
@@ -270,7 +276,7 @@ func (s *Server) handleGracefulStopAgent(w http.ResponseWriter, r *http.Request)
 
 	// Start a goroutine to force-kill after timeout
 	go func() {
-		time.Sleep(60 * time.Second)
+		time.Sleep(GracefulStopTimeout)
 
 		// Check if agent is still running
 		state := s.store.GetState()
@@ -286,7 +292,7 @@ func (s *Server) handleGracefulStopAgent(w http.ResponseWriter, r *http.Request)
 
 	s.respondJSON(w, map[string]interface{}{
 		"success": true,
-		"message": "Graceful shutdown requested. Agent will be force-stopped in 60 seconds if it doesn't exit.",
+		"message": fmt.Sprintf("Graceful shutdown requested. Agent will be force-stopped in %d seconds if it doesn't exit.", int(GracefulStopTimeout.Seconds())),
 	})
 }
 

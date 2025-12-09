@@ -39,12 +39,12 @@ func TestHubClientCount(t *testing.T) {
 	client1 := &Client{
 		hub:  hub,
 		conn: nil, // We don't need a real connection for this test
-		send: make(chan []byte, 256),
+		send: make(chan []byte, WebSocketBufferSize),
 	}
 	client2 := &Client{
 		hub:  hub,
 		conn: nil,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, WebSocketBufferSize),
 	}
 
 	// Register clients
@@ -78,7 +78,7 @@ func TestHubBroadcast(t *testing.T) {
 	client := &Client{
 		hub:  hub,
 		conn: nil,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, WebSocketBufferSize),
 	}
 
 	hub.Register(client)
@@ -110,7 +110,7 @@ func TestHubBroadcastState(t *testing.T) {
 	client := &Client{
 		hub:  hub,
 		conn: nil,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, WebSocketBufferSize),
 	}
 
 	hub.Register(client)
@@ -141,7 +141,7 @@ func TestHubBroadcastAlert(t *testing.T) {
 	client := &Client{
 		hub:  hub,
 		conn: nil,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, WebSocketBufferSize),
 	}
 
 	hub.Register(client)
@@ -177,7 +177,7 @@ func TestHubBroadcastActivity(t *testing.T) {
 	client := &Client{
 		hub:  hub,
 		conn: nil,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, WebSocketBufferSize),
 	}
 
 	hub.Register(client)
@@ -216,7 +216,7 @@ func TestHubMultipleClients(t *testing.T) {
 		clients[i] = &Client{
 			hub:  hub,
 			conn: nil,
-			send: make(chan []byte, 256),
+			send: make(chan []byte, WebSocketBufferSize),
 		}
 		hub.Register(clients[i])
 	}
@@ -250,7 +250,7 @@ func TestHubUnregisterNonexistent(t *testing.T) {
 	client := &Client{
 		hub:  hub,
 		conn: nil,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, WebSocketBufferSize),
 	}
 
 	// This should not panic

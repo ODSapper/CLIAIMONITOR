@@ -21,8 +21,11 @@ type EventStore interface {
 	MarkDelivered(eventID string) error
 }
 
-// Backpressure configuration constants
+// Channel buffer and backpressure configuration constants
 const (
+	// EventChannelBufferSize is the buffer size for event subscription channels
+	// Allows queuing multiple events before blocking subscribers
+	EventChannelBufferSize = 100
 	// MaxBackpressureRetries is the number of times to retry sending before dropping
 	MaxBackpressureRetries = 3
 	// BackpressureRetryDelay is the delay between retry attempts
@@ -53,7 +56,7 @@ func (b *Bus) Subscribe(target string, types []EventType) <-chan Event {
 	defer b.mu.Unlock()
 
 	sub := &Subscription{
-		Ch:     make(chan Event, 100), // Buffered channel
+		Ch:     make(chan Event, EventChannelBufferSize),
 		Types:  types,
 		Target: target,
 	}

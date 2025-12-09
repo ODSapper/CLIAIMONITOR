@@ -18,6 +18,16 @@ import (
 // This prevents DoS attacks via large payloads
 const MaxPayloadSize = 1 * 1024 * 1024 // 1MB
 
+// Mission execution timeout constants
+const (
+	// MissionExecutionTimeout is the timeout for executing a single mission
+	MissionExecutionTimeout = 10 * time.Minute
+	// ParallelMissionsTimeout is the timeout for executing multiple missions in parallel
+	ParallelMissionsTimeout = 30 * time.Minute
+	// ReconExecutionTimeout is the timeout for reconnaissance missions
+	ReconExecutionTimeout = 15 * time.Minute
+)
+
 // limitRequestSize limits the request body size to prevent DoS via large payloads
 func limitRequestSize(r *http.Request, maxSize int64) {
 	r.Body = http.MaxBytesReader(nil, r.Body, maxSize)
@@ -76,7 +86,7 @@ func (h *CaptainHandler) HandleExecuteMission(w http.ResponseWriter, r *http.Req
 	}
 
 	// Use context with timeout for subagent execution
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), MissionExecutionTimeout)
 	defer cancel()
 
 	result, err := h.captain.ExecuteMission(ctx, mission)
@@ -113,7 +123,7 @@ func (h *CaptainHandler) HandleExecuteParallel(w http.ResponseWriter, r *http.Re
 	}
 
 	// Use context with timeout
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), ParallelMissionsTimeout)
 	defer cancel()
 
 	results := h.captain.ExecuteMissionsParallel(ctx, request.Missions)
@@ -238,7 +248,7 @@ func (h *CaptainHandler) HandleRecon(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), ReconExecutionTimeout)
 	defer cancel()
 
 	result, err := h.captain.ExecuteMission(ctx, mission)
@@ -329,7 +339,7 @@ func (h *CaptainHandler) HandleSubmitTask(w http.ResponseWriter, r *http.Request
 	}
 
 	// Execute mission asynchronously
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), ParallelMissionsTimeout)
 	defer cancel()
 
 	go func() {
@@ -455,7 +465,7 @@ func (h *CaptainHandler) HandleTriggerRecon(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Execute asynchronously
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), ReconExecutionTimeout)
 	defer cancel()
 
 	go func() {

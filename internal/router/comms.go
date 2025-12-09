@@ -1,6 +1,7 @@
 package router
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -51,7 +52,10 @@ func (c *AgentComms) ProcessHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse
 	}
 
 	// Check if agent should shut down
-	shouldStop, stopReason, _ := c.memDB.CheckShutdownFlag(req.AgentID)
+	shouldStop, stopReason, err := c.memDB.CheckShutdownFlag(req.AgentID)
+	if err != nil {
+		log.Printf("[COMMS] Warning: Failed to check shutdown flag for agent %s: %v", req.AgentID, err)
+	}
 
 	return &HeartbeatResponse{
 		OK:           true,

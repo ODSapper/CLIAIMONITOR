@@ -8,6 +8,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// WebSocket buffer and channel size constants
+const (
+	// WebSocketBufferSize is the buffer size for WebSocket send/broadcast channels
+	// Allows pending messages to queue up before blocking, useful for burst traffic
+	WebSocketBufferSize = 256
+)
+
 // Client represents a WebSocket client (browser)
 type Client struct {
 	hub  *Hub
@@ -30,7 +37,7 @@ func NewHub() *Hub {
 		clients:    make(map[*Client]bool),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
-		broadcast:  make(chan []byte, 256),
+		broadcast:  make(chan []byte, WebSocketBufferSize),
 	}
 }
 
@@ -114,6 +121,14 @@ func (h *Hub) BroadcastEscalation(escalation interface{}) {
 	h.BroadcastJSON(types.WSMessage{
 		Type: types.WSTypeEscalation,
 		Data: escalation,
+	})
+}
+
+// BroadcastCaptainMessage sends a Captain response to the dashboard chat
+func (h *Hub) BroadcastCaptainMessage(text string) {
+	h.BroadcastJSON(types.WSMessage{
+		Type: types.WSTypeCaptainMessage,
+		Data: map[string]string{"text": text},
 	})
 }
 

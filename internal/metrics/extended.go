@@ -17,6 +17,14 @@ const (
 	HealthError   HealthStatus = "error"
 )
 
+// Health check timeout constants for agent idle detection
+const (
+	// AgentIdleThreshold is the duration after which an agent is considered idle (no activity)
+	AgentIdleThreshold = 10 * time.Minute
+	// AgentStuckThreshold is the duration after which an agent is considered stuck (prolonged idle)
+	AgentStuckThreshold = 30 * time.Minute
+)
+
 // ExtendedAgentMetrics provides comprehensive agent metrics
 type ExtendedAgentMetrics struct {
 	AgentID     string `json:"agent_id"`
@@ -62,10 +70,10 @@ func (m *ExtendedAgentMetrics) HealthStatus() HealthStatus {
 
 	idleTime := time.Since(m.LastActivity)
 
-	if idleTime > 30*time.Minute {
+	if idleTime > AgentStuckThreshold {
 		return HealthStuck
 	}
-	if idleTime > 10*time.Minute {
+	if idleTime > AgentIdleThreshold {
 		return HealthIdle
 	}
 

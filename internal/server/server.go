@@ -399,8 +399,12 @@ func (s *Server) setupRoutes() {
 	s.router.HandleFunc("/mcp/messages/", s.mcp.ServeMessage)
 
 	// Static files
-	staticFS, _ := fs.Sub(web.StaticFiles, ".")
-	s.router.PathPrefix("/").Handler(http.FileServer(http.FS(staticFS)))
+	staticFS, err := fs.Sub(web.StaticFiles, ".")
+	if err != nil {
+		log.Printf("[SERVER] Warning: Failed to create static file system: %v", err)
+	} else {
+		s.router.PathPrefix("/").Handler(http.FileServer(http.FS(staticFS)))
+	}
 }
 
 // setupMCPCallbacks wires MCP tool handlers to services

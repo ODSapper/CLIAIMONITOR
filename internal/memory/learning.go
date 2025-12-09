@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -394,13 +396,9 @@ func (l *SQLiteLearningDB) SearchKnowledge(query string, category string, limit 
 	}
 
 	// Sort by score descending
-	for i := 0; i < len(scored); i++ {
-		for j := i + 1; j < len(scored); j++ {
-			if scored[j].score > scored[i].score {
-				scored[i], scored[j] = scored[j], scored[i]
-			}
-		}
-	}
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
 
 	// Limit results
 	if len(scored) > limit {
@@ -559,13 +557,9 @@ func (l *SQLiteLearningDB) SearchKnowledgeByType(query string, agentType string,
 	}
 
 	// Sort by score descending
-	for i := 0; i < len(scored); i++ {
-		for j := i + 1; j < len(scored); j++ {
-			if scored[j].score > scored[i].score {
-				scored[i], scored[j] = scored[j], scored[i]
-			}
-		}
-	}
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
 
 	// Limit results
 	if len(scored) > limit {
@@ -640,16 +634,25 @@ func (l *SQLiteLearningDB) GetKnowledgeStats() (*KnowledgeStats, error) {
 	}
 
 	// Total knowledge
-	l.db.QueryRow("SELECT COUNT(*) FROM knowledge").Scan(&stats.TotalKnowledge)
+	if err := l.db.QueryRow("SELECT COUNT(*) FROM knowledge").Scan(&stats.TotalKnowledge); err != nil {
+		log.Printf("[LEARNING] Warning: Failed to get total knowledge count: %v", err)
+	}
 
 	// Total episodes
-	l.db.QueryRow("SELECT COUNT(*) FROM episodes").Scan(&stats.TotalEpisodes)
+	if err := l.db.QueryRow("SELECT COUNT(*) FROM episodes").Scan(&stats.TotalEpisodes); err != nil {
+		log.Printf("[LEARNING] Warning: Failed to get total episodes count: %v", err)
+	}
 
 	// Total terms
-	l.db.QueryRow("SELECT COUNT(*) FROM term_stats").Scan(&stats.TotalTerms)
+	if err := l.db.QueryRow("SELECT COUNT(*) FROM term_stats").Scan(&stats.TotalTerms); err != nil {
+		log.Printf("[LEARNING] Warning: Failed to get total terms count: %v", err)
+	}
 
 	// By category
-	rows, _ := l.db.Query("SELECT category, COUNT(*) FROM knowledge GROUP BY category")
+	rows, err := l.db.Query("SELECT category, COUNT(*) FROM knowledge GROUP BY category")
+	if err != nil {
+		log.Printf("[LEARNING] Warning: Failed to query categories: %v", err)
+	}
 	if rows != nil {
 		for rows.Next() {
 			var cat string
@@ -661,10 +664,13 @@ func (l *SQLiteLearningDB) GetKnowledgeStats() (*KnowledgeStats, error) {
 	}
 
 	// Most used
-	rows, _ = l.db.Query(`
+	rows, err = l.db.Query(`
 		SELECT id, category, title, content, use_count, created_at, updated_at
 		FROM knowledge ORDER BY use_count DESC LIMIT 5
 	`)
+	if err != nil {
+		log.Printf("[LEARNING] Warning: Failed to query most used knowledge: %v", err)
+	}
 	if rows != nil {
 		for rows.Next() {
 			var k Knowledge
