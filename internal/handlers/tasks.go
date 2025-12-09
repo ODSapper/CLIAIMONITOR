@@ -55,6 +55,9 @@ func (h *TasksHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	var req struct {
 		Title       string `json:"title"`
 		Description string `json:"description"`
@@ -117,6 +120,9 @@ func (h *TasksHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
 
 	vars := mux.Vars(r)
 	id := vars["id"]

@@ -17,6 +17,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// MaxPayloadSize defines the maximum size for request payloads (1MB)
+// This prevents DoS attacks via large payloads
+const MaxPayloadSize = 1 * 1024 * 1024 // 1MB
+
 // AllowedOrigins contains the list of allowed WebSocket origins
 // Default: localhost only. Can be configured via CLIAIMONITOR_ALLOWED_ORIGINS env var
 // Example: CLIAIMONITOR_ALLOWED_ORIGINS=http://myhost.local:3000,https://dashboard.example.com
@@ -99,6 +103,12 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	return false
 }
 
+// limitRequestSize limits the request body size to prevent DoS via large payloads
+// Returns the limited body reader to use for decoding
+func limitRequestSize(r *http.Request, maxSize int64) {
+	r.Body = http.MaxBytesReader(nil, r.Body, maxSize)
+}
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: checkWebSocketOrigin,
 }
@@ -151,6 +161,9 @@ func (s *Server) handleGetProjects(w http.ResponseWriter, r *http.Request) {
 
 // handleSpawnAgent spawns a new agent
 func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	var req struct {
 		ConfigName  string `json:"config_name"`
 		ProjectPath string `json:"project_path"`
@@ -279,6 +292,9 @@ func (s *Server) handleGracefulStopAgent(w http.ResponseWriter, r *http.Request)
 
 // handleAnswerHumanInput answers a human input request
 func (s *Server) handleAnswerHumanInput(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	vars := mux.Vars(r)
 	requestID := vars["id"]
 
@@ -357,6 +373,9 @@ func (s *Server) handleClearAllAlerts(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateThresholds updates alert thresholds
 func (s *Server) handleUpdateThresholds(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	var thresholds types.AlertThresholds
 	if err := json.NewDecoder(r.Body).Decode(&thresholds); err != nil {
 		s.respondError(w, http.StatusBadRequest, "Invalid request body")
@@ -509,6 +528,9 @@ func (s *Server) handleGetStopRequests(w http.ResponseWriter, r *http.Request) {
 
 // handleRespondStopRequest responds to a stop approval request
 func (s *Server) handleRespondStopRequest(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	vars := mux.Vars(r)
 	requestID := vars["id"]
 
@@ -628,6 +650,9 @@ func formatAgentNumber(n int) string {
 // handleSubmitEscalationResponse handles POST /api/escalation/{id}/respond
 // Publishes human response to NATS subject escalation.response.{id}
 func (s *Server) handleSubmitEscalationResponse(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	vars := mux.Vars(r)
 	escalationID := vars["id"]
 
@@ -675,6 +700,9 @@ func (s *Server) handleSubmitEscalationResponse(w http.ResponseWriter, r *http.R
 // handleSendCaptainCommand handles POST /api/captain/command
 // Publishes command to NATS subject captain.commands
 func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	var req struct {
 		Type    string                 `json:"type"`
 		Payload map[string]interface{} `json:"payload"`
@@ -819,6 +847,9 @@ func (s *Server) handleGetCaptainContext(w http.ResponseWriter, r *http.Request)
 
 // handleSetCaptainContext sets a context entry
 func (s *Server) handleSetCaptainContext(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	if s.memDB == nil {
 		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
 		return

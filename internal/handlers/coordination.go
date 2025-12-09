@@ -121,11 +121,14 @@ func (h *CoordinationHandler) handleAnalyzeReport(w http.ResponseWriter, r *http
 
 // handleDispatch executes an action plan by spawning agents
 func (h *CoordinationHandler) handleDispatch(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	var req struct {
 		PlanID string `json:"plan_id"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil{
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}

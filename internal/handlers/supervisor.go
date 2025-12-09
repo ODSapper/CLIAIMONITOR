@@ -57,6 +57,9 @@ func (h *SupervisorHandler) RegisterRoutes(r *mux.Router) {
 
 // handleDiscoverRepo discovers a new repository
 func (h *SupervisorHandler) handleDiscoverRepo(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	var req struct {
 		Path string `json:"path"`
 	}
@@ -221,6 +224,9 @@ func (h *SupervisorHandler) handleGetTask(w http.ResponseWriter, r *http.Request
 
 // handleUpdateTaskStatus updates the status of a task
 func (h *SupervisorHandler) handleUpdateTaskStatus(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
@@ -315,6 +321,9 @@ func (h *SupervisorHandler) handleGetDeployment(w http.ResponseWriter, r *http.R
 
 // handleUpdateDeploymentStatus updates the status of a deployment
 func (h *SupervisorHandler) handleUpdateDeploymentStatus(w http.ResponseWriter, r *http.Request) {
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 

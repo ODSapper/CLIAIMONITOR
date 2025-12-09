@@ -14,6 +14,15 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// MaxPayloadSize defines the maximum size for request payloads (1MB)
+// This prevents DoS attacks via large payloads
+const MaxPayloadSize = 1 * 1024 * 1024 // 1MB
+
+// limitRequestSize limits the request body size to prevent DoS via large payloads
+func limitRequestSize(r *http.Request, maxSize int64) {
+	r.Body = http.MaxBytesReader(nil, r.Body, maxSize)
+}
+
 // CaptainHandler handles Captain orchestration endpoints
 type CaptainHandler struct {
 	captain *captain.Captain
@@ -35,6 +44,9 @@ func (h *CaptainHandler) HandleDecideMode(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	var mission captain.Mission
 	if err := json.NewDecoder(r.Body).Decode(&mission); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -53,6 +65,9 @@ func (h *CaptainHandler) HandleExecuteMission(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
 
 	var mission captain.Mission
 	if err := json.NewDecoder(r.Body).Decode(&mission); err != nil {
@@ -80,6 +95,9 @@ func (h *CaptainHandler) HandleExecuteParallel(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
 
 	var request struct {
 		Missions []captain.Mission `json:"missions"`
@@ -164,6 +182,9 @@ func (h *CaptainHandler) HandleSetAPIKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
+
 	var request struct {
 		APIKey string `json:"api_key"`
 	}
@@ -191,6 +212,9 @@ func (h *CaptainHandler) HandleRecon(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
 
 	var request struct {
 		ProjectPath string `json:"project_path"`
@@ -270,6 +294,9 @@ func (h *CaptainHandler) HandleSubmitTask(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
 
 	var req SubmitTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -392,6 +419,9 @@ func (h *CaptainHandler) HandleTriggerRecon(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
 
 	var req ReconRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -524,6 +554,9 @@ func (h *CaptainHandler) HandleRespondToEscalation(w http.ResponseWriter, r *htt
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Limit request size to prevent DoS
+	limitRequestSize(r, MaxPayloadSize)
 
 	vars := mux.Vars(r)
 	escalationID := vars["id"]
