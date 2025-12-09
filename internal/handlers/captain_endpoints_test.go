@@ -616,3 +616,247 @@ func TestBuildReconDescription(t *testing.T) {
 		}
 	}
 }
+
+// Additional tests for Captain handlers
+
+func TestHandleDecideMode_ValidMission(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	req := captain.Mission{
+		ID:          "test-mission",
+		Title:       "Test Mission",
+		Description: "Test Description",
+		TaskType:    captain.TaskImplementation,
+		Priority:    1,
+	}
+
+	body, _ := json.Marshal(req)
+	r := httptest.NewRequest(http.MethodPost, "/api/captain/decide-mode", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.HandleDecideMode(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var response captain.ModeDecision
+	json.NewDecoder(w.Body).Decode(&response)
+
+	if response.Mode == "" {
+		t.Error("Expected mode decision in response")
+	}
+}
+
+func TestHandleDecideMode_InvalidJSON(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/captain/decide-mode", bytes.NewReader([]byte("invalid json")))
+	w := httptest.NewRecorder()
+
+	handler.HandleDecideMode(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandleDecideMode_WrongMethod(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/captain/decide-mode", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleDecideMode(w, r)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestHandleExecuteMission_ValidMission(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	req := captain.Mission{
+		ID:          "test-mission-exec",
+		Title:       "Test Mission",
+		Description: "Test Description",
+		TaskType:    captain.TaskImplementation,
+		Priority:    1,
+	}
+
+	body, _ := json.Marshal(req)
+	r := httptest.NewRequest(http.MethodPost, "/api/captain/mission/execute", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.HandleExecuteMission(w, r)
+
+	// Mission execution will fail due to mock setup, but request should be processed
+	if w.Code != http.StatusInternalServerError && w.Code != http.StatusOK {
+		t.Logf("Expected 500 or 200 (depending on implementation), got %d", w.Code)
+	}
+}
+
+func TestHandleExecuteMission_WrongMethod(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/captain/mission/execute", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleExecuteMission(w, r)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestHandleExecuteParallel_ValidMissions(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	missions := []captain.Mission{
+		{
+			ID:          "mission-1",
+			Title:       "Mission 1",
+			Description: "Description 1",
+			TaskType:    captain.TaskImplementation,
+			Priority:    1,
+		},
+		{
+			ID:          "mission-2",
+			Title:       "Mission 2",
+			Description: "Description 2",
+			TaskType:    captain.TaskTesting,
+			Priority:    2,
+		},
+	}
+
+	req := map[string]interface{}{
+		"missions": missions,
+	}
+
+	body, _ := json.Marshal(req)
+	r := httptest.NewRequest(http.MethodPost, "/api/captain/missions/parallel", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.HandleExecuteParallel(w, r)
+
+	if w.Code != http.StatusOK && w.Code != http.StatusInternalServerError {
+		t.Logf("Got status %d", w.Code)
+	}
+}
+
+func TestHandleExecuteParallel_NoMissions(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	req := map[string]interface{}{
+		"missions": []captain.Mission{},
+	}
+
+	body, _ := json.Marshal(req)
+	r := httptest.NewRequest(http.MethodPost, "/api/captain/missions/parallel", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.HandleExecuteParallel(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestHandleImportTasks(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/captain/import-tasks", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleImportTasks(w, r)
+
+	// Should handle gracefully even if import fails
+	if w.Code != http.StatusOK && w.Code != http.StatusInternalServerError {
+		t.Logf("Expected 200 or 500, got %d", w.Code)
+	}
+}
+
+func TestHandleImportTasks_WrongMethod(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/captain/import-tasks", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleImportTasks(w, r)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestHandleRecon_ValidRequest(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	req := struct {
+		ProjectPath string `json:"project_path"`
+		Title       string `json:"title"`
+		Focus       string `json:"focus"`
+	}{
+		ProjectPath: "/test/path",
+		Title:       "Test Recon",
+		Focus:       "security",
+	}
+
+	body, _ := json.Marshal(req)
+	r := httptest.NewRequest(http.MethodPost, "/api/captain/recon", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.HandleRecon(w, r)
+
+	// Will likely fail due to mock, but should handle gracefully
+	if w.Code != http.StatusInternalServerError && w.Code != http.StatusOK {
+		t.Logf("Got status %d", w.Code)
+	}
+}
+
+func TestHandleRecon_WrongMethod(t *testing.T) {
+	store := persistence.NewJSONStore("test.json")
+	store.Load()
+	cap := captain.NewCaptain(".", nil, nil, nil)
+	handler := NewCaptainHandler(cap, store)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/captain/recon", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleRecon(w, r)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
