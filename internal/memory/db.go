@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 //go:embed schema.sql
@@ -32,6 +32,18 @@ var migration005 string
 //go:embed migrations/006_tasks.sql
 var migration006 string
 
+//go:embed migrations/007_captain_context.sql
+var migration007 string
+
+//go:embed migrations/008_metrics_history.sql
+var migration008 string
+
+//go:embed migrations/009_task_assignments.sql
+var migration009 string
+
+//go:embed migrations/010_agent_type_metrics.sql
+var migration010 string
+
 // SQLiteMemoryDB is the concrete implementation of MemoryDB using SQLite
 type SQLiteMemoryDB struct {
 	db   *sql.DB
@@ -48,7 +60,7 @@ func NewMemoryDB(path string) (MemoryDB, error) {
 	}
 
 	// Open database
-	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
+	db, err := sql.Open("sqlite", path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open memory db: %w", err)
 	}
@@ -134,6 +146,43 @@ func (m *SQLiteMemoryDB) migrate() error {
 		fmt.Println("[MIGRATION] Successfully migrated to schema v7")
 	}
 
+	if version < 8 {
+		fmt.Println("[MIGRATION] Running migration to v8: Add captain_context tables")
+		if _, err := m.db.Exec(migration007); err != nil {
+			return fmt.Errorf("failed to run migration 007: %w", err)
+		}
+		fmt.Println("[MIGRATION] Successfully migrated to schema v8")
+	}
+
+	if version < 9 {
+		fmt.Println("[MIGRATION] Running migration to v9: Add metrics_history table")
+		if _, err := m.db.Exec(migration008); err != nil {
+			return fmt.Errorf("failed to run migration 008: %w", err)
+		}
+		fmt.Println("[MIGRATION] Successfully migrated to schema v9")
+	}
+
+	if version < 10 {
+		fmt.Println("[MIGRATION] Running migration to v10: Add task_assignments tables")
+		if _, err := m.db.Exec(migration009); err != nil {
+			return fmt.Errorf("failed to run migration 009: %w", err)
+		}
+		fmt.Println("[MIGRATION] Successfully migrated to schema v10")
+	}
+
+	if version < 11 {
+		fmt.Println("[MIGRATION] Running migration to v11: Add agent_type metrics segmentation")
+		// Add columns if they don't exist (ignore errors for duplicate columns)
+		m.db.Exec("ALTER TABLE metrics_history ADD COLUMN agent_type TEXT DEFAULT 'spawned_window'")
+		m.db.Exec("ALTER TABLE metrics_history ADD COLUMN parent_agent TEXT")
+		m.db.Exec("ALTER TABLE metrics_history ADD COLUMN assignment_id INTEGER")
+		// Run the rest of the migration (views and indexes)
+		if _, err := m.db.Exec(migration010); err != nil {
+			return fmt.Errorf("failed to run migration 010: %w", err)
+		}
+		fmt.Println("[MIGRATION] Successfully migrated to schema v11")
+	}
+
 	return nil
 }
 
@@ -148,6 +197,65 @@ func (m *SQLiteMemoryDB) Close() error {
 		return m.db.Close()
 	}
 	return nil
+}
+
+// Health returns the health status of the memory database
+func (m *SQLiteMemoryDB) Health() (*HealthStatus, error) {
+	status := &HealthStatus{
+		Connected: false,
+		DBPath:    m.path,
+	}
+
+	// Check connection with ping
+	if err := m.db.Ping(); err != nil {
+		return status, fmt.Errorf("database ping failed: %w", err)
+	}
+	status.Connected = true
+
+	// Get schema version
+	err := m.db.QueryRow("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").Scan(&status.SchemaVersion)
+	if err != nil {
+		return status, fmt.Errorf("failed to get schema version: %w", err)
+	}
+
+	// Get agent count
+	err = m.db.QueryRow("SELECT COUNT(*) FROM agent_control").Scan(&status.AgentCount)
+	if err != nil {
+		// Table may not exist yet, not fatal
+		status.AgentCount = 0
+	}
+
+	// Get task count
+	err = m.db.QueryRow("SELECT COUNT(*) FROM workflow_tasks").Scan(&status.TaskCount)
+	if err != nil {
+		status.TaskCount = 0
+	}
+
+	// Get learning count
+	err = m.db.QueryRow("SELECT COUNT(*) FROM agent_learnings").Scan(&status.LearningCount)
+	if err != nil {
+		status.LearningCount = 0
+	}
+
+	// Get context count and last update time
+	err = m.db.QueryRow("SELECT COUNT(*) FROM captain_context").Scan(&status.ContextCount)
+	if err != nil {
+		status.ContextCount = 0
+	}
+
+	// Get last context save time
+	var lastSave sql.NullString
+	err = m.db.QueryRow("SELECT MAX(updated_at) FROM captain_context").Scan(&lastSave)
+	if err == nil && lastSave.Valid {
+		status.LastContextSave = lastSave.String
+	}
+
+	// Get database file size
+	if fileInfo, err := os.Stat(m.path); err == nil {
+		status.DBSizeBytes = fileInfo.Size()
+	}
+
+	return status, nil
 }
 
 // Transaction helpers

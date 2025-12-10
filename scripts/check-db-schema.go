@@ -1,13 +1,15 @@
+//go:build ignore
+
 package main
 
 import (
 	"database/sql"
 	"fmt"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func main() {
-	db, err := sql.Open("sqlite3", "data/memory.db?_journal_mode=WAL")
+	db, err := sql.Open("sqlite", "data/memory.db?_journal_mode=WAL")
 	if err != nil {
 		fmt.Printf("Error opening DB: %v\n", err)
 		return

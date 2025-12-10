@@ -1,9 +1,11 @@
+//go:build ignore
+
 package main
 
 import (
 	"database/sql"
 	"fmt"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"os"
 )
 
@@ -13,7 +15,7 @@ func main() {
 		agentID = os.Args[1]
 	}
 
-	db, err := sql.Open("sqlite3", "data/memory.db?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", "data/memory.db?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

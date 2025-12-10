@@ -172,6 +172,55 @@ func (s *CaptainSupervisor) ShutdownChan() <-chan struct{} {
 	return s.shutdownChan
 }
 
+// MCPConfig structure for Captain's MCP config file
+type MCPConfig struct {
+	MCPServers map[string]MCPServerConfig `json:"mcpServers"`
+}
+
+// MCPServerConfig defines an MCP server connection
+type MCPServerConfig struct {
+	Type    string            `json:"type"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// createCaptainMCPConfig creates the MCP config file for Captain
+func (s *CaptainSupervisor) createCaptainMCPConfig() (string, error) {
+	mcpServerURL := fmt.Sprintf("http://localhost:%d/mcp/sse", s.serverPort)
+
+	config := MCPConfig{
+		MCPServers: map[string]MCPServerConfig{
+			"cliaimonitor": {
+				Type: "sse",
+				URL:  mcpServerURL,
+				Headers: map[string]string{
+					"X-Agent-ID":     "Captain",
+					"X-Access-Level": "admin",
+				},
+			},
+		},
+	}
+
+	// Ensure configs/mcp directory exists
+	mcpDir := filepath.Join(s.basePath, "configs", "mcp")
+	if err := os.MkdirAll(mcpDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create mcp config dir: %w", err)
+	}
+
+	configPath := filepath.Join(mcpDir, "captain-mcp.json")
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal MCP config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return "", fmt.Errorf("failed to write MCP config: %w", err)
+	}
+
+	return configPath, nil
+}
+
 // spawnCaptain launches the Captain in a new Windows Terminal
 func (s *CaptainSupervisor) spawnCaptain() error {
 	// Build Captain system prompt
@@ -198,8 +247,14 @@ func (s *CaptainSupervisor) spawnCaptain() error {
 		return fmt.Errorf("failed to write captain settings: %w", err)
 	}
 
-	// Initial prompt - check monitoring infrastructure
-	initialPrompt := "You are Captain (Orchestrator). Check your monitoring infrastructure: curl http://localhost:" + fmt.Sprintf("%d", s.serverPort) + "/api/state"
+	// Create MCP config for Captain to connect to the server
+	mcpConfigPath, err := s.createCaptainMCPConfig()
+	if err != nil {
+		return fmt.Errorf("failed to create MCP config: %w", err)
+	}
+
+	// Initial prompt - register via MCP and check infrastructure
+	initialPrompt := fmt.Sprintf("You are Captain (Orchestrator). First, call mcp__cliaimonitor__register_agent with agent_id='Captain' and role='Orchestrator' to register with the dashboard. Then call mcp__cliaimonitor__get_all_context to restore your session state. Check your monitoring infrastructure: curl http://localhost:%d/api/state", s.serverPort)
 
 	// Create launcher script with PID tracking
 	launcherScript := fmt.Sprintf(`# Set unique window title for process tracking
@@ -216,14 +271,15 @@ Write-Host '    CLIAIMONITOR CAPTAIN - Orchestrator' -ForegroundColor Yellow
 Write-Host '  ================================================' -ForegroundColor Yellow
 Write-Host ''
 Write-Host '  Dashboard: http://localhost:%d' -ForegroundColor Cyan
+Write-Host '  MCP:       %s' -ForegroundColor Cyan
 Write-Host '  Project:   %s' -ForegroundColor Cyan
 Write-Host "  PID:       $PID" -ForegroundColor DarkGray
 Write-Host ''
 
 Set-Location -Path '%s'
 
-claude --model claude-opus-4-5-20251101 --dangerously-skip-permissions "%s"
-`, s.basePath, s.serverPort, s.basePath, s.basePath, initialPrompt)
+claude --model claude-opus-4-5-20251101 --mcp-config '%s' --dangerously-skip-permissions "%s"
+`, s.basePath, s.serverPort, mcpConfigPath, s.basePath, s.basePath, mcpConfigPath, initialPrompt)
 
 	// Write launcher script
 	launcherFile := filepath.Join(os.TempDir(), "cliaimonitor-captain-launcher.ps1")
@@ -432,10 +488,36 @@ For persistent terminal agents (use the API):
     -H "Content-Type: application/json" \
     -d '{"config_name":"Snake","project_path":"C:/path/to/project","task":"Scan for security issues"}'
 
+## MCP Tools (PREFERRED - Use These!)
+You have MCP tools available via the cliaimonitor server. These are your PRIMARY interface:
+
+**Registration & Status:**
+- mcp__cliaimonitor__register_agent - Register yourself on startup (agent_id='Captain', role='Orchestrator')
+- mcp__cliaimonitor__report_status - Update your status (idle, busy, working)
+- mcp__cliaimonitor__send_heartbeat - Keep connection alive
+
+**Context Persistence (Your Memory):**
+- mcp__cliaimonitor__save_context - Save key-value context (survives restarts!)
+- mcp__cliaimonitor__get_context - Get a specific context entry
+- mcp__cliaimonitor__get_all_context - Get ALL saved context (call on startup!)
+- mcp__cliaimonitor__log_session - Log significant events
+
+**Common Context Keys:**
+- current_focus: What you're currently working on
+- recent_work: Summary of recent completed work
+- pending_tasks: Tasks waiting to be done
+- known_issues: Issues discovered but not yet fixed
+
+**Workflow with MCP:**
+1. On startup: Call register_agent, then get_all_context to restore state
+2. When starting work: save_context with current_focus
+3. When completing work: save_context with recent_work
+4. Periodically: send_heartbeat to stay connected
+
 ## Important
 - When you exit normally (/exit), the entire CLIAIMONITOR system shuts down gracefully
 - If you crash, you will be auto-restarted (up to 3 times per minute)
-- Check memory.db for learnings from past sessions before starting new tasks
+- Use MCP tools for context persistence - they survive restarts!
 - Use the API to spawn agents rather than running claude directly for better tracking
 
 Be proactive: check your monitoring infrastructure, review pending items, and coordinate work efficiently.

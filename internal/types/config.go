@@ -49,9 +49,10 @@ type WSMessage struct {
 
 // WebSocket message type constants
 const (
-	WSTypeStateUpdate = "state_update"
-	WSTypeAlert       = "alert"
-	WSTypeActivity    = "activity"
-	WSTypeSupervisor  = "supervisor_status"
-	WSTypeEscalation  = "escalation"
+	WSTypeStateUpdate    = "state_update"
+	WSTypeAlert          = "alert"
+	WSTypeActivity       = "activity"
+	WSTypeSupervisor     = "supervisor_status"
+	WSTypeEscalation     = "escalation"
+	WSTypeCaptainMessage = "captain_message"
 )

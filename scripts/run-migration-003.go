@@ -1,10 +1,12 @@
+//go:build ignore
+
 package main
 
 import (
 	"database/sql"
 	"fmt"
 	"os"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 var migration003 = `-- Migration 003: Add agent_control table
@@ -50,7 +52,7 @@ func main() {
 		dbPath = os.Args[1]
 	}
 
-	db, err := sql.Open("sqlite3", fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", dbPath))
+	db, err := sql.Open("sqlite", fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", dbPath))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open DB: %v\n", err)
 		os.Exit(1)

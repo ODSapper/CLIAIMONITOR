@@ -40,6 +40,11 @@ type Store interface {
 	GetPendingStopRequests() []*types.StopApprovalRequest
 	GetStopRequestByID(id string) *types.StopApprovalRequest
 
+	// Captain messages (human -> Captain)
+	AddCaptainMessage(msg *types.CaptainMessage)
+	GetUnreadCaptainMessages() []*types.CaptainMessage
+	MarkCaptainMessagesRead(ids []string)
+
 	// Alert operations
 	AddAlert(alert *types.Alert)
 	AcknowledgeAlert(id string)
@@ -375,6 +380,47 @@ func (s *JSONStore) GetStopRequestByID(id string) *types.StopApprovalRequest {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.state.StopRequests[id]
+}
+
+// AddCaptainMessage adds a message from human to Captain
+func (s *JSONStore) AddCaptainMessage(msg *types.CaptainMessage) {
+	s.mu.Lock()
+	if s.state.CaptainMessages == nil {
+		s.state.CaptainMessages = []*types.CaptainMessage{}
+	}
+	s.state.CaptainMessages = append(s.state.CaptainMessages, msg)
+	s.mu.Unlock()
+	s.scheduleSave()
+}
+
+// GetUnreadCaptainMessages returns messages Captain hasn't read yet
+func (s *JSONStore) GetUnreadCaptainMessages() []*types.CaptainMessage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var unread []*types.CaptainMessage
+	for _, msg := range s.state.CaptainMessages {
+		if !msg.Read {
+			unread = append(unread, msg)
+		}
+	}
+	return unread
+}
+
+// MarkCaptainMessagesRead marks specified messages as read
+func (s *JSONStore) MarkCaptainMessagesRead(ids []string) {
+	s.mu.Lock()
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	for _, msg := range s.state.CaptainMessages {
+		if idSet[msg.ID] {
+			msg.Read = true
+		}
+	}
+	s.mu.Unlock()
+	s.scheduleSave()
 }
 
 // AddAlert adds a new alert

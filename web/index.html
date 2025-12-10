@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CLIAIMONITOR - team-coop</title>
+    <title>CLITCOMMANDER - team-coop</title>
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -17,13 +17,18 @@
 
     <div id="app">
         <header class="header">
-            <h1>CLIAIMONITOR</h1>
+            <div class="header-left">
+                <h1>CLITCOMMANDER</h1>
+                <nav class="nav-tabs">
+                    <a href="/" class="nav-tab active">Dashboard</a>
+                    <a href="/metrics.html" class="nav-tab">Metrics</a>
+                </nav>
+            </div>
             <div class="header-controls">
                 <div class="status-bar">
                     <span class="status-indicator" id="nats-status">NATS: <span class="dot"></span></span>
                     <span class="status-indicator" id="captain-status">Captain: <span class="dot"></span> <span class="status-text">--</span></span>
                 </div>
-                <button id="new-task-btn" class="btn btn-primary">+ New Task</button>
                 <button id="mute-toggle" class="btn btn-icon" title="Toggle Sound">🔔</button>
             </div>
         </header>
@@ -54,6 +59,28 @@
 
         <!-- Agent Cards -->
         <section class="agent-lanes">
+            <div id="captain-card" class="captain-card">
+                <div class="captain-card-header">
+                    <div class="captain-identity">
+                        <span class="captain-icon">🎖️</span>
+                        <span class="captain-name">Captain</span>
+                    </div>
+                    <div class="captain-status-indicator">
+                        <span class="dot" id="captain-card-dot"></span>
+                        <span class="status-text" id="captain-card-status">--</span>
+                    </div>
+                </div>
+                <div id="captain-messages" class="captain-messages">
+                    <div class="chat-empty">
+                        <span class="chat-empty-icon">🎖️</span>
+                        <span class="chat-empty-text">Captain online. Send a message to start.</span>
+                    </div>
+                </div>
+                <div class="captain-input-container">
+                    <input type="text" id="captain-input" class="captain-input" placeholder="Message Captain..." />
+                    <button id="captain-send-btn" class="btn btn-primary">Send</button>
+                </div>
+            </div>
             <div id="agent-cards" class="agent-cards-grid">
                 <!-- Agent cards populated by JS -->
             </div>
@@ -79,8 +106,8 @@
             </table>
         </section>
 
-        <!-- Bottom Row: Alerts & Metrics -->
-        <div class="bottom-row">
+        <!-- Bottom Row: Alerts, Metrics -->
+        <div class="bottom-row two-columns">
             <section class="panel alerts-panel">
                 <h2>Alerts <span id="alert-count" class="badge">0</span></h2>
                 <div id="alerts-list" class="alerts-list"></div>
@@ -107,50 +134,6 @@
                     </div>
                 </div>
             </section>
-        </div>
-    </div>
-
-    <!-- New Task Modal -->
-    <div id="task-modal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <h2>New Task</h2>
-            <form id="task-form">
-                <div class="form-group">
-                    <label for="task-title">Title</label>
-                    <input type="text" id="task-title" required>
-                </div>
-                <div class="form-group">
-                    <label for="task-description">Description</label>
-                    <textarea id="task-description" rows="3"></textarea>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="task-priority">Priority</label>
-                        <select id="task-priority">
-                            <option value="1">P1 - Critical</option>
-                            <option value="2">P2 - High</option>
-                            <option value="3" selected>P3 - Standard</option>
-                            <option value="4">P4 - Enhancement</option>
-                            <option value="5">P5 - Normal</option>
-                            <option value="6">P6 - Low</option>
-                            <option value="7">P7 - Background</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="task-repo">Repository</label>
-                        <select id="task-repo">
-                            <option value="">Local</option>
-                            <option value="MAH">MAH</option>
-                            <option value="MSS">MSS</option>
-                            <option value="mss-ai">mss-ai</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="form-actions">
-                    <button type="button" class="btn" onclick="closeTaskModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Create Task</button>
-                </div>
-            </form>
         </div>
     </div>
 

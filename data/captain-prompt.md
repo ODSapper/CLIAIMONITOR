@@ -54,7 +54,7 @@ Real-time dashboard state (JSON). Check this for:
 - MSS: Firewall/IPS (Go) at ../MSS - Security server
 - MSS-AI: AI agent system (Go) at ../mss-ai
 - Planner: Task management API at ../planner
-- CLIAIMONITOR: This system at C:\Users\Admin\Documents\VS Projects\cliaimonitor
+- CLIAIMONITOR: This system at C:\Users\Admin\Documents\VS Projects\CLIAIMONITOR
 
 ## Available Agent Types
 Spawn these via the dashboard or API:
@@ -80,10 +80,36 @@ For persistent terminal agents (use the API):
     -H "Content-Type: application/json" \
     -d '{"config_name":"Snake","project_path":"C:/path/to/project","task":"Scan for security issues"}'
 
+## MCP Tools (PREFERRED - Use These!)
+You have MCP tools available via the cliaimonitor server. These are your PRIMARY interface:
+
+**Registration & Status:**
+- mcp__cliaimonitor__register_agent - Register yourself on startup (agent_id='Captain', role='Orchestrator')
+- mcp__cliaimonitor__report_status - Update your status (idle, busy, working)
+- mcp__cliaimonitor__send_heartbeat - Keep connection alive
+
+**Context Persistence (Your Memory):**
+- mcp__cliaimonitor__save_context - Save key-value context (survives restarts!)
+- mcp__cliaimonitor__get_context - Get a specific context entry
+- mcp__cliaimonitor__get_all_context - Get ALL saved context (call on startup!)
+- mcp__cliaimonitor__log_session - Log significant events
+
+**Common Context Keys:**
+- current_focus: What you're currently working on
+- recent_work: Summary of recent completed work
+- pending_tasks: Tasks waiting to be done
+- known_issues: Issues discovered but not yet fixed
+
+**Workflow with MCP:**
+1. On startup: Call register_agent, then get_all_context to restore state
+2. When starting work: save_context with current_focus
+3. When completing work: save_context with recent_work
+4. Periodically: send_heartbeat to stay connected
+
 ## Important
 - When you exit normally (/exit), the entire CLIAIMONITOR system shuts down gracefully
 - If you crash, you will be auto-restarted (up to 3 times per minute)
-- Check memory.db for learnings from past sessions before starting new tasks
+- Use MCP tools for context persistence - they survive restarts!
 - Use the API to spawn agents rather than running claude directly for better tracking
 
 Be proactive: check your monitoring infrastructure, review pending items, and coordinate work efficiently.

@@ -18,6 +18,7 @@ type HandlerCallbacks struct {
 	OnStopApproval       func(agentID, reason, context string, workCompleted bool) (bool, string, error)
 	OnShutdownNotify     func(agentID, reason string, approved, force bool) error
 	OnCaptainStatus      func(status, currentOp string, queueSize int) error
+	OnCaptainCommand     func(cmdType string, payload map[string]interface{}, from string) error // Dashboard -> Captain
 	OnEscalationForward  func(id, agentID, question, captainContext, captainRecommends string) error
 	OnSystemBroadcast    func(msgType, message string, data map[string]interface{}) error
 }
@@ -79,6 +80,13 @@ func (h *Handler) Start() error {
 	sub, err = h.client.Subscribe(SubjectCaptainStatus, h.handleCaptainStatus)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to captain status: %w", err)
+	}
+	h.addSub(sub)
+
+	// Subscribe to captain commands (dashboard -> captain)
+	sub, err = h.client.Subscribe(SubjectCaptainCommands, h.handleCaptainCommand)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to captain commands: %w", err)
 	}
 	h.addSub(sub)
 
@@ -216,6 +224,23 @@ func (h *Handler) handleCaptainStatus(msg *Message) {
 	if h.callbacks.OnCaptainStatus != nil {
 		if err := h.callbacks.OnCaptainStatus(status.Status, status.CurrentOp, status.QueueSize); err != nil {
 			log.Printf("[NATS-HANDLER] Captain status callback error: %v", err)
+		}
+	}
+}
+
+// handleCaptainCommand processes commands from dashboard to Captain
+func (h *Handler) handleCaptainCommand(msg *Message) {
+	var cmd CaptainCommandMessage
+	if err := json.Unmarshal(msg.Data, &cmd); err != nil {
+		log.Printf("[NATS-HANDLER] Invalid captain command message: %v", err)
+		return
+	}
+
+	log.Printf("[NATS-HANDLER] Captain command received: type=%s from=%s", cmd.Type, cmd.From)
+
+	if h.callbacks.OnCaptainCommand != nil {
+		if err := h.callbacks.OnCaptainCommand(cmd.Type, cmd.Payload, cmd.From); err != nil {
+			log.Printf("[NATS-HANDLER] Captain command callback error: %v", err)
 		}
 	}
 }

@@ -21,6 +21,7 @@ class Dashboard {
         this.loadProjects();
         this.loadSessionStats();
         this.loadTasks();
+        this.initCaptainChat();
         // Update stats every 30 seconds
         setInterval(() => this.loadSessionStats(), 30000);
         // Update tasks every 10 seconds
@@ -67,32 +68,51 @@ class Dashboard {
 
     updateNATSStatus(connected) {
         const el = document.getElementById('nats-status');
-        const dot = el.querySelector('.dot');
-        if (connected) {
-            dot.className = 'dot connected';
-        } else {
-            dot.className = 'dot disconnected';
+        if (!el) {
+            console.warn('[DASHBOARD] NATS status element not found');
+            return;
         }
+        const dot = el.querySelector('.dot');
+        if (!dot) {
+            console.warn('[DASHBOARD] NATS dot element not found');
+            return;
+        }
+        const newClass = connected ? 'dot connected' : 'dot disconnected';
+        dot.className = newClass;
+        console.log('[DASHBOARD] NATS status updated:', connected, '-> class:', newClass);
     }
 
     updateCaptainStatus(connected, status) {
         const el = document.getElementById('captain-status');
+        if (!el) {
+            console.warn('[DASHBOARD] Captain status element not found');
+            return;
+        }
         const dot = el.querySelector('.dot');
         const text = el.querySelector('.status-text');
 
-        if (connected) {
-            dot.className = 'dot connected';
-        } else {
-            dot.className = 'dot disconnected';
+        if (dot) {
+            const newClass = connected ? 'dot connected' : 'dot disconnected';
+            dot.className = newClass;
+            console.log('[DASHBOARD] Captain status updated:', connected, '-> class:', newClass);
         }
 
-        text.textContent = status || '--';
+        if (text) {
+            text.textContent = status || '--';
+        }
+    }
+
+    // WebSocket connection status (visual indicator could be added if needed)
+    updateConnectionStatus(connected) {
+        console.log('[DASHBOARD] WebSocket connection status:', connected);
+        // Currently just logs - status indicators show NATS/Captain status, not WebSocket
     }
 
     updateAgentCount(count) {
         const el = document.getElementById('agent-count');
+        if (!el) return;
         const countEl = el.querySelector('.count');
-        countEl.textContent = count;
+        if (countEl) countEl.textContent = count;
     }
 
     // Message Handling
@@ -101,6 +121,7 @@ class Dashboard {
             case 'state_update':
                 this.state = message.data;
                 this.render();
+                this.updateCaptainChatStatus();
                 break;
             case 'alert':
                 this.handleAlert(message.data);
@@ -110,6 +131,9 @@ class Dashboard {
                 break;
             case 'escalation_forward':
                 this.handleEscalation(message.data);
+                break;
+            case 'captain_message':
+                this.handleCaptainMessage(message.data);
                 break;
         }
     }
@@ -166,6 +190,14 @@ class Dashboard {
         try {
             const response = await fetch('/api/state');
             this.state = await response.json();
+            console.log('[DASHBOARD] Initial state loaded:', {
+                nats_connected: this.state.nats_connected,
+                captain_connected: this.state.captain_connected,
+                captain_status: this.state.captain_status
+            });
+            // Explicitly update status indicators after loading state
+            this.updateNATSStatus(this.state.nats_connected || false);
+            this.updateCaptainStatus(this.state.captain_connected || false, this.state.captain_status || '--');
             this.render();
         } catch (error) {
             console.error('Failed to load state:', error);
@@ -195,6 +227,7 @@ class Dashboard {
 
     renderProjectsDropdown() {
         const select = document.getElementById('project-select');
+        if (!select) return;
         select.innerHTML = '<option value="">Select project...</option>' +
             this.projects.map(p => `<option value="${this.escapeHtml(p.path)}" title="${this.escapeHtml(p.description)}">${this.escapeHtml(p.name)}${p.has_claude_md ? ' (CLAUDE.md)' : ''}</option>`).join('');
     }
@@ -203,13 +236,22 @@ class Dashboard {
         // Calculate uptime
         const startTime = new Date(stats.session_started_at);
         const uptime = this.formatUptime(startTime);
-        document.getElementById('stat-uptime').textContent = uptime;
 
-        // Display other stats
-        document.getElementById('stat-agents-spawned').textContent = stats.total_agents_spawned || 0;
-        document.getElementById('stat-total-tokens').textContent = this.formatNumber(stats.total_tokens_used || 0);
-        document.getElementById('stat-total-cost').textContent = '$' + (stats.total_estimated_cost || 0).toFixed(2);
-        document.getElementById('stat-completed-tasks').textContent = stats.completed_tasks || 0;
+        const uptimeEl = document.getElementById('stat-uptime');
+        if (uptimeEl) uptimeEl.textContent = uptime;
+
+        // Display other stats (only if elements exist)
+        const agentsEl = document.getElementById('stat-agents-spawned');
+        if (agentsEl) agentsEl.textContent = stats.total_agents_spawned || 0;
+
+        const tokensEl = document.getElementById('stat-total-tokens');
+        if (tokensEl) tokensEl.textContent = this.formatNumber(stats.total_tokens_used || 0);
+
+        const costEl = document.getElementById('stat-total-cost');
+        if (costEl) costEl.textContent = '$' + (stats.total_estimated_cost || 0).toFixed(2);
+
+        const completedEl = document.getElementById('stat-completed-tasks');
+        if (completedEl) completedEl.textContent = stats.completed_tasks || 0;
     }
 
     async spawnAgent(configName, projectPath) {
@@ -323,68 +365,89 @@ class Dashboard {
         });
 
         // Mute toggle
-        document.getElementById('mute-toggle').addEventListener('click', () => {
-            this.soundEnabled = !this.soundEnabled;
-            const btn = document.getElementById('mute-toggle');
-            btn.textContent = this.soundEnabled ? '🔔' : '🔕';
-            btn.classList.toggle('muted', !this.soundEnabled);
-        });
+        const muteBtn = document.getElementById('mute-toggle');
+        if (muteBtn) {
+            muteBtn.addEventListener('click', () => {
+                this.soundEnabled = !this.soundEnabled;
+                muteBtn.textContent = this.soundEnabled ? '🔔' : '🔕';
+                muteBtn.classList.toggle('muted', !this.soundEnabled);
+            });
+        }
 
-        // Spawn agent
-        document.getElementById('spawn-btn').addEventListener('click', () => {
-            const configName = document.getElementById('agent-type-select').value;
-            const projectPath = document.getElementById('project-select').value;
-            const count = parseInt(document.getElementById('agent-count-select').value) || 1;
-            if (configName && projectPath) {
-                for (let i = 0; i < count; i++) {
-                    this.spawnAgent(configName, projectPath);
+        // Spawn agent (if spawn controls exist)
+        const spawnBtn = document.getElementById('spawn-btn');
+        if (spawnBtn) {
+            spawnBtn.addEventListener('click', () => {
+                const configName = document.getElementById('agent-type-select')?.value;
+                const projectPath = document.getElementById('project-select')?.value;
+                const count = parseInt(document.getElementById('agent-count-select')?.value) || 1;
+                if (configName && projectPath) {
+                    for (let i = 0; i < count; i++) {
+                        this.spawnAgent(configName, projectPath);
+                    }
                 }
-            }
-        });
+            });
+        }
 
         // Agent type select
-        document.getElementById('agent-type-select').addEventListener('change', () => {
-            this.updateSpawnButton();
-        });
+        const agentTypeSelect = document.getElementById('agent-type-select');
+        if (agentTypeSelect) {
+            agentTypeSelect.addEventListener('change', () => {
+                this.updateSpawnButton();
+            });
+        }
 
         // Project select
-        document.getElementById('project-select').addEventListener('change', () => {
-            this.updateSpawnButton();
-        });
+        const projectSelect = document.getElementById('project-select');
+        if (projectSelect) {
+            projectSelect.addEventListener('change', () => {
+                this.updateSpawnButton();
+            });
+        }
 
         // Save thresholds
-        document.getElementById('save-thresholds').addEventListener('click', () => {
-            const thresholds = {
-                failed_tests_max: parseInt(document.getElementById('threshold-failed-tests').value) || 0,
-                idle_time_max_seconds: parseInt(document.getElementById('threshold-idle-time').value) || 0,
-                token_usage_max: parseInt(document.getElementById('threshold-tokens').value) || 0,
-                consecutive_rejects_max: parseInt(document.getElementById('threshold-rejects').value) || 0
-            };
-            this.saveThresholds(thresholds);
-        });
+        const saveThresholdsBtn = document.getElementById('save-thresholds');
+        if (saveThresholdsBtn) {
+            saveThresholdsBtn.addEventListener('click', () => {
+                const thresholds = {
+                    failed_tests_max: parseInt(document.getElementById('threshold-failed-tests')?.value) || 0,
+                    idle_time_max_seconds: parseInt(document.getElementById('threshold-idle-time')?.value) || 0,
+                    token_usage_max: parseInt(document.getElementById('threshold-tokens')?.value) || 0,
+                    consecutive_rejects_max: parseInt(document.getElementById('threshold-rejects')?.value) || 0
+                };
+                this.saveThresholds(thresholds);
+            });
+        }
 
         // Reset metrics
-        document.getElementById('reset-metrics').addEventListener('click', () => {
-            if (confirm('Reset all metrics history?')) {
-                this.resetMetrics();
-            }
-        });
+        const resetMetricsBtn = document.getElementById('reset-metrics');
+        if (resetMetricsBtn) {
+            resetMetricsBtn.addEventListener('click', () => {
+                if (confirm('Reset all metrics history?')) {
+                    this.resetMetrics();
+                }
+            });
+        }
 
         // Clear all alerts
-        document.getElementById('clear-alerts-btn').addEventListener('click', () => {
-            if (confirm('Clear all alerts?')) {
-                this.clearAllAlerts();
-            }
-        });
+        const clearAlertsBtn = document.getElementById('clear-alerts-btn');
+        if (clearAlertsBtn) {
+            clearAlertsBtn.addEventListener('click', () => {
+                if (confirm('Clear all alerts?')) {
+                    this.clearAllAlerts();
+                }
+            });
+        }
 
         // Activity filter
-        document.getElementById('activity-filter').addEventListener('change', (e) => {
-            this.renderActivityLog(e.target.value);
-        });
+        const activityFilter = document.getElementById('activity-filter');
+        if (activityFilter) {
+            activityFilter.addEventListener('change', (e) => {
+                this.renderActivityLog(e.target.value);
+            });
+        }
 
-        // Task modal bindings
-        document.getElementById('new-task-btn')?.addEventListener('click', () => this.openTaskModal());
-        document.getElementById('task-form')?.addEventListener('submit', (e) => this.createTask(e));
+        // Task creation is now via Captain Chat - modal removed
     }
 
     // Rendering
@@ -397,6 +460,9 @@ class Dashboard {
         const agentCount = Object.values(this.state.agents || {}).filter(a => a.id !== 'Supervisor').length;
         this.updateAgentCount(agentCount);
 
+        // Update Captain card
+        this.renderCaptainCard();
+
         this.renderAgents();
         this.renderAlerts();
         this.renderEscalations();
@@ -406,8 +472,23 @@ class Dashboard {
         this.updateSpawnButton();
     }
 
+    renderCaptainCard() {
+        const dot = document.getElementById('captain-card-dot');
+        const statusText = document.getElementById('captain-card-status');
+
+        if (dot && this.state) {
+            const connected = this.state.captain_connected || this.state.nats_connected;
+            dot.className = connected ? 'dot connected' : 'dot disconnected';
+        }
+
+        if (statusText && this.state) {
+            statusText.textContent = this.state.captain_status || 'idle';
+        }
+    }
+
     renderAgents() {
         const grid = document.getElementById('agents-grid');
+        if (!grid) return;
         const agents = Object.values(this.state.agents || {}).filter(a => a.id !== 'Supervisor');
 
         if (agents.length === 0) {
@@ -481,10 +562,14 @@ class Dashboard {
 
     renderAlerts() {
         const list = document.getElementById('alerts-list');
+        if (!list) return;
         const alerts = (this.state.alerts || []).filter(a => !a.acknowledged);
 
-        document.getElementById('alert-count').textContent = alerts.length;
-        document.getElementById('alert-count').setAttribute('data-count', alerts.length);
+        const alertCount = document.getElementById('alert-count');
+        if (alertCount) {
+            alertCount.textContent = alerts.length;
+            alertCount.setAttribute('data-count', alerts.length);
+        }
 
         if (alerts.length === 0) {
             list.innerHTML = '<div class="empty-state">No active alerts</div>';
@@ -507,10 +592,14 @@ class Dashboard {
 
     renderHumanInput() {
         const list = document.getElementById('human-input-list');
+        if (!list) return;
         const requests = Object.values(this.state.human_requests || {}).filter(r => !r.answered);
 
-        document.getElementById('human-input-count').textContent = requests.length;
-        document.getElementById('human-input-count').setAttribute('data-count', requests.length);
+        const humanInputCount = document.getElementById('human-input-count');
+        if (humanInputCount) {
+            humanInputCount.textContent = requests.length;
+            humanInputCount.setAttribute('data-count', requests.length);
+        }
 
         if (requests.length === 0) {
             list.innerHTML = '<div class="empty-state">No pending requests</div>';
@@ -542,11 +631,15 @@ class Dashboard {
 
     renderEscalations() {
         const list = document.getElementById('escalations-list');
+        if (!list) return;
         const escalations = this.state.escalations || [];
         const pending = escalations.filter(e => !e.responded);
 
-        document.getElementById('escalation-count').textContent = pending.length;
-        document.getElementById('escalation-count').setAttribute('data-count', pending.length);
+        const escalationCount = document.getElementById('escalation-count');
+        if (escalationCount) {
+            escalationCount.textContent = pending.length;
+            escalationCount.setAttribute('data-count', pending.length);
+        }
 
         if (pending.length === 0) {
             list.innerHTML = '<div class="empty-state">No pending escalations</div>';
@@ -600,22 +693,29 @@ class Dashboard {
 
     renderThresholds() {
         const t = this.state.thresholds || {};
-        document.getElementById('threshold-failed-tests').value = t.failed_tests_max || 5;
-        document.getElementById('threshold-idle-time').value = t.idle_time_max_seconds || 600;
-        document.getElementById('threshold-tokens').value = t.token_usage_max || 100000;
-        document.getElementById('threshold-rejects').value = t.consecutive_rejects_max || 3;
+        const failedTestsEl = document.getElementById('threshold-failed-tests');
+        if (failedTestsEl) failedTestsEl.value = t.failed_tests_max || 5;
+        const idleTimeEl = document.getElementById('threshold-idle-time');
+        if (idleTimeEl) idleTimeEl.value = t.idle_time_max_seconds || 600;
+        const tokensEl = document.getElementById('threshold-tokens');
+        if (tokensEl) tokensEl.value = t.token_usage_max || 100000;
+        const rejectsEl = document.getElementById('threshold-rejects');
+        if (rejectsEl) rejectsEl.value = t.consecutive_rejects_max || 3;
     }
 
     renderActivityLog(filterAgent = '') {
         const log = document.getElementById('activity-log');
+        if (!log) return;
         let activities = this.state.activity_log || [];
 
         // Update filter options
         const filter = document.getElementById('activity-filter');
-        const agents = [...new Set(activities.map(a => a.agent_id))];
-        const currentValue = filter.value;
-        filter.innerHTML = '<option value="">All Agents</option>' +
-            agents.map(a => `<option value="${a}" ${a === currentValue ? 'selected' : ''}>${a}</option>`).join('');
+        if (filter) {
+            const agents = [...new Set(activities.map(a => a.agent_id))];
+            const currentValue = filter.value;
+            filter.innerHTML = '<option value="">All Agents</option>' +
+                agents.map(a => `<option value="${a}" ${a === currentValue ? 'selected' : ''}>${a}</option>`).join('');
+        }
 
         // Apply filter
         if (filterAgent) {
@@ -644,14 +744,17 @@ class Dashboard {
         if (!this.state) return;
         this.state.activity_log = this.state.activity_log || [];
         this.state.activity_log.push(activity);
-        this.renderActivityLog(document.getElementById('activity-filter').value);
+        const filter = document.getElementById('activity-filter');
+        this.renderActivityLog(filter ? filter.value : '');
     }
 
     updateSpawnButton() {
         const btn = document.getElementById('spawn-btn');
         const agentSelect = document.getElementById('agent-type-select');
         const projectSelect = document.getElementById('project-select');
-        btn.disabled = !agentSelect.value || !projectSelect.value;
+        if (btn && agentSelect && projectSelect) {
+            btn.disabled = !agentSelect.value || !projectSelect.value;
+        }
     }
 
     // Utilities
@@ -786,14 +889,16 @@ class Dashboard {
 
     getStatusColor(status) {
         const colors = {
-            'connected': '#00cc66',
-            'working': '#00cc66',
-            'idle': '#999',
-            'blocked': '#ff9900',
-            'disconnected': '#cc3333',
-            'error': '#cc3333'
+            'working': '#00cc66',      // green
+            'scanning': '#00cc66',     // green
+            'connected': '#00cc66',    // green
+            'idle': '#ffcc00',         // yellow
+            'blocked': '#ff9900',      // orange
+            'error': '#cc3333',        // red
+            'stopped': '#cc3333',      // red
+            'disconnected': '#666666'  // gray
         };
-        return colors[status] || '#999';
+        return colors[status] || '#666666';
     }
 
     formatDuration(startTime) {
@@ -884,42 +989,111 @@ class Dashboard {
         return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
     }
 
-    // Task modal
-    openTaskModal() {
-        document.getElementById('task-modal').style.display = 'flex';
+    // Task creation now handled via Captain Chat (sendCaptainMessage)
+
+    // Captain Chat functionality
+    initCaptainChat() {
+        const sendBtn = document.getElementById('captain-send-btn');
+        const input = document.getElementById('captain-input');
+
+        if (sendBtn) {
+            sendBtn.addEventListener('click', () => this.sendCaptainMessage());
+            console.log('[DASHBOARD] Captain send button bound');
+        }
+
+        if (input) {
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    this.sendCaptainMessage();
+                }
+            });
+        }
+
+        // Update Captain status display
+        this.updateCaptainChatStatus();
     }
 
-    closeTaskModal() {
-        document.getElementById('task-modal').style.display = 'none';
-        document.getElementById('task-form').reset();
+    updateCaptainChatStatus() {
+        // Update Captain card status
+        this.renderCaptainCard();
+
+        // Note: captain-msg-status element was removed from bottom-row panel
+        // All Captain status now shown in the Captain card
     }
 
-    async createTask(e) {
-        e.preventDefault();
+    async sendCaptainMessage() {
+        const input = document.getElementById('captain-input');
+        if (!input) return;
 
-        const task = {
-            title: document.getElementById('task-title').value,
-            description: document.getElementById('task-description').value,
-            priority: parseInt(document.getElementById('task-priority').value),
-            repo: document.getElementById('task-repo').value
-        };
+        const message = input.value.trim();
+        if (!message) return;
 
+        console.log('[DASHBOARD] Sending message to Captain:', message);
+
+        // Add to chat display immediately
+        this.addCaptainMessage('human', message);
+        input.value = '';
+
+        // Send via API
         try {
-            const response = await fetch('/api/tasks', {
+            const response = await fetch('/api/captain/command', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(task)
+                body: JSON.stringify({
+                    type: 'message',
+                    payload: {
+                        text: message,
+                        from: 'human',
+                        timestamp: new Date().toISOString()
+                    }
+                })
             });
 
-            if (response.ok) {
-                this.closeTaskModal();
-                this.loadTasks();
-            } else {
-                alert('Failed to create task');
+            if (!response.ok) {
+                // If the command endpoint doesn't support 'message' type,
+                // submit as a task instead
+                console.log('[DASHBOARD] Command failed, trying task endpoint...');
+                await fetch('/api/captain/task', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: message.slice(0, 100),
+                        description: message
+                    })
+                });
             }
         } catch (error) {
-            console.error('Create task error:', error);
-            alert('Failed to create task');
+            console.error('[DASHBOARD] Failed to send message to Captain:', error);
+            this.addCaptainMessage('captain', 'Error: Failed to send message');
+        }
+    }
+
+    addCaptainMessage(from, text) {
+        const container = document.getElementById('captain-messages');
+        if (!container) return;
+
+        // Remove empty state if present
+        const emptyState = container.querySelector('.chat-empty');
+        if (emptyState) {
+            emptyState.remove();
+        }
+
+        const div = document.createElement('div');
+        div.className = `captain-message ${from}`;
+        div.innerHTML = `
+            <span class="msg-sender">${from === 'human' ? 'You' : 'Captain'}</span>
+            <span class="msg-text">${this.escapeHtml(text)}</span>
+        `;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+
+        console.log('[DASHBOARD] Captain chat message added:', from, text.slice(0, 50) + '...');
+    }
+
+    // Handle incoming Captain messages via WebSocket
+    handleCaptainMessage(data) {
+        if (data.text) {
+            this.addCaptainMessage('captain', data.text);
         }
     }
 
@@ -928,8 +1102,7 @@ class Dashboard {
 // Initialize
 const dashboard = new Dashboard();
 
-// Make closeTaskModal global for onclick
-window.closeTaskModal = () => dashboard.closeTaskModal();
+// Task modal removed - Captain Chat used instead
 
 // ============================================================
 // Notification Banner Controller

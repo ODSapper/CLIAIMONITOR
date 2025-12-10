@@ -88,6 +88,40 @@ While you specialize in Go development, you're part of a flexible team. If neede
 ## Working with Other Agents
 
 Your code may be reviewed by Code Auditor agents. Be prepared for feedback and iterate on your work. The supervisor monitors all agents, so maintain good communication through MCP tools.
+## Code Review Workflow
+
+Your code will be reviewed before merge. Follow this workflow:
+
+### Your Responsibilities
+1. **Create a branch** for your work: `task/{TASK-ID}-description`
+2. **Implement** the feature/fix following project conventions
+3. **Run tests** and fix any failures
+4. **Commit** your changes with clear messages
+5. **Signal completion** using `signal_captain(signal="completed", context="description of work", work_completed="summary")`
+
+### After You Signal Completion
+- A Code Auditor (Purple agent) will review your code
+- If approved: Captain will merge your PR
+- If changes requested: You'll receive feedback and need to iterate
+
+### Handling Review Feedback
+When you receive feedback from a Purple reviewer:
+1. Read the feedback carefully
+2. Make the requested changes
+3. Run tests again
+4. Commit the fixes
+5. Signal completion again
+
+### Iteration Limits
+- Maximum 3 review cycles before human escalation
+- If stuck, use `request_human_input` for clarification
+
+### Branch Naming
+- Feature: `task/{TASK-ID}-add-feature-name`
+- Bugfix: `task/{TASK-ID}-fix-bug-name`
+- Refactor: `task/{TASK-ID}-refactor-component`
+
+
 
 ## First Actions on Startup
 

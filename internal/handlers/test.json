@@ -4,13 +4,25 @@
   "metrics_history": [],
   "human_requests": {},
   "stop_requests": {
+    "stop-123": {
+      "id": "stop-123",
+      "agent_id": "agent-1",
+      "reason": "task_complete",
+      "context": "Test context",
+      "work_completed": "Test work",
+      "created_at": "2025-12-08T20:57:21.9013244-06:00",
+      "reviewed": false,
+      "approved": false,
+      "response": "",
+      "reviewed_by": ""
+    },
     "stop-456": {
       "id": "stop-456",
       "agent_id": "agent-2",
       "reason": "task_complete",
       "context": "Test context",
       "work_completed": "Test work",
-      "created_at": "2025-12-04T10:52:54.778593-06:00",
+      "created_at": "2025-12-08T20:46:39.6721097-06:00",
       "reviewed": true,
       "approved": true,
       "response": "Approved",
@@ -18,7 +30,15 @@
     }
   },
   "alerts": [],
-  "activity_log": [],
+  "activity_log": [
+    {
+      "id": "activity-1765246532804142800",
+      "agent_id": "Captain",
+      "action": "recon_failed",
+      "details": "Recon recon-1765246532803625400 failed: failed to write prompt file: open data\\subagent-team-snake.md: The system cannot find the path specified.",
+      "timestamp": "2025-12-08T20:15:32.8041428-06:00"
+    }
+  ],
   "judgments": [],
   "thresholds": {
     "failed_tests_max": 5,
@@ -27,16 +47,17 @@
     "token_usage_max": 100000,
     "consecutive_rejects_max": 3
   },
-  "last_human_checkin": "2025-12-03T22:15:10.4192152-06:00",
+  "last_human_checkin": "2025-12-08T20:15:32.8036254-06:00",
   "agent_counters": {},
   "session_stats": {
     "total_agents_spawned": 0,
     "total_tokens_used": 0,
     "total_estimated_cost": 0,
-    "session_started_at": "2025-12-03T22:15:10.4192152-06:00",
-    "completed_tasks": 6
+    "session_started_at": "2025-12-08T20:15:32.8036254-06:00",
+    "completed_tasks": 8
   },
   "nats_connected": false,
   "captain_connected": false,
-  "captain_status": ""
+  "captain_status": "",
+  "captain_messages": null
 }

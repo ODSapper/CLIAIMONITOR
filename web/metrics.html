@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metrics - CLITCOMMANDER</title>
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        /* Additional styles specific to metrics page */
+        .nav-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .nav-tab {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-tab:hover {
+            background: var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .nav-tab.active {
+            background: var(--accent-blue);
+            color: white;
+        }
+
+        .model-costs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .model-cost-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 1rem;
+            border-left: 4px solid var(--accent-blue);
+        }
+
+        .model-cost-card.opus {
+            border-left-color: #ff1493;
+        }
+
+        .model-cost-card.sonnet {
+            border-left-color: #f472b6;
+        }
+
+        .model-cost-card.haiku {
+            border-left-color: #fda4af;
+        }
+
+        .model-name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            color: var(--text-primary);
+        }
+
+        .cost-stats {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .cost-stat {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+        }
+
+        .cost-label {
+            color: var(--text-secondary);
+        }
+
+        .cost-value {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .cost-value.total {
+            color: var(--accent-blue);
+            font-size: 1.2rem;
+        }
+
+        .agent-performance-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 2rem;
+        }
+
+        .agent-performance-table th,
+        .agent-performance-table td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .agent-performance-table th {
+            background: var(--bg-darker);
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }
+
+        .agent-performance-table td {
+            font-size: 0.9rem;
+        }
+
+        .model-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .model-badge.opus {
+            background: rgba(255, 20, 147, 0.2);
+            color: #ff1493;
+        }
+
+        .model-badge.sonnet {
+            background: rgba(244, 114, 182, 0.2);
+            color: #f472b6;
+        }
+
+        .model-badge.haiku {
+            background: rgba(253, 164, 175, 0.2);
+            color: #fda4af;
+        }
+
+        /* Agent type cards */
+        .agent-type-card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 1rem;
+            border-left: 4px solid var(--accent-blue);
+        }
+
+        .agent-type-card.captain {
+            border-left-color: #ffd700;
+        }
+
+        .agent-type-card.sgt {
+            border-left-color: #33ff99;
+        }
+
+        .agent-type-card.spawned_window {
+            border-left-color: #64b5f6;
+        }
+
+        .agent-type-card.subagent {
+            border-left-color: #ba68c8;
+        }
+
+        .agent-type-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .agent-type-name {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .agent-type-percent {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--accent-blue);
+        }
+
+        .agent-type-stats {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+        }
+
+        .stat-row .stat-label {
+            color: var(--text-secondary);
+        }
+
+        .stat-row .stat-value {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .stat-row.total {
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .stat-row.total .stat-value {
+            font-size: 1.1rem;
+            color: var(--accent-blue);
+        }
+
+        /* Type badges for table */
+        .type-badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .type-badge.captain {
+            background: rgba(255, 215, 0, 0.2);
+            color: #ffd700;
+        }
+
+        .type-badge.sgt {
+            background: rgba(51, 255, 153, 0.2);
+            color: #33ff99;
+        }
+
+        .type-badge.spawned_window {
+            background: rgba(100, 181, 246, 0.2);
+            color: #64b5f6;
+        }
+
+        .type-badge.subagent {
+            background: rgba(186, 104, 200, 0.2);
+            color: #ba68c8;
+        }
+
+        .task-pipeline {
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            padding: 2rem;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            margin-bottom: 2rem;
+        }
+
+        .pipeline-stage {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .pipeline-count {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-blue);
+        }
+
+        .pipeline-label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+
+        .pipeline-arrow {
+            font-size: 1.5rem;
+            color: var(--text-muted);
+        }
+
+        .chart-placeholder {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 3rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-style: italic;
+            margin-bottom: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <h1>CLITCOMMANDER</h1>
+            <div class="header-controls">
+                <div class="status-bar">
+                    <span class="status-indicator" id="nats-status">NATS: <span class="dot"></span></span>
+                    <span class="status-indicator" id="captain-status">Captain: <span class="dot"></span> <span class="status-text">--</span></span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <div style="padding: 1rem 2rem;">
+            <div class="nav-tabs">
+                <a href="/" class="nav-tab">Dashboard</a>
+                <a href="/metrics.html" class="nav-tab active">Metrics</a>
+            </div>
+        </div>
+
+        <!-- Cost by Agent Type -->
+        <section class="panel" style="margin: 0 2rem 1rem 2rem;">
+            <h2>Cost by Agent Type</h2>
+            <div id="agent-type-grid" class="model-costs-grid">
+                <!-- Agent type cost cards populated by JS -->
+                <div class="empty-state">Loading agent type metrics...</div>
+            </div>
+        </section>
+
+        <!-- Model Cost Comparison -->
+        <section class="panel" style="margin: 0 2rem 1rem 2rem;">
+            <h2>Cost by Model</h2>
+            <div id="model-costs-grid" class="model-costs-grid">
+                <!-- Model cost cards populated by JS -->
+                <div class="empty-state">Loading model metrics...</div>
+            </div>
+        </section>
+
+        <!-- Task Pipeline -->
+        <section class="panel" style="margin: 0 2rem 1rem 2rem;">
+            <h2>Task Pipeline</h2>
+            <div class="task-pipeline">
+                <div class="pipeline-stage">
+                    <div id="pipeline-pending" class="pipeline-count">0</div>
+                    <div class="pipeline-label">Pending</div>
+                </div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-stage">
+                    <div id="pipeline-green" class="pipeline-count">0</div>
+                    <div class="pipeline-label">Green Team</div>
+                </div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-stage">
+                    <div id="pipeline-purple" class="pipeline-count">0</div>
+                    <div class="pipeline-label">Purple Team</div>
+                </div>
+                <div class="pipeline-arrow">→</div>
+                <div class="pipeline-stage">
+                    <div id="pipeline-complete" class="pipeline-count">0</div>
+                    <div class="pipeline-label">Complete</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Token Usage Chart -->
+        <section class="panel" style="margin: 0 2rem 1rem 2rem;">
+            <h2>Token Usage Over Time</h2>
+            <div class="chart-placeholder">
+                Chart visualization coming soon (Chart.js integration)
+            </div>
+        </section>
+
+        <!-- Agent Performance Table -->
+        <section class="panel" style="margin: 0 2rem 2rem 2rem;">
+            <h2>Agent Performance</h2>
+            <table class="agent-performance-table">
+                <thead>
+                    <tr>
+                        <th>Agent ID</th>
+                        <th>Type</th>
+                        <th>Model</th>
+                        <th>Parent</th>
+                        <th>Reports</th>
+                        <th>Total Tokens</th>
+                        <th>Est. Cost</th>
+                        <th>Avg. Tokens</th>
+                    </tr>
+                </thead>
+                <tbody id="agent-performance-body">
+                    <!-- Agent performance rows populated by JS -->
+                    <tr>
+                        <td colspan="8" class="empty-state">Loading agent metrics...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <script src="/metrics.js"></script>
+</body>
+</html>

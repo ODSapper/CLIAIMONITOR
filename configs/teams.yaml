@@ -31,6 +31,7 @@ agents:
     color: "#cc3333"
     skip_permissions: true
 
+  # Opus agents - complex reasoning tasks
   - name: OpusGreen
     model: claude-opus-4-5-20251101
     role: Go Developer
@@ -49,8 +50,28 @@ agents:
     color: "#ff4444"
     skip_permissions: true
 
-  - name: Snake
+  # SGT (Sergeant) agents - team leads using Opus
+  - name: SGTGreen
     model: claude-opus-4-5-20251101
+    role: Implementation SGT
+    color: "#33ff99"
+    prefix: SGT-Green
+    numbering: false
+    prompt_file: sgt-green.md
+    skip_permissions: true
+
+  - name: SGTPurple
+    model: claude-opus-4-5-20251101
+    role: Review SGT
+    color: "#bb66ff"
+    prefix: SGT-Purple
+    numbering: false
+    prompt_file: sgt-purple.md
+    skip_permissions: true
+
+  # Reconnaissance - Sonnet for cost efficiency
+  - name: Snake
+    model: claude-sonnet-4-5-20250929
     role: Reconnaissance & Special Ops
     color: "#2d5016"
     prefix: Snake

@@ -22,12 +22,14 @@ const (
 type AgentRole string
 
 const (
-	RoleGoDeveloper     AgentRole = "Go Developer"
-	RoleCodeAuditor     AgentRole = "Code Auditor"
-	RoleEngineer        AgentRole = "Engineer"
-	RoleSecurity        AgentRole = "Security"
-	RoleSupervisor      AgentRole = "Supervisor"
-	RoleReconSpecialOps AgentRole = "Reconnaissance & Special Ops"
+	RoleGoDeveloper      AgentRole = "Go Developer"
+	RoleCodeAuditor      AgentRole = "Code Auditor"
+	RoleEngineer         AgentRole = "Engineer"
+	RoleSecurity         AgentRole = "Security"
+	RoleSupervisor       AgentRole = "Supervisor"
+	RoleReconSpecialOps  AgentRole = "Reconnaissance & Special Ops"
+	RoleImplementationSGT AgentRole = "Implementation SGT"
+	RoleReviewSGT        AgentRole = "Review SGT"
 )
 
 // AgentConfig from teams.yaml
@@ -68,6 +70,12 @@ type AgentMetrics struct {
 	ConsecutiveRejects int       `json:"consecutive_rejects"`
 	IdleSince          time.Time `json:"idle_since"`
 	LastUpdated        time.Time `json:"last_updated"`
+	// Token tracking fields
+	Model          string  `json:"model"`           // e.g., "claude-sonnet-4-5"
+	TaskID         string  `json:"task_id"`         // Current task being worked on
+	SessionTokens  int64   `json:"session_tokens"`  // Tokens this session
+	SessionCost    float64 `json:"session_cost"`    // Cost this session
+	TotalTasks     int     `json:"total_tasks"`     // Tasks completed lifetime
 }
 
 // AlertThresholds configurable via dashboard
@@ -172,6 +180,17 @@ type MetricsSnapshot struct {
 	Agents    map[string]*AgentMetrics `json:"agents"`
 }
 
+// CaptainMessage represents a message to/from Captain via dashboard chat
+type CaptainMessage struct {
+	ID        string                 `json:"id"`
+	Type      string                 `json:"type"`    // "command", "response", "chat"
+	Text      string                 `json:"text"`    // Message content
+	Payload   map[string]interface{} `json:"payload"` // Optional structured data
+	From      string                 `json:"from"`    // "human" or "captain"
+	CreatedAt time.Time              `json:"created_at"`
+	Read      bool                   `json:"read"`
+}
+
 // SessionStats tracks aggregate statistics for the current session
 type SessionStats struct {
 	TotalAgentsSpawned int       `json:"total_agents_spawned"`
@@ -198,6 +217,7 @@ type DashboardState struct {
 	NATSConnected    bool                            `json:"nats_connected"`
 	CaptainConnected bool                            `json:"captain_connected"`
 	CaptainStatus    string                          `json:"captain_status"` // idle, busy, error
+	CaptainMessages  []*CaptainMessage               `json:"captain_messages"`
 }
 
 // NewDashboardState creates empty state with defaults
