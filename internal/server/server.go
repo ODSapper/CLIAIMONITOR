@@ -391,6 +391,11 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/captain/context/{key}", s.handleDeleteCaptainContext).Methods("DELETE")
 	api.HandleFunc("/captain/context/summary", s.handleGetCaptainContextSummary).Methods("GET")
 
+	// Review Board / Leaderboard endpoints
+	api.HandleFunc("/leaderboard", s.handleGetLeaderboard).Methods("GET")
+	api.HandleFunc("/review-boards", s.handleGetReviewBoards).Methods("GET")
+	api.HandleFunc("/defect-categories", s.handleGetDefectCategories).Methods("GET")
+
 	// Escalation & Captain Control endpoints
 	api.HandleFunc("/escalation/{id}/respond", s.handleSubmitEscalationResponse).Methods("POST")
 	api.HandleFunc("/captain/command", s.handleSendCaptainCommand).Methods("POST")
@@ -1377,6 +1382,182 @@ func (s *Server) setupMCPCallbacks() {
 				"count":   len(metrics),
 			}, nil
 		},
+
+		// Review Board callbacks
+		OnCreateReviewBoard: func(assignmentID int64, reviewerCount int, complexity int, riskLevel string) (interface{}, error) {
+			// Validate reviewer count 1-5
+			if reviewerCount < 1 {
+				reviewerCount = 1
+			}
+			if reviewerCount > 5 {
+				reviewerCount = 5
+			}
+			if riskLevel == "" {
+				riskLevel = "medium"
+			}
+
+			board := &memory.ReviewBoard{
+				AssignmentID:    assignmentID,
+				ReviewerCount:   reviewerCount,
+				Status:          "pending",
+				ComplexityScore: complexity,
+				RiskLevel:       riskLevel,
+			}
+
+			if err := s.memDB.CreateReviewBoard(board); err != nil {
+				return nil, err
+			}
+
+			s.logActivity("[REVIEW-BOARD]", fmt.Sprintf("Created board %d for assignment %d with %d reviewers", board.ID, assignmentID, reviewerCount))
+
+			return map[string]interface{}{
+				"board_id":       board.ID,
+				"assignment_id":  assignmentID,
+				"reviewer_count": reviewerCount,
+				"status":         "created",
+				"message":        fmt.Sprintf("Review board created. Assign %d reviewers.", reviewerCount),
+			}, nil
+		},
+
+		OnSubmitDefect: func(agentID string, boardID int64, defect map[string]interface{}) (interface{}, error) {
+			d := &memory.ReviewDefect{
+				BoardID:     boardID,
+				ReviewerID:  agentID,
+				Category:    defect["category"].(string),
+				Severity:    defect["severity"].(string),
+				Title:       defect["title"].(string),
+				Description: defect["description"].(string),
+				Status:      "open",
+			}
+
+			// Optional fields
+			if v, ok := defect["file_path"].(string); ok {
+				d.FilePath = v
+			}
+			if v, ok := defect["line_start"].(float64); ok {
+				d.LineStart = int(v)
+			}
+			if v, ok := defect["line_end"].(float64); ok {
+				d.LineEnd = int(v)
+			}
+			if v, ok := defect["suggested_fix"].(string); ok {
+				d.SuggestedFix = v
+			}
+
+			if err := s.memDB.CreateDefect(d); err != nil {
+				return nil, err
+			}
+
+			return map[string]interface{}{
+				"defect_id": d.ID,
+				"board_id":  boardID,
+				"category":  d.Category,
+				"severity":  d.Severity,
+				"status":    "recorded",
+			}, nil
+		},
+
+		OnRecordReviewerVote: func(boardID int64, reviewerID string, approved bool, confidence int, defectsFound int, tokensUsed int64) (interface{}, error) {
+			vote := &memory.ReviewerVote{
+				BoardID:         boardID,
+				ReviewerID:      reviewerID,
+				Approved:        approved,
+				ConfidenceScore: confidence,
+				DefectsFound:    defectsFound,
+				TokensUsed:      tokensUsed,
+			}
+
+			if err := s.memDB.CreateReviewerVote(vote); err != nil {
+				return nil, err
+			}
+
+			verdict := "rejected"
+			if approved {
+				verdict = "approved"
+			}
+			s.logActivity("[REVIEWER-VOTE]", fmt.Sprintf("Reviewer %s voted %s on board %d (%d defects)", reviewerID, verdict, boardID, defectsFound))
+
+			return map[string]interface{}{
+				"vote_id":     vote.ID,
+				"board_id":    boardID,
+				"reviewer_id": reviewerID,
+				"approved":    approved,
+				"status":      "recorded",
+			}, nil
+		},
+
+		OnFinalizeBoard: func(boardID int64) (interface{}, error) {
+			// Calculate consensus
+			consensus, err := s.memDB.CalculateConsensus(boardID)
+			if err != nil {
+				return nil, err
+			}
+
+			// Get board to update
+			board, err := s.memDB.GetReviewBoard(boardID)
+			if err != nil {
+				return nil, err
+			}
+
+			// Update board with final verdict
+			board.Status = "completed"
+			board.FinalVerdict = consensus.Decision
+			board.AggregatedFeedback = consensus.AggregatedFeedback
+			now := time.Now()
+			board.CompletedAt = &now
+
+			if err := s.memDB.UpdateReviewBoard(board); err != nil {
+				return nil, err
+			}
+
+			// Update quality scores
+			if err := s.memDB.UpdateQualityScoresAfterReview(boardID, consensus); err != nil {
+				// Log but don't fail
+				log.Printf("[REVIEW-BOARD] Failed to update quality scores: %v", err)
+			}
+
+			s.logActivity("[REVIEW-FINALIZED]", fmt.Sprintf("Board %d: %s (votes: %d/%d, defects: %d)", boardID, consensus.Decision, consensus.VotesFor, consensus.VotesFor+consensus.VotesAgainst, consensus.TotalDefects))
+
+			return map[string]interface{}{
+				"board_id":         boardID,
+				"decision":         consensus.Decision,
+				"approved":         consensus.Approved,
+				"votes_for":        consensus.VotesFor,
+				"votes_against":    consensus.VotesAgainst,
+				"total_defects":    consensus.TotalDefects,
+				"critical_defects": consensus.CriticalDefects,
+				"high_defects":     consensus.HighDefects,
+				"feedback":         consensus.AggregatedFeedback,
+			}, nil
+		},
+
+		OnGetAgentLeaderboard: func(role string, limit int) (interface{}, error) {
+			if limit <= 0 {
+				limit = 20
+			}
+			scores, err := s.memDB.GetAgentLeaderboard(role, limit)
+			if err != nil {
+				return nil, err
+			}
+
+			return map[string]interface{}{
+				"leaderboard": scores,
+				"count":       len(scores),
+				"role_filter": role,
+			}, nil
+		},
+
+		OnGetDefectCategories: func() (interface{}, error) {
+			categories, err := s.memDB.GetDefectCategories()
+			if err != nil {
+				return nil, err
+			}
+
+			return map[string]interface{}{
+				"categories": categories,
+				"count":      len(categories),
+			}, nil
+		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
@@ -1610,4 +1791,15 @@ func (s *Server) getAgentConfigsMap() map[string]types.AgentConfig {
 		configs[s.config.Supervisor.Name] = s.config.Supervisor
 	}
 	return configs
+}
+
+// logActivity is a helper to log activities with a consistent format
+func (s *Server) logActivity(action, details string) {
+	s.store.AddActivity(&types.ActivityLog{
+		ID:        fmt.Sprintf("%s-%d", strings.ToLower(strings.ReplaceAll(action, " ", "-")), time.Now().UnixNano()),
+		AgentID:   "system",
+		Action:    action,
+		Details:   details,
+		Timestamp: time.Now(),
+	})
 }

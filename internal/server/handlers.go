@@ -1033,3 +1033,70 @@ func (s *Server) handleCaptainHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
+
+// handleGetLeaderboard returns agent quality scores for the leaderboard
+func (s *Server) handleGetLeaderboard(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	// Get role filter from query param
+	role := r.URL.Query().Get("role")
+
+	// Get limit (default 20)
+	limit := 20
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := fmt.Sscanf(limitStr, "%d", &limit); err == nil && l > 0 {
+			if limit > 100 {
+				limit = 100
+			}
+		}
+	}
+
+	scores, err := s.memDB.GetAgentLeaderboard(role, limit)
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get leaderboard: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"leaderboard": scores,
+		"count":       len(scores),
+		"role_filter": role,
+	})
+}
+
+// handleGetReviewBoards returns active review boards
+func (s *Server) handleGetReviewBoards(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	// For now, return empty list since GetActiveReviewBoards may not exist
+	// This endpoint is for the dashboard to show active reviews
+	s.respondJSON(w, map[string]interface{}{
+		"review_boards": []interface{}{},
+		"count":         0,
+	})
+}
+
+// handleGetDefectCategories returns valid defect categories
+func (s *Server) handleGetDefectCategories(w http.ResponseWriter, r *http.Request) {
+	if s.memDB == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Memory database not available")
+		return
+	}
+
+	categories, err := s.memDB.GetDefectCategories()
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get categories: %v", err))
+		return
+	}
+
+	s.respondJSON(w, map[string]interface{}{
+		"categories": categories,
+		"count":      len(categories),
+	})
+}

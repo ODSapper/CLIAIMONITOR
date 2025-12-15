@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaderboard - CLITCOMMANDER</title>
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        /* Additional styles specific to leaderboard page */
+        .nav-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .nav-tab {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .nav-tab:hover {
+            background: var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .nav-tab.active {
+            background: var(--accent-blue);
+            color: white;
+        }
+
+        .leaderboard-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 2rem;
+        }
+
+        .leaderboard-table th,
+        .leaderboard-table td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .leaderboard-table th {
+            background: var(--bg-darker);
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+        }
+
+        .leaderboard-table th:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .leaderboard-table th.sortable::after {
+            content: '⇅';
+            position: absolute;
+            right: 0.5rem;
+            opacity: 0.3;
+        }
+
+        .leaderboard-table th.sorted-asc::after {
+            content: '↑';
+            opacity: 1;
+            color: var(--accent-blue);
+        }
+
+        .leaderboard-table th.sorted-desc::after {
+            content: '↓';
+            opacity: 1;
+            color: var(--accent-blue);
+        }
+
+        .leaderboard-table td {
+            font-size: 0.9rem;
+        }
+
+        .leaderboard-table tbody tr:hover {
+            background: var(--bg-secondary);
+        }
+
+        /* Quality score color coding */
+        .quality-score {
+            font-weight: 700;
+            font-size: 1.1rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            display: inline-block;
+            min-width: 50px;
+            text-align: center;
+        }
+
+        .quality-score.excellent {
+            background: rgba(51, 255, 153, 0.2);
+            color: #33ff99;
+        }
+
+        .quality-score.good {
+            background: rgba(253, 164, 175, 0.2);
+            color: #fda4af;
+        }
+
+        .quality-score.poor {
+            background: rgba(255, 20, 147, 0.2);
+            color: #ff1493;
+        }
+
+        /* Rank badge */
+        .rank-badge {
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--text-primary);
+            min-width: 30px;
+            text-align: center;
+            display: inline-block;
+        }
+
+        .rank-badge.rank-1 {
+            color: #ffd700;
+            font-size: 1.2rem;
+        }
+
+        .rank-badge.rank-2 {
+            color: #c0c0c0;
+            font-size: 1.1rem;
+        }
+
+        .rank-badge.rank-3 {
+            color: #cd7f32;
+            font-size: 1.1rem;
+        }
+
+        /* Agent ID styling */
+        .agent-id {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-weight: 600;
+            color: var(--accent-blue);
+        }
+
+        /* Percentage display */
+        .percentage {
+            font-weight: 600;
+        }
+
+        .percentage.high {
+            color: #33ff99;
+        }
+
+        .percentage.medium {
+            color: #fda4af;
+        }
+
+        .percentage.low {
+            color: #ff1493;
+        }
+
+        /* Metric value */
+        .metric-value {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* Review board card */
+        .review-board-card {
+            background: var(--bg-secondary);
+            border-radius: 6px;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+            border-left: 3px solid var(--accent-purple);
+        }
+
+        .review-board-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .board-id {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-weight: 600;
+            font-size: 0.875rem;
+            color: var(--accent-blue);
+        }
+
+        .board-status {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .board-status.active {
+            background: rgba(51, 255, 153, 0.2);
+            color: #33ff99;
+        }
+
+        .board-status.pending {
+            background: rgba(253, 164, 175, 0.2);
+            color: #fda4af;
+        }
+
+        .board-status.complete {
+            background: rgba(232, 121, 249, 0.2);
+            color: var(--accent-purple);
+        }
+
+        .board-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 0.5rem;
+            font-size: 0.85rem;
+        }
+
+        .board-info-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .board-info-label {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .board-info-value {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        /* Review boards list */
+        .review-boards-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .leaderboard-table {
+                font-size: 0.85rem;
+            }
+
+            .leaderboard-table th,
+            .leaderboard-table td {
+                padding: 0.5rem;
+            }
+
+            .quality-score {
+                font-size: 0.95rem;
+            }
+
+            .board-info {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .leaderboard-table {
+                display: block;
+                overflow-x: auto;
+            }
+
+            .leaderboard-table thead {
+                display: none;
+            }
+
+            .leaderboard-table tr {
+                display: block;
+                margin-bottom: 1rem;
+                border: 1px solid var(--border-color);
+                border-radius: 8px;
+                padding: 0.75rem;
+            }
+
+            .leaderboard-table td {
+                display: flex;
+                justify-content: space-between;
+                padding: 0.5rem 0;
+                border: none;
+            }
+
+            .leaderboard-table td::before {
+                content: attr(data-label);
+                font-weight: 600;
+                color: var(--text-secondary);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <h1>CLITCOMMANDER</h1>
+            <div class="header-controls">
+                <div class="status-bar">
+                    <span class="status-indicator" id="nats-status">NATS: <span class="dot"></span></span>
+                    <span class="status-indicator" id="captain-status">Captain: <span class="dot"></span> <span class="status-text">--</span></span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <div style="padding: 1rem 2rem;">
+            <div class="nav-tabs">
+                <a href="/" class="nav-tab">Dashboard</a>
+                <a href="/metrics.html" class="nav-tab">Metrics</a>
+                <a href="/leaderboard.html" class="nav-tab active">Leaderboard</a>
+            </div>
+        </div>
+
+        <!-- Author Leaderboard -->
+        <section class="panel" style="margin: 0 2rem 1rem 2rem;">
+            <h2>Author Quality Leaderboard</h2>
+            <table class="leaderboard-table" id="author-leaderboard">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort="rank" data-type="number">Rank</th>
+                        <th class="sortable" data-sort="agent_id" data-type="string">Agent ID</th>
+                        <th class="sortable sorted-desc" data-sort="quality_score" data-type="number">Quality Score</th>
+                        <th class="sortable" data-sort="first_pass_rate" data-type="number">First Pass Rate</th>
+                        <th class="sortable" data-sort="approval_rate" data-type="number">Approval Rate</th>
+                        <th class="sortable" data-sort="avg_review_cycles" data-type="number">Avg Review Cycles</th>
+                        <th class="sortable" data-sort="defects_per_submission" data-type="number">Defects/Sub</th>
+                        <th class="sortable" data-sort="total_submissions" data-type="number">Total Submissions</th>
+                    </tr>
+                </thead>
+                <tbody id="author-leaderboard-body">
+                    <tr>
+                        <td colspan="8" class="empty-state">Loading author leaderboard...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Reviewer Leaderboard -->
+        <section class="panel" style="margin: 0 2rem 1rem 2rem;">
+            <h2>Reviewer Quality Leaderboard</h2>
+            <table class="leaderboard-table" id="reviewer-leaderboard">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort="rank" data-type="number">Rank</th>
+                        <th class="sortable" data-sort="agent_id" data-type="string">Agent ID</th>
+                        <th class="sortable sorted-desc" data-sort="quality_score" data-type="number">Quality Score</th>
+                        <th class="sortable" data-sort="detection_accuracy" data-type="number">Detection Accuracy</th>
+                        <th class="sortable" data-sort="defects_per_review" data-type="number">Defects/Review</th>
+                        <th class="sortable" data-sort="critical_catches" data-type="number">Critical Catches</th>
+                        <th class="sortable" data-sort="cost_efficiency" data-type="number">Cost Efficiency</th>
+                        <th class="sortable" data-sort="total_reviews" data-type="number">Total Reviews</th>
+                    </tr>
+                </thead>
+                <tbody id="reviewer-leaderboard-body">
+                    <tr>
+                        <td colspan="8" class="empty-state">Loading reviewer leaderboard...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Active Review Boards (Optional) -->
+        <section class="panel" style="margin: 0 2rem 2rem 2rem;">
+            <h2>Active Review Boards <span id="boards-count" class="badge">0</span></h2>
+            <div id="review-boards-list" class="review-boards-list">
+                <div class="empty-state">No active review boards</div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        /**
+         * LeaderboardDashboard
+         * Quality metrics and leaderboard tracking for agent performance
+         */
+
+        class LeaderboardDashboard {
+            constructor() {
+                this.ws = null;
+                this.reconnectInterval = null;
+                this.leaderboard = {
+                    authors: [],
+                    reviewers: [],
+                    boards: []
+                };
+                this.sortState = {
+                    authors: { column: 'quality_score', direction: 'desc' },
+                    reviewers: { column: 'quality_score', direction: 'desc' }
+                };
+
+                this.init();
+            }
+
+            async init() {
+                console.log('[LEADERBOARD] Initializing leaderboard dashboard...');
+
+                // Fetch initial data
+                await this.fetchLeaderboard();
+
+                // Connect WebSocket for real-time updates
+                this.connectWebSocket();
+
+                // Update status indicators
+                this.updateConnectionStatus();
+
+                // Setup sort handlers
+                this.setupSortHandlers();
+
+                // Poll for updates every 30 seconds
+                setInterval(() => this.fetchLeaderboard(), 30000);
+            }
+
+            async fetchLeaderboard() {
+                try {
+                    console.log('[LEADERBOARD] Fetching leaderboard data from API...');
+
+                    // Fetch both endpoints in parallel
+                    const [authorRes, reviewerRes] = await Promise.all([
+                        fetch('/api/leaderboard?role=author'),
+                        fetch('/api/leaderboard?role=reviewer')
+                    ]);
+
+                    if (!authorRes.ok || !reviewerRes.ok) {
+                        throw new Error(`HTTP error: author=${authorRes.status}, reviewer=${reviewerRes.status}`);
+                    }
+
+                    const [authorData, reviewerData] = await Promise.all([
+                        authorRes.json(),
+                        reviewerRes.json()
+                    ]);
+
+                    console.log('[LEADERBOARD] Received data:', { authorData, reviewerData });
+
+                    this.leaderboard.authors = authorData.leaderboard || [];
+                    this.leaderboard.reviewers = reviewerData.leaderboard || [];
+
+                    // Render leaderboards
+                    this.renderAuthorLeaderboard();
+                    this.renderReviewerLeaderboard();
+
+                    // Optional: Fetch active review boards
+                    await this.fetchReviewBoards();
+
+                } catch (error) {
+                    console.error('[LEADERBOARD] Failed to fetch leaderboard data:', error);
+                    // Show error in empty state
+                    document.getElementById('author-leaderboard-body').innerHTML =
+                        '<tr><td colspan="8" class="empty-state">Failed to load data. Check API connection.</td></tr>';
+                    document.getElementById('reviewer-leaderboard-body').innerHTML =
+                        '<tr><td colspan="8" class="empty-state">Failed to load data. Check API connection.</td></tr>';
+                }
+            }
+
+            async fetchReviewBoards() {
+                try {
+                    const res = await fetch('/api/review-boards?status=active');
+                    if (!res.ok) {
+                        console.warn('[LEADERBOARD] Review boards endpoint not available');
+                        return;
+                    }
+
+                    const data = await res.json();
+                    this.leaderboard.boards = data.boards || [];
+                    this.renderReviewBoards();
+
+                } catch (error) {
+                    console.warn('[LEADERBOARD] Failed to fetch review boards (optional):', error);
+                }
+            }
+
+            renderAuthorLeaderboard() {
+                const tbody = document.getElementById('author-leaderboard-body');
+                if (!tbody) return;
+
+                const authors = this.leaderboard.authors;
+
+                if (!authors || authors.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No author data available yet</td></tr>';
+                    return;
+                }
+
+                // Sort data
+                const sorted = this.sortData([...authors], this.sortState.authors);
+
+                tbody.innerHTML = sorted.map((author, index) => {
+                    const rank = index + 1;
+                    const rankClass = rank <= 3 ? `rank-${rank}` : '';
+                    const qualityClass = this.getQualityClass(author.quality_score);
+
+                    return `
+                        <tr>
+                            <td data-label="Rank">
+                                <span class="rank-badge ${rankClass}">${rank}</span>
+                            </td>
+                            <td data-label="Agent ID">
+                                <span class="agent-id">${this.escapeHtml(author.agent_id)}</span>
+                            </td>
+                            <td data-label="Quality Score">
+                                <span class="quality-score ${qualityClass}">${author.quality_score.toFixed(1)}</span>
+                            </td>
+                            <td data-label="First Pass Rate">
+                                <span class="percentage ${this.getPercentageClass(author.first_pass_rate)}">${author.first_pass_rate.toFixed(1)}%</span>
+                            </td>
+                            <td data-label="Approval Rate">
+                                <span class="percentage ${this.getPercentageClass(author.approval_rate)}">${author.approval_rate.toFixed(1)}%</span>
+                            </td>
+                            <td data-label="Avg Review Cycles">
+                                <span class="metric-value">${author.avg_review_cycles.toFixed(2)}</span>
+                            </td>
+                            <td data-label="Defects/Sub">
+                                <span class="metric-value">${author.defects_per_submission.toFixed(2)}</span>
+                            </td>
+                            <td data-label="Total Submissions">
+                                <span class="metric-value">${author.total_submissions}</span>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            renderReviewerLeaderboard() {
+                const tbody = document.getElementById('reviewer-leaderboard-body');
+                if (!tbody) return;
+
+                const reviewers = this.leaderboard.reviewers;
+
+                if (!reviewers || reviewers.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No reviewer data available yet</td></tr>';
+                    return;
+                }
+
+                // Sort data
+                const sorted = this.sortData([...reviewers], this.sortState.reviewers);
+
+                tbody.innerHTML = sorted.map((reviewer, index) => {
+                    const rank = index + 1;
+                    const rankClass = rank <= 3 ? `rank-${rank}` : '';
+                    const qualityClass = this.getQualityClass(reviewer.quality_score);
+
+                    return `
+                        <tr>
+                            <td data-label="Rank">
+                                <span class="rank-badge ${rankClass}">${rank}</span>
+                            </td>
+                            <td data-label="Agent ID">
+                                <span class="agent-id">${this.escapeHtml(reviewer.agent_id)}</span>
+                            </td>
+                            <td data-label="Quality Score">
+                                <span class="quality-score ${qualityClass}">${reviewer.quality_score.toFixed(1)}</span>
+                            </td>
+                            <td data-label="Detection Accuracy">
+                                <span class="percentage ${this.getPercentageClass(reviewer.detection_accuracy)}">${reviewer.detection_accuracy.toFixed(1)}%</span>
+                            </td>
+                            <td data-label="Defects/Review">
+                                <span class="metric-value">${reviewer.defects_per_review.toFixed(2)}</span>
+                            </td>
+                            <td data-label="Critical Catches">
+                                <span class="metric-value">${reviewer.critical_catches}</span>
+                            </td>
+                            <td data-label="Cost Efficiency">
+                                <span class="metric-value">${reviewer.cost_efficiency.toFixed(2)}</span>
+                            </td>
+                            <td data-label="Total Reviews">
+                                <span class="metric-value">${reviewer.total_reviews}</span>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            renderReviewBoards() {
+                const list = document.getElementById('review-boards-list');
+                const badge = document.getElementById('boards-count');
+
+                if (!list) return;
+
+                const boards = this.leaderboard.boards;
+
+                if (!boards || boards.length === 0) {
+                    list.innerHTML = '<div class="empty-state">No active review boards</div>';
+                    if (badge) badge.textContent = '0';
+                    return;
+                }
+
+                if (badge) badge.textContent = boards.length;
+
+                list.innerHTML = boards.map(board => {
+                    return `
+                        <div class="review-board-card">
+                            <div class="review-board-header">
+                                <span class="board-id">${this.escapeHtml(board.board_id)}</span>
+                                <span class="board-status ${board.status.toLowerCase()}">${board.status}</span>
+                            </div>
+                            <div class="board-info">
+                                <div class="board-info-item">
+                                    <span class="board-info-label">Task/Assignment</span>
+                                    <span class="board-info-value">${this.escapeHtml(board.task_description || 'N/A')}</span>
+                                </div>
+                                <div class="board-info-item">
+                                    <span class="board-info-label">Author</span>
+                                    <span class="board-info-value">${this.escapeHtml(board.author)}</span>
+                                </div>
+                                <div class="board-info-item">
+                                    <span class="board-info-label">Reviewers</span>
+                                    <span class="board-info-value">${board.reviewer_count || 0}</span>
+                                </div>
+                                <div class="board-info-item">
+                                    <span class="board-info-label">Defects Found</span>
+                                    <span class="board-info-value">${board.defects_found || 0}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            setupSortHandlers() {
+                // Author table
+                const authorHeaders = document.querySelectorAll('#author-leaderboard th.sortable');
+                authorHeaders.forEach(th => {
+                    th.addEventListener('click', () => {
+                        const column = th.getAttribute('data-sort');
+                        this.handleSort('authors', column, th);
+                    });
+                });
+
+                // Reviewer table
+                const reviewerHeaders = document.querySelectorAll('#reviewer-leaderboard th.sortable');
+                reviewerHeaders.forEach(th => {
+                    th.addEventListener('click', () => {
+                        const column = th.getAttribute('data-sort');
+                        this.handleSort('reviewers', column, th);
+                    });
+                });
+            }
+
+            handleSort(table, column, thElement) {
+                const state = this.sortState[table];
+
+                // Toggle direction if same column, otherwise default to desc
+                if (state.column === column) {
+                    state.direction = state.direction === 'asc' ? 'desc' : 'asc';
+                } else {
+                    state.column = column;
+                    state.direction = 'desc';
+                }
+
+                // Update header classes
+                const tableId = table === 'authors' ? 'author-leaderboard' : 'reviewer-leaderboard';
+                const headers = document.querySelectorAll(`#${tableId} th.sortable`);
+                headers.forEach(th => {
+                    th.classList.remove('sorted-asc', 'sorted-desc');
+                });
+                thElement.classList.add(state.direction === 'asc' ? 'sorted-asc' : 'sorted-desc');
+
+                // Re-render table
+                if (table === 'authors') {
+                    this.renderAuthorLeaderboard();
+                } else {
+                    this.renderReviewerLeaderboard();
+                }
+            }
+
+            sortData(data, state) {
+                const { column, direction } = state;
+
+                return data.sort((a, b) => {
+                    let aVal = a[column];
+                    let bVal = b[column];
+
+                    // Handle string comparison
+                    if (typeof aVal === 'string') {
+                        aVal = aVal.toLowerCase();
+                        bVal = bVal.toLowerCase();
+                    }
+
+                    if (direction === 'asc') {
+                        return aVal > bVal ? 1 : aVal < bVal ? -1 : 0;
+                    } else {
+                        return aVal < bVal ? 1 : aVal > bVal ? -1 : 0;
+                    }
+                });
+            }
+
+            getQualityClass(score) {
+                if (score >= 90) return 'excellent';
+                if (score >= 70) return 'good';
+                return 'poor';
+            }
+
+            getPercentageClass(percentage) {
+                if (percentage >= 90) return 'high';
+                if (percentage >= 70) return 'medium';
+                return 'low';
+            }
+
+            escapeHtml(text) {
+                const map = {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#039;'
+                };
+                return text.replace(/[&<>"']/g, m => map[m]);
+            }
+
+            connectWebSocket() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+                console.log('[LEADERBOARD] Connecting to WebSocket:', wsUrl);
+
+                this.ws = new WebSocket(wsUrl);
+
+                this.ws.onopen = () => {
+                    console.log('[LEADERBOARD] WebSocket connected');
+                    if (this.reconnectInterval) {
+                        clearInterval(this.reconnectInterval);
+                        this.reconnectInterval = null;
+                    }
+                };
+
+                this.ws.onmessage = (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        console.log('[LEADERBOARD] WebSocket message:', msg);
+
+                        // Handle different message types
+                        if (msg.type === 'leaderboard_update') {
+                            this.fetchLeaderboard();
+                        } else if (msg.type === 'review_board_update') {
+                            this.fetchReviewBoards();
+                        }
+                    } catch (error) {
+                        console.error('[LEADERBOARD] Failed to parse WebSocket message:', error);
+                    }
+                };
+
+                this.ws.onerror = (error) => {
+                    console.error('[LEADERBOARD] WebSocket error:', error);
+                };
+
+                this.ws.onclose = () => {
+                    console.log('[LEADERBOARD] WebSocket disconnected, will retry in 5s');
+                    if (!this.reconnectInterval) {
+                        this.reconnectInterval = setInterval(() => {
+                            console.log('[LEADERBOARD] Attempting to reconnect...');
+                            this.connectWebSocket();
+                        }, 5000);
+                    }
+                };
+            }
+
+            async updateConnectionStatus() {
+                try {
+                    const res = await fetch('/api/health');
+                    const data = await res.json();
+
+                    // Update NATS status
+                    const natsStatus = document.getElementById('nats-status');
+                    if (natsStatus) {
+                        const dot = natsStatus.querySelector('.dot');
+                        if (data.nats_connected) {
+                            dot.classList.add('connected');
+                            dot.classList.remove('disconnected');
+                        } else {
+                            dot.classList.add('disconnected');
+                            dot.classList.remove('connected');
+                        }
+                    }
+
+                    // Update Captain status
+                    const captainRes = await fetch('/api/captain/health');
+                    const captainData = await captainRes.json();
+
+                    const captainStatus = document.getElementById('captain-status');
+                    if (captainStatus) {
+                        const dot = captainStatus.querySelector('.dot');
+                        const text = captainStatus.querySelector('.status-text');
+
+                        if (captainData.captain_connected) {
+                            dot.classList.add('connected');
+                            dot.classList.remove('disconnected');
+                            text.textContent = 'Online';
+                        } else {
+                            dot.classList.add('disconnected');
+                            dot.classList.remove('connected');
+                            text.textContent = 'Offline';
+                        }
+                    }
+
+                } catch (error) {
+                    console.error('[LEADERBOARD] Failed to update connection status:', error);
+                }
+
+                // Update status every 10 seconds
+                setTimeout(() => this.updateConnectionStatus(), 10000);
+            }
+        }
+
+        // Initialize dashboard when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                new LeaderboardDashboard();
+            });
+        } else {
+            new LeaderboardDashboard();
+        }
+    </script>
+</body>
+</html>

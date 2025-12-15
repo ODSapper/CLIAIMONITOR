@@ -69,6 +69,14 @@ type ToolCallbacks struct {
 	// Metrics by agent type
 	OnGetMetricsByAgentType func() (interface{}, error)
 	OnGetMetricsByAgent     func() (interface{}, error)
+
+	// Review Board callbacks (multi-reviewer Fagan-style inspection)
+	OnCreateReviewBoard   func(assignmentID int64, reviewerCount int, complexity int, riskLevel string) (interface{}, error)
+	OnSubmitDefect        func(agentID string, boardID int64, defect map[string]interface{}) (interface{}, error)
+	OnRecordReviewerVote  func(boardID int64, reviewerID string, approved bool, confidence int, defectsFound int, tokensUsed int64) (interface{}, error)
+	OnFinalizeBoard       func(boardID int64) (interface{}, error)
+	OnGetAgentLeaderboard func(role string, limit int) (interface{}, error)
+	OnGetDefectCategories func() (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -1023,6 +1031,9 @@ func registerSGTWorkflowTools(s *Server, callbacks ToolCallbacks) {
 			return callbacks.OnGetMetricsByAgent()
 		},
 	})
+
+	// Register Review Board tools
+	registerReviewBoardTools(s, callbacks)
 }
 
 // RegisterWaitForEventsTool registers the wait_for_events tool for real-time event polling
@@ -1191,6 +1202,164 @@ func RegisterSendToAgentTool(s *Server, bus *events.Bus) {
 				"message_type": messageType,
 				"event_id":     event.ID,
 			}, nil
+		},
+	})
+}
+
+// registerReviewBoardTools adds Review Board tools for multi-reviewer Fagan-style inspection
+func registerReviewBoardTools(s *Server, callbacks ToolCallbacks) {
+	// create_review_board - Purple SGT creates a review board for multi-reviewer inspection
+	s.RegisterTool(ToolDefinition{
+		Name:        "create_review_board",
+		Description: "Create a review board for multi-reviewer Fagan-style inspection. Purple SGT uses this internally.",
+		Parameters: map[string]ParameterDef{
+			"assignment_id":  {Type: "number", Description: "Assignment to review", Required: true},
+			"reviewer_count": {Type: "number", Description: "Number of reviewers (1-5)", Required: true},
+			"complexity":     {Type: "number", Description: "Complexity score 0-100", Required: false},
+			"risk_level":     {Type: "string", Description: "low, medium, high, critical", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnCreateReviewBoard == nil {
+				return map[string]interface{}{"error": "Review Board not configured"}, nil
+			}
+			assignmentID := int64(params["assignment_id"].(float64))
+			reviewerCount := int(params["reviewer_count"].(float64))
+			complexity := 50 // Default
+			if c, ok := params["complexity"].(float64); ok {
+				complexity = int(c)
+			}
+			riskLevel := "medium" // Default
+			if r, ok := params["risk_level"].(string); ok {
+				riskLevel = r
+			}
+			return callbacks.OnCreateReviewBoard(assignmentID, reviewerCount, complexity, riskLevel)
+		},
+	})
+
+	// submit_defect - Record a defect finding during code review
+	s.RegisterTool(ToolDefinition{
+		Name:        "submit_defect",
+		Description: "Record a defect finding during code review. Categories: LOGIC, DATA, INTERFACE, DOCS, SYNTAX, STANDARDS (Fagan) or SECURITY, PERFORMANCE, TESTING, ARCHITECTURE, STYLE (Modern).",
+		Parameters: map[string]ParameterDef{
+			"board_id":       {Type: "number", Description: "Review board ID", Required: true},
+			"category":       {Type: "string", Description: "Defect category", Required: true},
+			"severity":       {Type: "string", Description: "critical, high, medium, low, info", Required: true},
+			"title":          {Type: "string", Description: "Brief title of the defect", Required: true},
+			"description":    {Type: "string", Description: "Detailed description", Required: true},
+			"file_path":      {Type: "string", Description: "File path where defect was found", Required: false},
+			"line_start":     {Type: "number", Description: "Starting line number", Required: false},
+			"line_end":       {Type: "number", Description: "Ending line number", Required: false},
+			"suggested_fix":  {Type: "string", Description: "Suggested fix or remediation", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSubmitDefect == nil {
+				return map[string]interface{}{"error": "Review Board not configured"}, nil
+			}
+			boardID := int64(params["board_id"].(float64))
+			defect := map[string]interface{}{
+				"category":    params["category"],
+				"severity":    params["severity"],
+				"title":       params["title"],
+				"description": params["description"],
+			}
+			if filePath, ok := params["file_path"].(string); ok {
+				defect["file_path"] = filePath
+			}
+			if lineStart, ok := params["line_start"].(float64); ok {
+				defect["line_start"] = int(lineStart)
+			}
+			if lineEnd, ok := params["line_end"].(float64); ok {
+				defect["line_end"] = int(lineEnd)
+			}
+			if suggestedFix, ok := params["suggested_fix"].(string); ok {
+				defect["suggested_fix"] = suggestedFix
+			}
+			return callbacks.OnSubmitDefect(agentID, boardID, defect)
+		},
+	})
+
+	// record_reviewer_vote - Record a sub-agent reviewer's verdict
+	s.RegisterTool(ToolDefinition{
+		Name:        "record_reviewer_vote",
+		Description: "Record a sub-agent reviewer's verdict on the code.",
+		Parameters: map[string]ParameterDef{
+			"board_id":      {Type: "number", Description: "Review board ID", Required: true},
+			"reviewer_id":   {Type: "string", Description: "Reviewer identifier", Required: true},
+			"approved":      {Type: "boolean", Description: "Whether the code passes review", Required: true},
+			"confidence":    {Type: "number", Description: "Confidence level 0-100", Required: false},
+			"defects_found": {Type: "number", Description: "Number of defects found", Required: false},
+			"tokens_used":   {Type: "number", Description: "Tokens used by this reviewer", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnRecordReviewerVote == nil {
+				return map[string]interface{}{"error": "Review Board not configured"}, nil
+			}
+			boardID := int64(params["board_id"].(float64))
+			reviewerID, _ := params["reviewer_id"].(string)
+			approved, _ := params["approved"].(bool)
+			confidence := 0
+			if c, ok := params["confidence"].(float64); ok {
+				confidence = int(c)
+			}
+			defectsFound := 0
+			if d, ok := params["defects_found"].(float64); ok {
+				defectsFound = int(d)
+			}
+			tokensUsed := int64(0)
+			if t, ok := params["tokens_used"].(float64); ok {
+				tokensUsed = int64(t)
+			}
+			return callbacks.OnRecordReviewerVote(boardID, reviewerID, approved, confidence, defectsFound, tokensUsed)
+		},
+	})
+
+	// finalize_board - Finalize review board after all reviewers done
+	s.RegisterTool(ToolDefinition{
+		Name:        "finalize_board",
+		Description: "Finalize review board after all reviewers done. Applies consensus rules and updates quality scores.",
+		Parameters: map[string]ParameterDef{
+			"board_id": {Type: "number", Description: "Review board ID to finalize", Required: true},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnFinalizeBoard == nil {
+				return map[string]interface{}{"error": "Review Board not configured"}, nil
+			}
+			boardID := int64(params["board_id"].(float64))
+			return callbacks.OnFinalizeBoard(boardID)
+		},
+	})
+
+	// get_agent_leaderboard - Get quality scores leaderboard
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_agent_leaderboard",
+		Description: "Get agent quality scores leaderboard showing authors and reviewers ranked by quality.",
+		Parameters: map[string]ParameterDef{
+			"role":  {Type: "string", Description: "Filter: author, reviewer, or empty for all", Required: false},
+			"limit": {Type: "number", Description: "Max results, default 20", Required: false},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetAgentLeaderboard == nil {
+				return map[string]interface{}{"error": "Review Board not configured"}, nil
+			}
+			role, _ := params["role"].(string)
+			limit := 20
+			if l, ok := params["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return callbacks.OnGetAgentLeaderboard(role, limit)
+		},
+	})
+
+	// get_defect_categories - Get list of valid defect categories
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_defect_categories",
+		Description: "Get list of valid defect categories with descriptions.",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetDefectCategories == nil {
+				return map[string]interface{}{"error": "Review Board not configured"}, nil
+			}
+			return callbacks.OnGetDefectCategories()
 		},
 	})
 }

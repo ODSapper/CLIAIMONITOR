@@ -99,6 +99,23 @@ type MemoryDB interface {
 	UpdateWorkerStatus(id int64, status, result string, tokensUsed int64) error
 	GetWorkersByAssignment(assignmentID int64) ([]*AssignmentWorker, error)
 
+	// Review Board operations
+	CreateReviewBoard(board *ReviewBoard) error
+	GetReviewBoard(id int64) (*ReviewBoard, error)
+	GetReviewBoardByAssignment(assignmentID int64) (*ReviewBoard, error)
+	UpdateReviewBoard(board *ReviewBoard) error
+	CreateDefect(defect *ReviewDefect) error
+	GetBoardDefects(boardID int64) ([]*ReviewDefect, error)
+	GetDefectsByReviewer(boardID int64, reviewerID string) ([]*ReviewDefect, error)
+	CreateReviewerVote(vote *ReviewerVote) error
+	GetReviewerVotes(boardID int64) ([]*ReviewerVote, error)
+	GetOrCreateQualityScore(agentID, role string) (*AgentQualityScore, error)
+	UpdateQualityScore(score *AgentQualityScore) error
+	GetAgentLeaderboard(role string, limit int) ([]*AgentQualityScore, error)
+	GetDefectCategories() ([]*DefectCategory, error)
+	CalculateConsensus(boardID int64) (*ConsensusResult, error)
+	UpdateQualityScoresAfterReview(boardID int64, consensus *ConsensusResult) error
+
 	// Health check
 	Health() (*HealthStatus, error)
 
