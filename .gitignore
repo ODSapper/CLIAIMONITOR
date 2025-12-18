@@ -48,3 +48,6 @@ nul
 .claude/settings.local.json
 .claude/mcp.json
 
+# Test reports and artifacts (generated during testing)
+test-reports/
+

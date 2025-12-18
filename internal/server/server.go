@@ -315,6 +315,9 @@ func NewServer(
 func (s *Server) setupRoutes() {
 	s.router = mux.NewRouter()
 
+	// Apply security middleware globally to all routes
+	s.router.Use(SecurityHeadersMiddleware)
+
 	// API routes
 	api := s.router.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/state", s.handleGetState).Methods("GET")
