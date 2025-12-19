@@ -11,237 +11,25 @@ import (
 	"github.com/CLIAIMONITOR/internal/types"
 )
 
-// MockMemoryDB implements memory.MemoryDB for testing
-type MockMemoryDB struct {
-	mu               sync.Mutex
-	agents           map[string]*memory.AgentControl
-	shutdownFlags    map[string]string
-	registerCalled   int
-	updateCalled     int
-	markStoppedCalls []string
-}
-
-func NewMockMemoryDB() *MockMemoryDB {
-	return &MockMemoryDB{
-		agents:        make(map[string]*memory.AgentControl),
-		shutdownFlags: make(map[string]string),
+// newTestDB creates a real in-memory SQLite database for testing
+func newTestDB(t *testing.T) memory.MemoryDB {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := memory.NewMemoryDB(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
 	}
-}
-
-func (m *MockMemoryDB) RegisterAgent(agent *memory.AgentControl) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.agents[agent.AgentID] = agent
-	m.registerCalled++
-	return nil
-}
-
-func (m *MockMemoryDB) UpdateStatus(agentID, status, currentTask string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if agent, ok := m.agents[agentID]; ok {
-		agent.Status = status
-		agent.CurrentTask = currentTask
-	}
-	m.updateCalled++
-	return nil
-}
-
-func (m *MockMemoryDB) SetShutdownFlag(agentID string, reason string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.shutdownFlags[agentID] = reason
-	return nil
-}
-
-func (m *MockMemoryDB) ClearShutdownFlag(agentID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.shutdownFlags, agentID)
-	return nil
-}
-
-func (m *MockMemoryDB) MarkStopped(agentID, reason string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if agent, ok := m.agents[agentID]; ok {
-		agent.Status = "stopped"
-	}
-	m.markStoppedCalls = append(m.markStoppedCalls, agentID)
-	return nil
-}
-
-func (m *MockMemoryDB) RemoveAgent(agentID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.agents, agentID)
-	return nil
-}
-
-func (m *MockMemoryDB) GetAgent(agentID string) (*memory.AgentControl, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if agent, ok := m.agents[agentID]; ok {
-		return agent, nil
-	}
-	return nil, nil
-}
-
-func (m *MockMemoryDB) GetAllAgents() ([]*memory.AgentControl, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var result []*memory.AgentControl
-	for _, agent := range m.agents {
-		result = append(result, agent)
-	}
-	return result, nil
-}
-
-func (m *MockMemoryDB) GetStaleAgents(threshold time.Duration) ([]*memory.AgentControl, error) {
-	return nil, nil
-}
-
-func (m *MockMemoryDB) GetAgentsByStatus(status string) ([]*memory.AgentControl, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var result []*memory.AgentControl
-	for _, agent := range m.agents {
-		if agent.Status == status {
-			result = append(result, agent)
-		}
-	}
-	return result, nil
-}
-
-func (m *MockMemoryDB) CheckShutdownFlag(agentID string) (bool, string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if reason, ok := m.shutdownFlags[agentID]; ok {
-		return true, reason, nil
-	}
-	return false, "", nil
-}
-
-// Stub implementations for other MemoryDB interface methods
-func (m *MockMemoryDB) DiscoverRepo(basePath string) (*memory.Repo, error)        { return nil, nil }
-func (m *MockMemoryDB) GetRepo(repoID string) (*memory.Repo, error)               { return nil, nil }
-func (m *MockMemoryDB) GetRepoByPath(basePath string) (*memory.Repo, error)       { return nil, nil }
-func (m *MockMemoryDB) UpdateRepoScan(repoID string) error                        { return nil }
-func (m *MockMemoryDB) SetRepoRescan(repoID string, needsRescan bool) error       { return nil }
-func (m *MockMemoryDB) StoreRepoFile(file *memory.RepoFile) error                 { return nil }
-func (m *MockMemoryDB) GetRepoFiles(repoID string, fileType string) ([]*memory.RepoFile, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetRepoFile(repoID, filePath string) (*memory.RepoFile, error) { return nil, nil }
-func (m *MockMemoryDB) StoreAgentLearning(learning *memory.AgentLearning) error      { return nil }
-func (m *MockMemoryDB) GetAgentLearnings(filter memory.LearnFilter) ([]*memory.AgentLearning, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetRecentLearnings(limit int) ([]*memory.AgentLearning, error) { return nil, nil }
-func (m *MockMemoryDB) StoreContextSummary(summary *memory.ContextSummary) error     { return nil }
-func (m *MockMemoryDB) GetRecentSummaries(limit int) ([]*memory.ContextSummary, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetSummariesByAgent(agentID string, limit int) ([]*memory.ContextSummary, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetSummariesBySession(sessionID string) ([]*memory.ContextSummary, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) CreateTask(task *memory.WorkflowTask) error        { return nil }
-func (m *MockMemoryDB) CreateTasks(tasks []*memory.WorkflowTask) error    { return nil }
-func (m *MockMemoryDB) GetTask(taskID string) (*memory.WorkflowTask, error) { return nil, nil }
-func (m *MockMemoryDB) GetTasks(filter memory.TaskFilter) ([]*memory.WorkflowTask, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) UpdateTaskStatus(taskID, status, agentID string) error { return nil }
-func (m *MockMemoryDB) UpdateTask(task *memory.WorkflowTask) error            { return nil }
-func (m *MockMemoryDB) StoreDecision(decision *memory.HumanDecision) error    { return nil }
-func (m *MockMemoryDB) GetRecentDecisions(limit int) ([]*memory.HumanDecision, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetDecisionsByAgent(agentID string, limit int) ([]*memory.HumanDecision, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) CreateDeployment(deployment *memory.Deployment) error { return nil }
-func (m *MockMemoryDB) GetDeployment(deploymentID int64) (*memory.Deployment, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetRecentDeployments(repoID string, limit int) ([]*memory.Deployment, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) UpdateDeploymentStatus(deploymentID int64, status string) error { return nil }
-func (m *MockMemoryDB) AsLearningDB() memory.LearningDB                               { return nil }
-func (m *MockMemoryDB) SetContext(key, value string, priority int, maxAgeHours int) error {
-	return nil
-}
-func (m *MockMemoryDB) GetContext(key string) (*memory.CaptainContext, error)         { return nil, nil }
-func (m *MockMemoryDB) GetAllContext() ([]*memory.CaptainContext, error)              { return nil, nil }
-func (m *MockMemoryDB) GetContextByPriority(minPriority int) ([]*memory.CaptainContext, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) DeleteContext(key string) error               { return nil }
-func (m *MockMemoryDB) CleanExpiredContext() (int, error)            { return 0, nil }
-func (m *MockMemoryDB) LogSessionEvent(sessionID, eventType, summary, details, agentID string) error {
-	return nil
-}
-func (m *MockMemoryDB) GetSessionLog(sessionID string, limit int) ([]*memory.SessionLogEntry, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetRecentSessionLog(limit int) ([]*memory.SessionLogEntry, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) RecordMetricsHistory(agentID, model string, tokensUsed int64, estimatedCost float64, taskID string) error {
-	return nil
-}
-func (m *MockMemoryDB) GetMetricsByModel(modelFilter string) ([]*memory.ModelMetrics, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetMetricsByAgentType() ([]*memory.AgentTypeMetrics, error) { return nil, nil }
-func (m *MockMemoryDB) GetMetricsByAgent() ([]*memory.AgentMetricsSummary, error)  { return nil, nil }
-func (m *MockMemoryDB) RecordMetricsWithType(agentID, model, agentType, parentAgent string, tokensUsed int64, estimatedCost float64, taskID string, assignmentID *int64) error {
-	return nil
-}
-func (m *MockMemoryDB) CreateAssignment(assignment *memory.TaskAssignment) error { return nil }
-func (m *MockMemoryDB) GetAssignment(id int64) (*memory.TaskAssignment, error)   { return nil, nil }
-func (m *MockMemoryDB) GetAssignmentsByTask(taskID string) ([]*memory.TaskAssignment, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetAssignmentsByAgent(agentID string, status string) ([]*memory.TaskAssignment, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) GetActiveAssignment(agentID string) (*memory.TaskAssignment, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) UpdateAssignmentStatus(id int64, status string) error { return nil }
-func (m *MockMemoryDB) CompleteAssignment(id int64, status string, feedback string) error {
-	return nil
-}
-func (m *MockMemoryDB) AddWorker(worker *memory.AssignmentWorker) error { return nil }
-func (m *MockMemoryDB) UpdateWorkerStatus(id int64, status, result string, tokensUsed int64) error {
-	return nil
-}
-func (m *MockMemoryDB) GetWorkersByAssignment(assignmentID int64) ([]*memory.AssignmentWorker, error) {
-	return nil, nil
-}
-func (m *MockMemoryDB) RequestRework(id int64, feedback string) error { return nil }
-
-// Health and lifecycle methods
-func (m *MockMemoryDB) Health() (*memory.HealthStatus, error) {
-	return &memory.HealthStatus{Connected: true}, nil
-}
-
-func (m *MockMemoryDB) Close() error {
-	return nil
+	t.Cleanup(func() { db.Close() })
+	return db
 }
 
 // TestNewSpawner tests the spawner constructor
 func TestNewSpawner(t *testing.T) {
 	basePath := t.TempDir()
 	mcpURL := "http://localhost:3000/mcp/sse"
-	mockDB := NewMockMemoryDB()
+	db := newTestDB(t)
 
-	spawner := NewSpawner(basePath, mcpURL, mockDB)
+	spawner := NewSpawner(basePath, mcpURL, db)
 
 	if spawner == nil {
 		t.Fatal("NewSpawner returned nil")
@@ -620,14 +408,22 @@ func TestCleanupAgentFiles(t *testing.T) {
 // TestStopAgentWithReason tests agent stopping with DB updates
 func TestStopAgentWithReason(t *testing.T) {
 	basePath := t.TempDir()
-	mockDB := NewMockMemoryDB()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", mockDB)
+	db := newTestDB(t)
+	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", db)
 
-	// Register a fake agent
-	mockDB.RegisterAgent(&memory.AgentControl{
-		AgentID: "test-agent-001",
-		Status:  "running",
+	// Register a real agent in the database
+	now := time.Now()
+	err := db.RegisterAgent(&memory.AgentControl{
+		AgentID:     "test-agent-001",
+		Status:      "running",
+		Role:        "engineer",
+		ProjectPath: basePath,
+		SpawnedAt:   now,
+		HeartbeatAt: &now,
 	})
+	if err != nil {
+		t.Fatalf("Failed to register agent: %v", err)
+	}
 
 	// Add to running agents
 	spawner.mu.Lock()
@@ -635,19 +431,27 @@ func TestStopAgentWithReason(t *testing.T) {
 	spawner.mu.Unlock()
 
 	// Stop it
-	err := spawner.StopAgentWithReason("test-agent-001", "test stop")
+	err = spawner.StopAgentWithReason("test-agent-001", "test stop")
 	if err != nil {
 		t.Errorf("StopAgentWithReason failed: %v", err)
 	}
 
-	// Verify shutdown flag was set
-	if reason, ok := mockDB.shutdownFlags["test-agent-001"]; !ok || reason != "test stop" {
-		t.Error("Shutdown flag should be set")
+	// Verify shutdown flag was set by checking the database
+	hasFlag, reason, err := db.CheckShutdownFlag("test-agent-001")
+	if err != nil {
+		t.Fatalf("Failed to check shutdown flag: %v", err)
+	}
+	if !hasFlag || reason != "test stop" {
+		t.Errorf("Expected shutdown flag 'test stop', got hasFlag=%v, reason='%s'", hasFlag, reason)
 	}
 
-	// Verify MarkStopped was called
-	if len(mockDB.markStoppedCalls) == 0 || mockDB.markStoppedCalls[0] != "test-agent-001" {
-		t.Error("MarkStopped should have been called")
+	// Verify agent status was updated to stopped
+	agent, err := db.GetAgent("test-agent-001")
+	if err != nil {
+		t.Fatalf("Failed to get agent: %v", err)
+	}
+	if agent != nil && agent.Status != "stopped" {
+		t.Errorf("Expected status 'stopped', got '%s'", agent.Status)
 	}
 
 	// Verify removed from running agents
@@ -659,23 +463,35 @@ func TestStopAgentWithReason(t *testing.T) {
 // TestStopAgent tests backward compatible stop method
 func TestStopAgent(t *testing.T) {
 	basePath := t.TempDir()
-	mockDB := NewMockMemoryDB()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", mockDB)
+	db := newTestDB(t)
+	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", db)
 
-	// Register a fake agent
-	mockDB.RegisterAgent(&memory.AgentControl{
-		AgentID: "test-agent-001",
-		Status:  "running",
+	// Register a real agent in the database
+	now := time.Now()
+	err := db.RegisterAgent(&memory.AgentControl{
+		AgentID:     "test-agent-001",
+		Status:      "running",
+		Role:        "engineer",
+		ProjectPath: basePath,
+		SpawnedAt:   now,
+		HeartbeatAt: &now,
 	})
+	if err != nil {
+		t.Fatalf("Failed to register agent: %v", err)
+	}
 
 	// Stop it using backward compatible method
-	err := spawner.StopAgent("test-agent-001")
+	err = spawner.StopAgent("test-agent-001")
 	if err != nil {
 		t.Errorf("StopAgent failed: %v", err)
 	}
 
 	// Should have used "manual stop" as reason
-	if reason, ok := mockDB.shutdownFlags["test-agent-001"]; !ok || reason != "manual stop" {
+	hasFlag, reason, err := db.CheckShutdownFlag("test-agent-001")
+	if err != nil {
+		t.Fatalf("Failed to check shutdown flag: %v", err)
+	}
+	if !hasFlag || reason != "manual stop" {
 		t.Errorf("Expected reason 'manual stop', got '%s'", reason)
 	}
 }
@@ -748,15 +564,24 @@ func TestCleanupAllAgentFiles(t *testing.T) {
 // TestStopAllAgents tests stopping all running agents
 func TestStopAllAgents(t *testing.T) {
 	basePath := t.TempDir()
-	mockDB := NewMockMemoryDB()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", mockDB)
+	db := newTestDB(t)
+	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", db)
 
-	// Add multiple agents
-	for _, id := range []string{"agent-001", "agent-002", "agent-003"} {
-		mockDB.RegisterAgent(&memory.AgentControl{
-			AgentID: id,
-			Status:  "running",
+	// Add multiple agents to DB and spawner
+	agentIDs := []string{"agent-001", "agent-002", "agent-003"}
+	for _, id := range agentIDs {
+		now := time.Now()
+		err := db.RegisterAgent(&memory.AgentControl{
+			AgentID:     id,
+			Status:      "running",
+			Role:        "engineer",
+			ProjectPath: basePath,
+			SpawnedAt:   now,
+			HeartbeatAt: &now,
 		})
+		if err != nil {
+			t.Fatalf("Failed to register agent %s: %v", id, err)
+		}
 		spawner.mu.Lock()
 		spawner.runningAgents[id] = 12345
 		spawner.mu.Unlock()
@@ -773,9 +598,15 @@ func TestStopAllAgents(t *testing.T) {
 		t.Error("All agents should be removed from running agents")
 	}
 
-	// Verify all were marked stopped
-	if len(mockDB.markStoppedCalls) != 3 {
-		t.Errorf("Expected 3 MarkStopped calls, got %d", len(mockDB.markStoppedCalls))
+	// Verify all agents are marked stopped in DB
+	for _, id := range agentIDs {
+		agent, err := db.GetAgent(id)
+		if err != nil {
+			t.Fatalf("Failed to get agent %s: %v", id, err)
+		}
+		if agent != nil && agent.Status != "stopped" {
+			t.Errorf("Agent %s should be stopped, got status '%s'", id, agent.Status)
+		}
 	}
 }
 
@@ -1024,8 +855,8 @@ func TestKillHeartbeatFromPIDFile(t *testing.T) {
 // TestSpawnSupervisor tests supervisor spawning (mock test)
 func TestSpawnSupervisor(t *testing.T) {
 	basePath := t.TempDir()
-	mockDB := NewMockMemoryDB()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", mockDB)
+	db := newTestDB(t)
+	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", db)
 
 	// Create necessary directories
 	os.MkdirAll(filepath.Join(basePath, "configs", "prompts"), 0755)

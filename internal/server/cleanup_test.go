@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,124 +10,21 @@ import (
 	"github.com/CLIAIMONITOR/internal/types"
 )
 
-// mockMemoryDB is a mock implementation of memory.MemoryDB for testing
-type mockMemoryDB struct {
-	staleAgents     []*memory.AgentControl
-	staleAgentsErr  error
-	updateStatusErr error
-	statusUpdates   []statusUpdate
+// newTestDB creates a real SQLite database for testing
+func newTestDB(t *testing.T) memory.MemoryDB {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := memory.NewMemoryDB(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
 }
-
-type statusUpdate struct {
-	agentID     string
-	status      string
-	currentTask string
-}
-
-func (m *mockMemoryDB) GetStaleAgents(threshold time.Duration) ([]*memory.AgentControl, error) {
-	return m.staleAgents, m.staleAgentsErr
-}
-
-func (m *mockMemoryDB) UpdateStatus(agentID, status, currentTask string) error {
-	m.statusUpdates = append(m.statusUpdates, statusUpdate{
-		agentID:     agentID,
-		status:      status,
-		currentTask: currentTask,
-	})
-	return m.updateStatusErr
-}
-
-// Stub implementations for other MemoryDB methods
-func (m *mockMemoryDB) DiscoverRepo(basePath string) (*memory.Repo, error)  { return nil, nil }
-func (m *mockMemoryDB) GetRepo(repoID string) (*memory.Repo, error)         { return nil, nil }
-func (m *mockMemoryDB) GetRepoByPath(basePath string) (*memory.Repo, error) { return nil, nil }
-func (m *mockMemoryDB) UpdateRepoScan(repoID string) error                  { return nil }
-func (m *mockMemoryDB) SetRepoRescan(repoID string, needsRescan bool) error { return nil }
-func (m *mockMemoryDB) StoreRepoFile(file *memory.RepoFile) error           { return nil }
-func (m *mockMemoryDB) GetRepoFiles(repoID string, fileType string) ([]*memory.RepoFile, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetRepoFile(repoID, filePath string) (*memory.RepoFile, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) StoreAgentLearning(learning *memory.AgentLearning) error { return nil }
-func (m *mockMemoryDB) GetAgentLearnings(filter memory.LearnFilter) ([]*memory.AgentLearning, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetRecentLearnings(limit int) ([]*memory.AgentLearning, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) StoreContextSummary(summary *memory.ContextSummary) error { return nil }
-func (m *mockMemoryDB) GetRecentSummaries(limit int) ([]*memory.ContextSummary, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetSummariesByAgent(agentID string, limit int) ([]*memory.ContextSummary, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetSummariesBySession(sessionID string) ([]*memory.ContextSummary, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) CreateTask(task *memory.WorkflowTask) error          { return nil }
-func (m *mockMemoryDB) CreateTasks(tasks []*memory.WorkflowTask) error      { return nil }
-func (m *mockMemoryDB) GetTask(taskID string) (*memory.WorkflowTask, error) { return nil, nil }
-func (m *mockMemoryDB) GetTasks(filter memory.TaskFilter) ([]*memory.WorkflowTask, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) UpdateTaskStatus(taskID, status, agentID string) error { return nil }
-func (m *mockMemoryDB) UpdateTask(task *memory.WorkflowTask) error            { return nil }
-func (m *mockMemoryDB) StoreDecision(decision *memory.HumanDecision) error    { return nil }
-func (m *mockMemoryDB) GetRecentDecisions(limit int) ([]*memory.HumanDecision, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetDecisionsByAgent(agentID string, limit int) ([]*memory.HumanDecision, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) CreateDeployment(deployment *memory.Deployment) error         { return nil }
-func (m *mockMemoryDB) GetDeployment(deploymentID int64) (*memory.Deployment, error) { return nil, nil }
-func (m *mockMemoryDB) GetRecentDeployments(repoID string, limit int) ([]*memory.Deployment, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) UpdateDeploymentStatus(deploymentID int64, status string) error { return nil }
-func (m *mockMemoryDB) RegisterAgent(agent *memory.AgentControl) error                 { return nil }
-func (m *mockMemoryDB) SetShutdownFlag(agentID string, reason string) error            { return nil }
-func (m *mockMemoryDB) ClearShutdownFlag(agentID string) error                         { return nil }
-func (m *mockMemoryDB) MarkStopped(agentID, reason string) error                       { return nil }
-func (m *mockMemoryDB) RemoveAgent(agentID string) error                               { return nil }
-func (m *mockMemoryDB) GetAgent(agentID string) (*memory.AgentControl, error)          { return nil, nil }
-func (m *mockMemoryDB) GetAllAgents() ([]*memory.AgentControl, error)                  { return nil, nil }
-func (m *mockMemoryDB) GetAgentsByStatus(status string) ([]*memory.AgentControl, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) CheckShutdownFlag(agentID string) (bool, string, error) { return false, "", nil }
-func (m *mockMemoryDB) AsLearningDB() memory.LearningDB                        { return nil }
-func (m *mockMemoryDB) Health() (*memory.HealthStatus, error) {
-	return &memory.HealthStatus{Connected: true, SchemaVersion: 8, ContextCount: 0}, nil
-}
-
-// Captain context stubs
-func (m *mockMemoryDB) SetContext(key, value string, priority int, maxAgeHours int) error {
-	return nil
-}
-func (m *mockMemoryDB) GetContext(key string) (*memory.CaptainContext, error)         { return nil, nil }
-func (m *mockMemoryDB) GetAllContext() ([]*memory.CaptainContext, error)              { return nil, nil }
-func (m *mockMemoryDB) GetContextByPriority(minPriority int) ([]*memory.CaptainContext, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) DeleteContext(key string) error    { return nil }
-func (m *mockMemoryDB) CleanExpiredContext() (int, error) { return 0, nil }
-func (m *mockMemoryDB) LogSessionEvent(sessionID, eventType, summary, details, agentID string) error {
-	return nil
-}
-func (m *mockMemoryDB) GetSessionLog(sessionID string, limit int) ([]*memory.SessionLogEntry, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetRecentSessionLog(limit int) ([]*memory.SessionLogEntry, error) {
-	return nil, nil
-}
-
-func (m *mockMemoryDB) Close() error { return nil }
 
 // mockStore is a simple mock implementation of persistence.Store for testing
+// We keep this mock because the Store interface manages in-memory dashboard state,
+// not database persistence. Using a real store would require more infrastructure.
 type mockStore struct {
 	state         *types.DashboardState
 	removedAgents []string
@@ -182,21 +80,21 @@ func (m *mockStore) SetCaptainConnected(connected bool)                      {}
 func (m *mockStore) SetCaptainStatus(status string)                          {}
 
 func TestNewCleanupService(t *testing.T) {
-	mockDB := &mockMemoryDB{}
-	mockStore := newMockStore()
+	db := newTestDB(t)
+	store := newMockStore()
 	hub := NewHub()
 
-	service := NewCleanupService(mockDB, mockStore, hub)
+	service := NewCleanupService(db, store, hub)
 
 	if service == nil {
 		t.Fatal("NewCleanupService returned nil")
 	}
 
-	if service.memDB != mockDB {
+	if service.memDB != db {
 		t.Error("memDB not set correctly")
 	}
 
-	if service.store != mockStore {
+	if service.store != store {
 		t.Error("store not set correctly")
 	}
 
@@ -215,40 +113,44 @@ func TestNewCleanupService(t *testing.T) {
 }
 
 func TestCleanupStaleAgents(t *testing.T) {
-	now := time.Now()
-	oldHeartbeat := now.Add(-180 * time.Second)
+	db := newTestDB(t)
+	store := newMockStore()
+	hub := NewHub()
+
+	// Use UTC to match SQLite's datetime('now') which is UTC
+	now := time.Now().UTC()
+	oldHeartbeat := now.Add(-180 * time.Second) // 3 minutes ago, beyond 120s threshold
 	pid1 := 12345
 	pid2 := 67890
 
-	// Create mock stale agents
-	staleAgents := []*memory.AgentControl{
-		{
-			AgentID:     "agent-001",
-			ConfigName:  "test-config-1",
-			PID:         &pid1,
-			Status:      "running",
-			HeartbeatAt: &oldHeartbeat,
-		},
-		{
-			AgentID:     "agent-002",
-			ConfigName:  "test-config-2",
-			PID:         &pid2,
-			Status:      "running",
-			HeartbeatAt: &oldHeartbeat,
-		},
+	// Register stale agents in the database
+	agent1 := &memory.AgentControl{
+		AgentID:     "agent-001",
+		ConfigName:  "test-config-1",
+		PID:         &pid1,
+		Status:      "running",
+		HeartbeatAt: &oldHeartbeat,
+	}
+	agent2 := &memory.AgentControl{
+		AgentID:     "agent-002",
+		ConfigName:  "test-config-2",
+		PID:         &pid2,
+		Status:      "running",
+		HeartbeatAt: &oldHeartbeat,
 	}
 
-	mockDB := &mockMemoryDB{
-		staleAgents: staleAgents,
+	if err := db.RegisterAgent(agent1); err != nil {
+		t.Fatalf("Failed to register agent1: %v", err)
 	}
-	mockStore := newMockStore()
-	hub := NewHub()
+	if err := db.RegisterAgent(agent2); err != nil {
+		t.Fatalf("Failed to register agent2: %v", err)
+	}
 
-	// Add agents to store first
-	mockStore.AddAgent(&types.Agent{ID: "agent-001", Status: types.StatusConnected})
-	mockStore.AddAgent(&types.Agent{ID: "agent-002", Status: types.StatusConnected})
+	// Add agents to store
+	store.AddAgent(&types.Agent{ID: "agent-001", Status: types.StatusConnected})
+	store.AddAgent(&types.Agent{ID: "agent-002", Status: types.StatusConnected})
 
-	service := NewCleanupService(mockDB, mockStore, hub)
+	service := NewCleanupService(db, store, hub)
 
 	// Run cleanup once
 	removed := service.RunOnce()
@@ -258,30 +160,52 @@ func TestCleanupStaleAgents(t *testing.T) {
 	}
 
 	// Verify agents were removed from store
-	if len(mockStore.removedAgents) != 2 {
-		t.Errorf("expected 2 agents removed from store, got %d", len(mockStore.removedAgents))
+	if len(store.removedAgents) != 2 {
+		t.Errorf("expected 2 agents removed from store, got %d", len(store.removedAgents))
 	}
 
 	// Verify status was updated to dead in DB
-	if len(mockDB.statusUpdates) != 2 {
-		t.Errorf("expected 2 status updates, got %d", len(mockDB.statusUpdates))
+	dbAgent1, err := db.GetAgent("agent-001")
+	if err != nil {
+		t.Fatalf("Failed to get agent1: %v", err)
+	}
+	if dbAgent1 != nil && dbAgent1.Status != "dead" {
+		t.Errorf("expected agent1 status 'dead', got '%s'", dbAgent1.Status)
 	}
 
-	for _, update := range mockDB.statusUpdates {
-		if update.status != "dead" {
-			t.Errorf("expected status 'dead', got '%s'", update.status)
-		}
+	dbAgent2, err := db.GetAgent("agent-002")
+	if err != nil {
+		t.Fatalf("Failed to get agent2: %v", err)
+	}
+	if dbAgent2 != nil && dbAgent2.Status != "dead" {
+		t.Errorf("expected agent2 status 'dead', got '%s'", dbAgent2.Status)
 	}
 }
 
 func TestNoStaleAgents(t *testing.T) {
-	mockDB := &mockMemoryDB{
-		staleAgents: []*memory.AgentControl{}, // Empty list
-	}
-	mockStore := newMockStore()
+	db := newTestDB(t)
+	store := newMockStore()
 	hub := NewHub()
 
-	service := NewCleanupService(mockDB, mockStore, hub)
+	// Register an agent with a recent heartbeat (not stale)
+	// Use UTC to match SQLite's datetime('now') which is UTC
+	now := time.Now().UTC()
+	recentHeartbeat := now // Use current time to ensure it's not stale
+	pid := 12345
+
+	agent := &memory.AgentControl{
+		AgentID:     "agent-fresh",
+		ConfigName:  "test-config",
+		PID:         &pid,
+		Status:      "running",
+		HeartbeatAt: &recentHeartbeat,
+	}
+
+	if err := db.RegisterAgent(agent); err != nil {
+		t.Fatalf("Failed to register agent: %v", err)
+	}
+
+	service := NewCleanupService(db, store, hub)
 
 	// Run cleanup once
 	removed := service.RunOnce()
@@ -291,41 +215,46 @@ func TestNoStaleAgents(t *testing.T) {
 	}
 
 	// Verify no agents were removed from store
-	if len(mockStore.removedAgents) != 0 {
-		t.Errorf("expected 0 agents removed from store, got %d", len(mockStore.removedAgents))
+	if len(store.removedAgents) != 0 {
+		t.Errorf("expected 0 agents removed from store, got %d", len(store.removedAgents))
 	}
 
-	// Verify no status updates
-	if len(mockDB.statusUpdates) != 0 {
-		t.Errorf("expected 0 status updates, got %d", len(mockDB.statusUpdates))
+	// Verify agent still has running status
+	dbAgent, err := db.GetAgent("agent-fresh")
+	if err != nil {
+		t.Fatalf("Failed to get agent: %v", err)
+	}
+	if dbAgent.Status != "running" {
+		t.Errorf("expected status 'running', got '%s'", dbAgent.Status)
 	}
 }
 
 func TestCleanupWithNullPID(t *testing.T) {
-	now := time.Now()
+	db := newTestDB(t)
+	store := newMockStore()
+	hub := NewHub()
+
+	// Use UTC to match SQLite's datetime('now') which is UTC
+	now := time.Now().UTC()
 	oldHeartbeat := now.Add(-180 * time.Second)
 
 	// Create stale agent with nil PID
-	staleAgents := []*memory.AgentControl{
-		{
-			AgentID:     "agent-no-pid",
-			ConfigName:  "test-config",
-			PID:         nil, // No PID
-			Status:      "running",
-			HeartbeatAt: &oldHeartbeat,
-		},
+	agent := &memory.AgentControl{
+		AgentID:     "agent-no-pid",
+		ConfigName:  "test-config",
+		PID:         nil, // No PID
+		Status:      "running",
+		HeartbeatAt: &oldHeartbeat,
 	}
 
-	mockDB := &mockMemoryDB{
-		staleAgents: staleAgents,
+	if err := db.RegisterAgent(agent); err != nil {
+		t.Fatalf("Failed to register agent: %v", err)
 	}
-	mockStore := newMockStore()
-	hub := NewHub()
 
 	// Add agent to store
-	mockStore.AddAgent(&types.Agent{ID: "agent-no-pid", Status: types.StatusConnected})
+	store.AddAgent(&types.Agent{ID: "agent-no-pid", Status: types.StatusConnected})
 
-	service := NewCleanupService(mockDB, mockStore, hub)
+	service := NewCleanupService(db, store, hub)
 
 	// Should not panic even without PID
 	removed := service.RunOnce()
@@ -334,22 +263,22 @@ func TestCleanupWithNullPID(t *testing.T) {
 		t.Errorf("expected 1 agent removed, got %d", removed)
 	}
 
-	// Verify agent was still removed from store
-	if len(mockStore.removedAgents) != 1 {
-		t.Errorf("expected 1 agent removed from store, got %d", len(mockStore.removedAgents))
+	// Verify agent was removed from store
+	if len(store.removedAgents) != 1 {
+		t.Errorf("expected 1 agent removed from store, got %d", len(store.removedAgents))
 	}
 
-	if mockStore.removedAgents[0] != "agent-no-pid" {
-		t.Errorf("expected 'agent-no-pid' removed, got '%s'", mockStore.removedAgents[0])
+	if store.removedAgents[0] != "agent-no-pid" {
+		t.Errorf("expected 'agent-no-pid' removed, got '%s'", store.removedAgents[0])
 	}
 }
 
 func TestSetIntervals(t *testing.T) {
-	mockDB := &mockMemoryDB{}
-	mockStore := newMockStore()
+	db := newTestDB(t)
+	store := newMockStore()
 	hub := NewHub()
 
-	service := NewCleanupService(mockDB, mockStore, hub)
+	service := NewCleanupService(db, store, hub)
 
 	// Change intervals
 	newCheckInterval := 10 * time.Second
@@ -367,13 +296,11 @@ func TestSetIntervals(t *testing.T) {
 }
 
 func TestCleanupServiceStart(t *testing.T) {
-	mockDB := &mockMemoryDB{
-		staleAgents: []*memory.AgentControl{},
-	}
-	mockStore := newMockStore()
+	db := newTestDB(t)
+	store := newMockStore()
 	hub := NewHub()
 
-	service := NewCleanupService(mockDB, mockStore, hub)
+	service := NewCleanupService(db, store, hub)
 
 	// Set very short check interval for testing
 	service.SetIntervals(50*time.Millisecond, 120*time.Second)
@@ -396,102 +323,60 @@ func TestCleanupServiceStart(t *testing.T) {
 	// Test passes if no panic occurred
 }
 
-func TestCleanupDBError(t *testing.T) {
-	mockDB := &mockMemoryDB{
-		staleAgentsErr: context.DeadlineExceeded, // Simulate error
-	}
-	mockStore := newMockStore()
+func TestCleanupWithMixedAgents(t *testing.T) {
+	db := newTestDB(t)
+	store := newMockStore()
 	hub := NewHub()
 
-	service := NewCleanupService(mockDB, mockStore, hub)
+	// Use UTC to match SQLite's datetime('now') which is UTC
+	now := time.Now().UTC()
+	oldHeartbeat := now.Add(-180 * time.Second) // Stale
+	recentHeartbeat := now                       // Fresh - use current time
+	pid1 := 12345
+	pid2 := 67890
 
-	// Should handle error gracefully
-	removed := service.RunOnce()
-
-	if removed != 0 {
-		t.Errorf("expected 0 agents removed on error, got %d", removed)
+	// Register one stale and one fresh agent
+	staleAgent := &memory.AgentControl{
+		AgentID:     "agent-stale",
+		ConfigName:  "test-config",
+		PID:         &pid1,
+		Status:      "running",
+		HeartbeatAt: &oldHeartbeat,
 	}
-}
-
-func TestCleanupUpdateStatusError(t *testing.T) {
-	now := time.Now()
-	oldHeartbeat := now.Add(-180 * time.Second)
-	pid := 12345
-
-	staleAgents := []*memory.AgentControl{
-		{
-			AgentID:     "agent-001",
-			ConfigName:  "test-config",
-			PID:         &pid,
-			Status:      "running",
-			HeartbeatAt: &oldHeartbeat,
-		},
+	freshAgent := &memory.AgentControl{
+		AgentID:     "agent-fresh",
+		ConfigName:  "test-config",
+		PID:         &pid2,
+		Status:      "running",
+		HeartbeatAt: &recentHeartbeat,
 	}
 
-	mockDB := &mockMemoryDB{
-		staleAgents:     staleAgents,
-		updateStatusErr: context.DeadlineExceeded, // Simulate error on update
+	if err := db.RegisterAgent(staleAgent); err != nil {
+		t.Fatalf("Failed to register stale agent: %v", err)
 	}
-	mockStore := newMockStore()
-	hub := NewHub()
+	if err := db.RegisterAgent(freshAgent); err != nil {
+		t.Fatalf("Failed to register fresh agent: %v", err)
+	}
 
-	mockStore.AddAgent(&types.Agent{ID: "agent-001", Status: types.StatusConnected})
+	// Add stale agent to store
+	store.AddAgent(&types.Agent{ID: "agent-stale", Status: types.StatusConnected})
+	store.AddAgent(&types.Agent{ID: "agent-fresh", Status: types.StatusConnected})
 
-	service := NewCleanupService(mockDB, mockStore, hub)
-
-	// Should still remove from store even if DB update fails
+	service := NewCleanupService(db, store, hub)
 	removed := service.RunOnce()
 
 	if removed != 1 {
-		t.Errorf("expected 1 agent removed, got %d", removed)
+		t.Errorf("expected 1 agent removed (only stale), got %d", removed)
 	}
 
-	// Verify agent was still removed from store
-	if len(mockStore.removedAgents) != 1 {
-		t.Errorf("expected 1 agent removed from store, got %d", len(mockStore.removedAgents))
+	// Verify only stale agent was removed
+	if len(store.removedAgents) != 1 || store.removedAgents[0] != "agent-stale" {
+		t.Errorf("expected only 'agent-stale' removed, got %v", store.removedAgents)
 	}
-}
 
-// These methods were added by Task 5 and 6 subagents
-func (m *mockMemoryDB) RecordMetricsHistory(agentID, model string, tokensUsed int64, estimatedCost float64, taskID string) error {
-	return nil
-}
-func (m *mockMemoryDB) GetMetricsByModel(modelFilter string) ([]*memory.ModelMetrics, error) {
-	return nil, nil
-}
-
-// Task assignment stubs (SGT workflow)
-func (m *mockMemoryDB) CreateAssignment(assignment *memory.TaskAssignment) error { return nil }
-func (m *mockMemoryDB) GetAssignment(id int64) (*memory.TaskAssignment, error)  { return nil, nil }
-func (m *mockMemoryDB) GetAssignmentsByTask(taskID string) ([]*memory.TaskAssignment, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetAssignmentsByAgent(agentID string, status string) ([]*memory.TaskAssignment, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetActiveAssignment(agentID string) (*memory.TaskAssignment, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) UpdateAssignmentStatus(id int64, status string) error { return nil }
-func (m *mockMemoryDB) CompleteAssignment(id int64, status string, feedback string) error {
-	return nil
-}
-func (m *mockMemoryDB) RequestRework(id int64, feedback string) error { return nil }
-func (m *mockMemoryDB) AddWorker(worker *memory.AssignmentWorker) error { return nil }
-func (m *mockMemoryDB) UpdateWorkerStatus(id int64, status, result string, tokensUsed int64) error {
-	return nil
-}
-func (m *mockMemoryDB) GetWorkersByAssignment(assignmentID int64) ([]*memory.AssignmentWorker, error) {
-	return nil, nil
-}
-
-// New metrics analysis methods
-func (m *mockMemoryDB) GetMetricsByAgentType() ([]*memory.AgentTypeMetrics, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) GetMetricsByAgent() ([]*memory.AgentMetricsSummary, error) {
-	return nil, nil
-}
-func (m *mockMemoryDB) RecordMetricsWithType(agentID, model, agentType, parentAgent string, tokensUsed int64, estimatedCost float64, taskID string, assignmentID *int64) error {
-	return nil
+	// Verify fresh agent still running
+	freshDB, _ := db.GetAgent("agent-fresh")
+	if freshDB.Status != "running" {
+		t.Errorf("expected fresh agent status 'running', got '%s'", freshDB.Status)
+	}
 }

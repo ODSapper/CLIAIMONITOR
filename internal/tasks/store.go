@@ -31,6 +31,7 @@ func (s *Store) Init() error {
 			assigned_to TEXT,
 			branch TEXT,
 			pr_url TEXT,
+			requirements TEXT,
 			metadata TEXT,
 			created_at TIMESTAMP NOT NULL,
 			updated_at TIMESTAMP NOT NULL,
@@ -38,16 +39,23 @@ func (s *Store) Init() error {
 			completed_at TIMESTAMP
 		)
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Add requirements column if it doesn't exist (migration for existing DBs)
+	s.db.Exec(`ALTER TABLE tasks ADD COLUMN requirements TEXT`)
+	return nil
 }
 
 // Save creates or updates a task
 func (s *Store) Save(task *Task) error {
 	metadata, _ := json.Marshal(task.Metadata)
+	requirements, _ := json.Marshal(task.Requirements)
 
 	_, err := s.db.Exec(`
-		INSERT INTO tasks (id, title, description, priority, status, source, repo, assigned_to, branch, pr_url, metadata, created_at, updated_at, started_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tasks (id, title, description, priority, status, source, repo, assigned_to, branch, pr_url, requirements, metadata, created_at, updated_at, started_at, completed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			title=excluded.title,
 			description=excluded.description,
@@ -56,6 +64,7 @@ func (s *Store) Save(task *Task) error {
 			assigned_to=excluded.assigned_to,
 			branch=excluded.branch,
 			pr_url=excluded.pr_url,
+			requirements=excluded.requirements,
 			metadata=excluded.metadata,
 			updated_at=excluded.updated_at,
 			started_at=excluded.started_at,
@@ -63,7 +72,7 @@ func (s *Store) Save(task *Task) error {
 	`,
 		task.ID, task.Title, task.Description, task.Priority,
 		task.Status, task.Source, task.Repo, task.AssignedTo,
-		task.Branch, task.PRUrl, string(metadata),
+		task.Branch, task.PRUrl, string(requirements), string(metadata),
 		task.CreatedAt, task.UpdatedAt, task.StartedAt, task.CompletedAt,
 	)
 	return err
@@ -72,7 +81,7 @@ func (s *Store) Save(task *Task) error {
 // GetByID retrieves a task by ID
 func (s *Store) GetByID(id string) (*Task, error) {
 	row := s.db.QueryRow(`
-		SELECT id, title, description, priority, status, source, repo, assigned_to, branch, pr_url, metadata, created_at, updated_at, started_at, completed_at
+		SELECT id, title, description, priority, status, source, repo, assigned_to, branch, pr_url, requirements, metadata, created_at, updated_at, started_at, completed_at
 		FROM tasks WHERE id = ?
 	`, id)
 
@@ -82,7 +91,7 @@ func (s *Store) GetByID(id string) (*Task, error) {
 // GetByStatus retrieves all tasks with a given status
 func (s *Store) GetByStatus(status TaskStatus) ([]*Task, error) {
 	rows, err := s.db.Query(`
-		SELECT id, title, description, priority, status, source, repo, assigned_to, branch, pr_url, metadata, created_at, updated_at, started_at, completed_at
+		SELECT id, title, description, priority, status, source, repo, assigned_to, branch, pr_url, requirements, metadata, created_at, updated_at, started_at, completed_at
 		FROM tasks WHERE status = ? ORDER BY priority, created_at
 	`, status)
 	if err != nil {
@@ -96,7 +105,7 @@ func (s *Store) GetByStatus(status TaskStatus) ([]*Task, error) {
 // GetAll retrieves all tasks
 func (s *Store) GetAll() ([]*Task, error) {
 	rows, err := s.db.Query(`
-		SELECT id, title, description, priority, status, source, repo, assigned_to, branch, pr_url, metadata, created_at, updated_at, started_at, completed_at
+		SELECT id, title, description, priority, status, source, repo, assigned_to, branch, pr_url, requirements, metadata, created_at, updated_at, started_at, completed_at
 		FROM tasks ORDER BY priority, created_at
 	`)
 	if err != nil {
@@ -115,14 +124,14 @@ func (s *Store) Delete(id string) error {
 
 func (s *Store) scanTask(row *sql.Row) (*Task, error) {
 	var task Task
-	var metadata string
+	var requirements, metadata sql.NullString
 	var startedAt, completedAt sql.NullTime
 	var repo, assignedTo, branch, prUrl sql.NullString
 
 	err := row.Scan(
 		&task.ID, &task.Title, &task.Description, &task.Priority,
 		&task.Status, &task.Source, &repo, &assignedTo,
-		&branch, &prUrl, &metadata,
+		&branch, &prUrl, &requirements, &metadata,
 		&task.CreatedAt, &task.UpdatedAt, &startedAt, &completedAt,
 	)
 	if err != nil {
@@ -147,8 +156,17 @@ func (s *Store) scanTask(row *sql.Row) (*Task, error) {
 	if completedAt.Valid {
 		task.CompletedAt = &completedAt.Time
 	}
-	if metadata != "" {
-		json.Unmarshal([]byte(metadata), &task.Metadata)
+	if requirements.Valid && requirements.String != "" {
+		if err := json.Unmarshal([]byte(requirements.String), &task.Requirements); err != nil {
+			// Log but continue - don't fail on bad JSON
+			task.Requirements = nil
+		}
+	}
+	if metadata.Valid && metadata.String != "" {
+		if err := json.Unmarshal([]byte(metadata.String), &task.Metadata); err != nil {
+			// Log but continue - don't fail on bad JSON
+			task.Metadata = make(map[string]string)
+		}
 	}
 
 	return &task, nil
@@ -158,14 +176,14 @@ func (s *Store) scanTasks(rows *sql.Rows) ([]*Task, error) {
 	var tasks []*Task
 	for rows.Next() {
 		var task Task
-		var metadata string
+		var requirements, metadata sql.NullString
 		var startedAt, completedAt sql.NullTime
 		var repo, assignedTo, branch, prUrl sql.NullString
 
 		err := rows.Scan(
 			&task.ID, &task.Title, &task.Description, &task.Priority,
 			&task.Status, &task.Source, &repo, &assignedTo,
-			&branch, &prUrl, &metadata,
+			&branch, &prUrl, &requirements, &metadata,
 			&task.CreatedAt, &task.UpdatedAt, &startedAt, &completedAt,
 		)
 		if err != nil {
@@ -190,8 +208,15 @@ func (s *Store) scanTasks(rows *sql.Rows) ([]*Task, error) {
 		if completedAt.Valid {
 			task.CompletedAt = &completedAt.Time
 		}
-		if metadata != "" {
-			json.Unmarshal([]byte(metadata), &task.Metadata)
+		if requirements.Valid && requirements.String != "" {
+			if err := json.Unmarshal([]byte(requirements.String), &task.Requirements); err != nil {
+				task.Requirements = nil
+			}
+		}
+		if metadata.Valid && metadata.String != "" {
+			if err := json.Unmarshal([]byte(metadata.String), &task.Metadata); err != nil {
+				task.Metadata = make(map[string]string)
+			}
 		}
 
 		tasks = append(tasks, &task)

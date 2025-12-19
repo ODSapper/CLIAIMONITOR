@@ -59,7 +59,7 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 
 		case message := <-h.broadcast:
-			h.mu.RLock()
+			h.mu.Lock()
 			for client := range h.clients {
 				select {
 				case client.send <- message:
@@ -68,7 +68,7 @@ func (h *Hub) Run() {
 					delete(h.clients, client)
 				}
 			}
-			h.mu.RUnlock()
+			h.mu.Unlock()
 		}
 	}
 }
@@ -129,6 +129,14 @@ func (h *Hub) BroadcastCaptainMessage(text string) {
 	h.BroadcastJSON(types.WSMessage{
 		Type: types.WSTypeCaptainMessage,
 		Data: map[string]string{"text": text},
+	})
+}
+
+// BroadcastChat sends a chat message to all WebSocket clients
+func (h *Hub) BroadcastChat(msg *types.ChatMessage) {
+	h.BroadcastJSON(types.WSMessage{
+		Type: types.WSTypeChat,
+		Data: msg,
 	})
 }
 

@@ -606,8 +606,10 @@ func (l *SQLiteLearningDB) GetKnowledge(id string) (*Knowledge, error) {
 	} else {
 		k.AgentType = AgentTypeCaptain
 	}
-	if tagsJSON.Valid {
-		json.Unmarshal([]byte(tagsJSON.String), &k.Tags)
+	if tagsJSON.Valid && tagsJSON.String != "" {
+		if err := json.Unmarshal([]byte(tagsJSON.String), &k.Tags); err != nil {
+			k.Tags = nil // Clear on error
+		}
 	}
 	if source.Valid {
 		k.Source = source.String

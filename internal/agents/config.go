@@ -24,9 +24,9 @@ func LoadTeamsConfig(filepath string) (*types.TeamsConfig, error) {
 
 // GetAgentConfig finds config by name
 func GetAgentConfig(config *types.TeamsConfig, name string) *types.AgentConfig {
-	for _, agent := range config.Agents {
-		if agent.Name == name {
-			return &agent
+	for i := range config.Agents {
+		if config.Agents[i].Name == name {
+			return &config.Agents[i]
 		}
 	}
 	return nil

@@ -99,6 +99,13 @@ type MemoryDB interface {
 	UpdateWorkerStatus(id int64, status, result string, tokensUsed int64) error
 	GetWorkersByAssignment(assignmentID int64) ([]*AssignmentWorker, error)
 
+	// Prompt template operations
+	GetPromptTemplate(name string) (*PromptTemplate, error)
+	GetPromptTemplateByRole(role string) (*PromptTemplate, error)
+	GetAllPromptTemplates() ([]*PromptTemplate, error)
+	SavePromptTemplate(template *PromptTemplate) error
+	DeletePromptTemplate(name string) error
+
 	// Review Board operations
 	CreateReviewBoard(board *ReviewBoard) error
 	GetReviewBoard(id int64) (*ReviewBoard, error)
@@ -115,6 +122,23 @@ type MemoryDB interface {
 	GetDefectCategories() ([]*DefectCategory, error)
 	CalculateConsensus(boardID int64) (*ConsensusResult, error)
 	UpdateQualityScoresAfterReview(boardID int64, consensus *ConsensusResult) error
+	GenerateReviewReport(boardID int64) (string, error)
+	SaveReviewReport(boardID int64, title, content, projectID string) error
+
+	// Document operations
+	CreateDocument(doc *Document) error
+	GetDocument(id int64) (*Document, error)
+	GetDocumentsByType(docType string, limit int) ([]*Document, error)
+	GetDocumentsByProject(projectID string, limit int) ([]*Document, error)
+	GetDocumentsByAuthor(authorID string, limit int) ([]*Document, error)
+	SearchDocuments(query string, limit int) ([]*Document, error)
+	UpdateDocument(doc *Document) error
+	ArchiveDocument(id int64) error
+
+	// Config store operations
+	GetConfig(configType string) (*ConfigEntry, error)
+	SaveConfig(configType, content, format string) error
+	GetAllConfigs() ([]*ConfigEntry, error)
 
 	// Health check
 	Health() (*HealthStatus, error)
@@ -312,6 +336,50 @@ type AssignmentWorker struct {
 	StartedAt       *time.Time
 	CompletedAt     *time.Time
 	CreatedAt       time.Time
+}
+
+// PromptTemplate stores agent system prompt templates
+type PromptTemplate struct {
+	ID          int64
+	Name        string // Unique identifier, e.g., 'sgt-green', 'engineer'
+	Role        string // Agent role, e.g., 'supervisor', 'engineer', 'security'
+	Content     string // Full prompt template with {{PLACEHOLDERS}}
+	Description string // Human-readable description
+	Version     int
+	IsActive    bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// Document represents an internal work product (plan, report, review, etc.)
+type Document struct {
+	ID           int64
+	DocType      string // 'plan', 'report', 'review', 'test_report', 'agent_work', 'config'
+	Title        string
+	Content      string
+	Format       string // 'markdown', 'json', 'yaml', 'text'
+	AuthorID     string
+	ProjectID    string
+	TaskID       string
+	AssignmentID *int64
+	Tags         []string // Stored as JSON
+	Status       string   // 'draft', 'active', 'archived', 'superseded'
+	Version      int
+	ParentID     *int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	ArchivedAt   *time.Time
+}
+
+// ConfigEntry represents a stored configuration (teams.yaml, projects.yaml, etc.)
+type ConfigEntry struct {
+	ID         int64
+	ConfigType string
+	Content    string
+	Format     string
+	Version    int
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Common context keys for Captain

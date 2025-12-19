@@ -458,11 +458,15 @@ func (m *SQLiteMemoryDB) GetScans(ctx context.Context, filter ScanFilter) ([]*Re
 		}
 
 		if languagesJSON.Valid && languagesJSON.String != "" {
-			json.Unmarshal([]byte(languagesJSON.String), &scan.LanguagesDetected)
+			if err := json.Unmarshal([]byte(languagesJSON.String), &scan.LanguagesDetected); err != nil {
+				scan.LanguagesDetected = nil
+			}
 		}
 
 		if frameworksJSON.Valid && frameworksJSON.String != "" {
-			json.Unmarshal([]byte(frameworksJSON.String), &scan.FrameworksDetected)
+			if err := json.Unmarshal([]byte(frameworksJSON.String), &scan.FrameworksDetected); err != nil {
+				scan.FrameworksDetected = nil
+			}
 		}
 
 		scans = append(scans, &scan)
@@ -546,7 +550,9 @@ func (m *SQLiteMemoryDB) GetFinding(ctx context.Context, id string) (*ReconFindi
 	}
 
 	if metadataJSON.Valid && metadataJSON.String != "" {
-		json.Unmarshal([]byte(metadataJSON.String), &finding.Metadata)
+		if err := json.Unmarshal([]byte(metadataJSON.String), &finding.Metadata); err != nil {
+			finding.Metadata = nil
+		}
 	}
 
 	return &finding, nil
@@ -636,7 +642,9 @@ func (m *SQLiteMemoryDB) GetFindings(ctx context.Context, filter FindingFilter) 
 		}
 
 		if metadataJSON.Valid && metadataJSON.String != "" {
-			json.Unmarshal([]byte(metadataJSON.String), &finding.Metadata)
+			if err := json.Unmarshal([]byte(metadataJSON.String), &finding.Metadata); err != nil {
+				finding.Metadata = nil
+			}
 		}
 
 		findings = append(findings, &finding)
@@ -744,11 +752,15 @@ func scanFromDB(scan *ReconScan, mission, summaryJSON, languagesJSON, frameworks
 	}
 
 	if languagesJSON.Valid && languagesJSON.String != "" {
-		json.Unmarshal([]byte(languagesJSON.String), &scan.LanguagesDetected)
+		if err := json.Unmarshal([]byte(languagesJSON.String), &scan.LanguagesDetected); err != nil {
+			scan.LanguagesDetected = nil
+		}
 	}
 
 	if frameworksJSON.Valid && frameworksJSON.String != "" {
-		json.Unmarshal([]byte(frameworksJSON.String), &scan.FrameworksDetected)
+		if err := json.Unmarshal([]byte(frameworksJSON.String), &scan.FrameworksDetected); err != nil {
+			scan.FrameworksDetected = nil
+		}
 	}
 
 	return scan, nil
