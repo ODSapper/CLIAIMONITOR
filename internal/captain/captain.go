@@ -209,14 +209,28 @@ func (c *Captain) ExecuteMission(ctx context.Context, mission Mission) (*Subagen
 }
 
 // ExecuteMissionsParallel runs multiple missions in parallel (subagent mode only)
+// Uses a worker pool to limit concurrent goroutines and prevent OOM
 func (c *Captain) ExecuteMissionsParallel(ctx context.Context, missions []Mission) []*SubagentResult {
-	var wg sync.WaitGroup
+	// Worker pool configuration: limit concurrent missions to prevent unbounded goroutine spawn
+	const maxConcurrentWorkers = 10
+
 	results := make([]*SubagentResult, len(missions))
+
+	// Create semaphore channel to limit concurrent workers
+	sem := make(chan struct{}, maxConcurrentWorkers)
+
+	var wg sync.WaitGroup
 
 	for i, mission := range missions {
 		wg.Add(1)
+
+		// Acquire semaphore (blocks if at capacity)
+		sem <- struct{}{}
+
 		go func(idx int, m Mission) {
 			defer wg.Done()
+			defer func() { <-sem }() // Release semaphore when done
+
 			result, err := c.ExecuteMission(ctx, m)
 			if err != nil {
 				results[idx] = &SubagentResult{

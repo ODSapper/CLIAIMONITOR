@@ -74,3 +74,11 @@ func (w *headerRemovalWriter) writeSecurityHeaders() {
 	// Set generic Server header without version information
 	h.Set("Server", "MAH")
 }
+
+// Flush implements http.Flusher to support SSE streaming
+// This is critical for MCP SSE connections to work properly
+func (w *headerRemovalWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
