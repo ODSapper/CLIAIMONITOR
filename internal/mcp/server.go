@@ -74,7 +74,7 @@ func (s *Server) Broadcast(method string, params interface{}) {
 	s.connections.Broadcast(method, params)
 }
 
-// ServeSSE handles SSE connections from agents
+// ServeSSE handles SSE connections from agents (GET) and JSON-RPC messages (POST)
 func (s *Server) ServeSSE(w http.ResponseWriter, r *http.Request) {
 	// Get agent ID from header or query param
 	agentID := r.Header.Get("X-Agent-ID")
@@ -86,6 +86,45 @@ func (s *Server) ServeSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle POST - JSON-RPC message (Claude MCP client sends POST to same endpoint)
+	if r.Method == http.MethodPost {
+		// Read request body
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "failed to read body", http.StatusBadRequest)
+			return
+		}
+
+		// Parse JSON-RPC request
+		var req types.MCPRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			s.sendError(w, nil, -32700, "Parse error")
+			return
+		}
+
+		// Handle request using agent ID from header
+		resp := s.handleRequest(agentID, &req)
+
+		// Check if we have an active SSE connection
+		conn := s.connections.Get(agentID)
+		if conn != nil {
+			// Send response via SSE stream (MCP SSE protocol)
+			if err := conn.SendResponse(resp); err != nil {
+				http.Error(w, "failed to send response", http.StatusInternalServerError)
+				return
+			}
+			// Return 202 Accepted to acknowledge receipt
+			w.WriteHeader(http.StatusAccepted)
+		} else {
+			// No active SSE connection - send response directly as JSON (fallback mode)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(resp)
+		}
+		return
+	}
+
+	// Handle GET - establish SSE stream
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
