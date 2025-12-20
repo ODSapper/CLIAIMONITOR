@@ -23,7 +23,8 @@ type EmailConfig struct {
 	MinPriority int                 `json:"min_priority,omitempty"`
 	// TLS Configuration for secure SMTP connections
 	UseTLS     bool `json:"use_tls,omitempty"`     // Enable TLS (default: false for backwards compatibility)
-	SkipVerify bool `json:"skip_verify,omitempty"` // Skip TLS certificate verification (not recommended for production)
+	// SECURITY: SkipVerify option removed - TLS certificate verification is now always enabled
+	// TLS certificate verification is critical for preventing MITM attacks
 }
 
 // EmailNotifier sends notifications via email
