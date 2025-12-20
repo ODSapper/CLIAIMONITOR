@@ -77,6 +77,12 @@ type ToolCallbacks struct {
 	OnFinalizeBoard       func(boardID int64) (interface{}, error)
 	OnGetAgentLeaderboard func(role string, limit int) (interface{}, error)
 	OnGetDefectCategories func() (interface{}, error)
+
+	// Document storage callbacks
+	OnSaveDocument     func(agentID string, doc map[string]interface{}) (interface{}, error)
+	OnGetDocument      func(id int64) (interface{}, error)
+	OnSearchDocuments  func(query, docType, projectID, authorID string, limit int) (interface{}, error)
+	OnListMyDocuments  func(agentID, docType string, limit int) (interface{}, error)
 }
 
 // RegisterDefaultTools registers all standard MCP tools
@@ -1034,6 +1040,9 @@ func registerSGTWorkflowTools(s *Server, callbacks ToolCallbacks) {
 
 	// Register Review Board tools
 	registerReviewBoardTools(s, callbacks)
+
+	// Register Document storage tools
+	registerDocumentTools(s, callbacks)
 }
 
 // RegisterWaitForEventsTool registers the wait_for_events tool for real-time event polling
@@ -1360,6 +1369,172 @@ func registerReviewBoardTools(s *Server, callbacks ToolCallbacks) {
 				return map[string]interface{}{"error": "Review Board not configured"}, nil
 			}
 			return callbacks.OnGetDefectCategories()
+		},
+	})
+}
+
+// registerDocumentTools adds document storage tools for agents to save work products
+func registerDocumentTools(s *Server, callbacks ToolCallbacks) {
+	// save_document - Save a document to the database
+	s.RegisterTool(ToolDefinition{
+		Name:        "save_document",
+		Description: "Save a document (plan, report, review, etc.) to the database for future reference. Use this to preserve your work products.",
+		Parameters: map[string]ParameterDef{
+			"doc_type": {
+				Type:        "string",
+				Description: "Document type: plan, report, review, test_report, agent_work, config",
+				Required:    true,
+			},
+			"title": {
+				Type:        "string",
+				Description: "Document title",
+				Required:    true,
+			},
+			"content": {
+				Type:        "string",
+				Description: "Document content",
+				Required:    true,
+			},
+			"format": {
+				Type:        "string",
+				Description: "Content format: markdown, json, yaml, text (default: markdown)",
+				Required:    false,
+			},
+			"project_id": {
+				Type:        "string",
+				Description: "Optional project ID",
+				Required:    false,
+			},
+			"task_id": {
+				Type:        "string",
+				Description: "Optional task ID",
+				Required:    false,
+			},
+			"tags": {
+				Type:        "array",
+				Description: "Optional tags for filtering",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSaveDocument == nil {
+				return map[string]interface{}{"error": "Document storage not configured"}, nil
+			}
+			doc := map[string]interface{}{
+				"doc_type": params["doc_type"],
+				"title":    params["title"],
+				"content":  params["content"],
+				"format":   "markdown", // default
+			}
+			if format, ok := params["format"].(string); ok && format != "" {
+				doc["format"] = format
+			}
+			if projectID, ok := params["project_id"].(string); ok {
+				doc["project_id"] = projectID
+			}
+			if taskID, ok := params["task_id"].(string); ok {
+				doc["task_id"] = taskID
+			}
+			if tags, ok := params["tags"].([]interface{}); ok {
+				doc["tags"] = tags
+			}
+			return callbacks.OnSaveDocument(agentID, doc)
+		},
+	})
+
+	// get_document - Get a document by ID
+	s.RegisterTool(ToolDefinition{
+		Name:        "get_document",
+		Description: "Get a document by its ID. Returns the full document with metadata.",
+		Parameters: map[string]ParameterDef{
+			"id": {
+				Type:        "number",
+				Description: "Document ID",
+				Required:    true,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnGetDocument == nil {
+				return map[string]interface{}{"error": "Document storage not configured"}, nil
+			}
+			id := int64(params["id"].(float64))
+			return callbacks.OnGetDocument(id)
+		},
+	})
+
+	// search_documents - Search documents by query or filters
+	s.RegisterTool(ToolDefinition{
+		Name:        "search_documents",
+		Description: "Search documents by query text or filters. Searches in titles and content. Returns matching documents with metadata.",
+		Parameters: map[string]ParameterDef{
+			"query": {
+				Type:        "string",
+				Description: "Search query (searches title and content)",
+				Required:    false,
+			},
+			"doc_type": {
+				Type:        "string",
+				Description: "Filter by document type: plan, report, review, test_report, agent_work, config",
+				Required:    false,
+			},
+			"project_id": {
+				Type:        "string",
+				Description: "Filter by project ID",
+				Required:    false,
+			},
+			"author_id": {
+				Type:        "string",
+				Description: "Filter by author (agent ID)",
+				Required:    false,
+			},
+			"limit": {
+				Type:        "number",
+				Description: "Maximum results to return (default: 20)",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnSearchDocuments == nil {
+				return map[string]interface{}{"error": "Document storage not configured"}, nil
+			}
+			query, _ := params["query"].(string)
+			docType, _ := params["doc_type"].(string)
+			projectID, _ := params["project_id"].(string)
+			authorID, _ := params["author_id"].(string)
+			limit := 20
+			if l, ok := params["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return callbacks.OnSearchDocuments(query, docType, projectID, authorID, limit)
+		},
+	})
+
+	// list_my_documents - List documents created by the calling agent
+	s.RegisterTool(ToolDefinition{
+		Name:        "list_my_documents",
+		Description: "List documents you created. Useful for seeing your own work history.",
+		Parameters: map[string]ParameterDef{
+			"doc_type": {
+				Type:        "string",
+				Description: "Optional filter by document type: plan, report, review, test_report, agent_work, config",
+				Required:    false,
+			},
+			"limit": {
+				Type:        "number",
+				Description: "Maximum results to return (default: 20)",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			if callbacks.OnListMyDocuments == nil {
+				return map[string]interface{}{"error": "Document storage not configured"}, nil
+			}
+			docType, _ := params["doc_type"].(string)
+			limit := 20
+			if l, ok := params["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return callbacks.OnListMyDocuments(agentID, docType, limit)
 		},
 	})
 }

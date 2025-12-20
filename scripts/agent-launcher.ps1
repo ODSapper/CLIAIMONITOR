@@ -91,9 +91,22 @@ if (`$systemPromptContent) {
     Write-Host '  Path: $SystemPromptPath' -ForegroundColor Red
 }
 
-# Launch Claude with MCP config
-Write-Host '  Launching Claude...' -ForegroundColor Green
-claude --model '$Model' --mcp-config '$MCPConfigPath' --strict-mcp-config --dangerously-skip-permissions "$InitialPrompt"
+# Configure MCP server for this agent (unique name per agent to avoid conflicts)
+`$mcpServerName = "cliaimonitor-$AgentID"
+Write-Host "  Configuring MCP connection (`$mcpServerName)..." -ForegroundColor Green
+
+# Remove existing MCP server for this agent if any
+claude mcp remove `$mcpServerName 2>`$null
+
+# Add MCP server with agent-specific headers
+claude mcp add --transport sse `$mcpServerName http://localhost:3000/mcp/sse --header "X-Agent-ID: $AgentID" --header "X-Project-Path: $ProjectPath"
+
+Write-Host '  MCP configured, launching Claude...' -ForegroundColor Green
+claude --model '$Model' --dangerously-skip-permissions "$InitialPrompt"
+
+# Clean up MCP server after agent exits
+Write-Host '  Cleaning up MCP connection...' -ForegroundColor DarkGray
+claude mcp remove `$mcpServerName 2>`$null
 
 if (`$LASTEXITCODE -ne 0) {
     Write-Host "  ERROR: Claude exited with code `$LASTEXITCODE" -ForegroundColor Red
@@ -136,32 +149,12 @@ if ($wtPath) {
     Write-Host "Agent $AgentID launched in PowerShell" -ForegroundColor Green
 }
 
-# Spawn heartbeat script as hidden background process
-$heartbeatScriptPath = Join-Path $PSScriptRoot "agent-heartbeat.ps1"
+# NOTE: Heartbeat is handled via NATS (not PowerShell script)
+# NATS provides persistent, low-overhead heartbeat via pub/sub
+# The spawner only spawns PowerShell heartbeat as fallback if NATS unavailable
+# DO NOT spawn heartbeat here - it's handled by spawner.go based on NATS availability
 
-if (Test-Path $heartbeatScriptPath) {
-    # Start heartbeat monitor in hidden window
-    $heartbeatProcess = Start-Process -FilePath "powershell.exe" `
-        -ArgumentList @(
-            "-ExecutionPolicy", "Bypass",
-            "-WindowStyle", "Hidden",
-            "-File", "`"$heartbeatScriptPath`"",
-            "-AgentID", "`"$AgentID`"",
-            "-ServerURL", "http://localhost:3000",
-            "-IntervalSeconds", "15",
-            "-CurrentTask", "initializing"
-        ) `
-        -WindowStyle Hidden `
-        -PassThru
-
-    Write-Host "Heartbeat monitor started (PID: $($heartbeatProcess.Id))" -ForegroundColor Green
-
-    # Store heartbeat PID for tracking
-    $heartbeatPidPath = Join-Path "C:\Users\Admin\Documents\VS Projects\CLIAIMONITOR\data\pids" "$AgentID-heartbeat.pid"
-    $heartbeatProcess.Id | Out-File -FilePath $heartbeatPidPath -Encoding ASCII -NoNewline
-} else {
-    Write-Host "WARNING: Heartbeat script not found at $heartbeatScriptPath" -ForegroundColor Yellow
-}
+Write-Host "  Agent registration via MCP/NATS (heartbeat handled by NATS)" -ForegroundColor DarkGray
 
 # Return the temp script path for cleanup if needed
 Write-Output $tempScript

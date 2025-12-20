@@ -127,6 +127,11 @@ func (h *Handler) Stop() {
 	log.Printf("[NATS-HANDLER] Stopped")
 }
 
+// GetClient returns the underlying NATS client
+func (h *Handler) GetClient() *Client {
+	return h.client
+}
+
 func (h *Handler) addSub(sub *nats.Subscription) {
 	h.subsMu.Lock()
 	h.subs = append(h.subs, sub)

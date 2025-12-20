@@ -50,7 +50,9 @@ agents:
     color: "#ff4444"
     skip_permissions: true
 
-  # SGT (Sergeant) agents - team leads using Opus
+  # SGT (Sergeant) agents - Opus orchestrators that spawn sub-agents
+  # SGTs NEVER write code directly - they plan and delegate to Haiku/Sonnet sub-agents
+  # SGTs use INTERNAL task system only - Captain handles external board
   - name: SGTGreen
     model: claude-opus-4-5-20251101
     role: Implementation SGT
@@ -59,6 +61,11 @@ agents:
     numbering: false
     prompt_file: sgt-green.md
     skip_permissions: true
+    # SGT orchestration config
+    max_subagents: 12
+    subagent_models:
+      - claude-sonnet-4-5-20250929    # For complex implementation
+      - claude-3-5-haiku-20241022     # For simple tasks, tests, docs
 
   - name: SGTPurple
     model: claude-opus-4-5-20251101
@@ -68,6 +75,11 @@ agents:
     numbering: false
     prompt_file: sgt-purple.md
     skip_permissions: true
+    # SGT orchestration config
+    max_subagents: 8
+    subagent_models:
+      - claude-sonnet-4-5-20250929    # For deep security/architecture review
+      - claude-3-5-haiku-20241022     # For style checks, test verification
 
   # Reconnaissance - Sonnet for cost efficiency
   - name: Snake

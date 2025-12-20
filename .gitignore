@@ -51,3 +51,10 @@ nul
 # Test reports and artifacts (generated during testing)
 test-reports/
 
+# Internal work products (should go to DB, not files)
+FAGAN_*.md
+*_REPORT.md
+*_INSPECTION*.md
+docs/reports/*_REPORT.md
+docs/reports/FAGAN_*.md
+

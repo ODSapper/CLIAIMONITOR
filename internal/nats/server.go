@@ -10,9 +10,10 @@ import (
 
 // EmbeddedServerConfig holds configuration for the embedded NATS server
 type EmbeddedServerConfig struct {
-	Port       int    // Port to listen on
-	JetStream  bool   // Enable JetStream
-	DataDir    string // Data directory for JetStream storage
+	Port          int    // Port to listen on
+	WebSocketPort int    // WebSocket port to listen on (0 to disable)
+	JetStream     bool   // Enable JetStream
+	DataDir       string // Data directory for JetStream storage
 }
 
 // EmbeddedServer wraps the NATS server
@@ -59,6 +60,15 @@ func (e *EmbeddedServer) Start() error {
 		MaxPayload: 1024 * 1024, // 1MB max payload
 	}
 
+	// Configure WebSocket if enabled
+	if e.config.WebSocketPort > 0 {
+		opts.Websocket = server.WebsocketOpts{
+			Host:  "127.0.0.1",
+			Port:  e.config.WebSocketPort,
+			NoTLS: true, // localhost doesn't need TLS
+		}
+	}
+
 	// Configure JetStream if enabled
 	if e.config.JetStream {
 		opts.JetStream = true
@@ -82,6 +92,12 @@ func (e *EmbeddedServer) Start() error {
 	}
 
 	e.running = true
+
+	// Log WebSocket status
+	if e.config.WebSocketPort > 0 {
+		fmt.Printf("[NATS] WebSocket enabled on ws://127.0.0.1:%d\n", e.config.WebSocketPort)
+	}
+
 	return nil
 }
 
@@ -109,6 +125,19 @@ func (e *EmbeddedServer) URL() string {
 	defer e.mu.RUnlock()
 
 	return fmt.Sprintf("nats://127.0.0.1:%d", e.config.Port)
+}
+
+// WebSocketURL returns the WebSocket connection URL for the NATS server
+// Returns empty string if WebSocket is not enabled
+func (e *EmbeddedServer) WebSocketURL() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.config.WebSocketPort <= 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("ws://127.0.0.1:%d", e.config.WebSocketPort)
 }
 
 // IsRunning returns whether the server is currently running

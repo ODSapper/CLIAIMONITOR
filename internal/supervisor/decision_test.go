@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -98,7 +99,7 @@ func TestRequiresEscalation(t *testing.T) {
 			if escalate != tt.shouldEscalate {
 				t.Errorf("RequiresEscalation() escalate = %v, want %v", escalate, tt.shouldEscalate)
 			}
-			if tt.shouldEscalate && !contains(reason, tt.reasonContains) {
+			if tt.shouldEscalate && !strings.Contains(reason, tt.reasonContains) {
 				t.Errorf("RequiresEscalation() reason = %v, should contain %v", reason, tt.reasonContains)
 			}
 		})

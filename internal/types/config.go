@@ -55,4 +55,5 @@ const (
 	WSTypeSupervisor     = "supervisor_status"
 	WSTypeEscalation     = "escalation"
 	WSTypeCaptainMessage = "captain_message"
+	WSTypeChat           = "chat"
 )

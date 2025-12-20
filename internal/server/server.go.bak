@@ -67,11 +67,9 @@ type Server struct {
 	notifyRouter *notifications.Router
 
 	// NATS messaging
-	natsServer      *natslib.EmbeddedServer
-	natsClient      *natslib.Client
-	natsBridge      *NATSBridge
-	streamManager   *natslib.StreamManager
-	presenceTracker *PresenceTracker
+	natsServer *natslib.EmbeddedServer
+	natsClient *natslib.Client
+	natsBridge *NATSBridge
 
 	// Instance metadata
 	port      int
@@ -141,10 +139,9 @@ func NewServer(
 
 	// Initialize embedded NATS server
 	natsConfig := natslib.EmbeddedServerConfig{
-		Port:          4222,
-		WebSocketPort: 4223, // Enable WebSocket on port 4223
-		JetStream:     true,
-		DataDir:       filepath.Join(basePath, "data", "nats"),
+		Port:      4222,
+		JetStream: true,
+		DataDir:   filepath.Join(basePath, "data", "nats"),
 	}
 	natsServer, err := natslib.NewEmbeddedServer(natsConfig)
 	if err != nil {
@@ -154,9 +151,6 @@ func NewServer(
 			log.Printf("[NATS] Warning: Failed to start NATS server: %v", err)
 		} else {
 			log.Printf("[NATS] Embedded server started on %s", natsServer.URL())
-			if wsURL := natsServer.WebSocketURL(); wsURL != "" {
-				log.Printf("[NATS] WebSocket available at %s", wsURL)
-			}
 		}
 	}
 
@@ -197,84 +191,11 @@ func NewServer(
 	// Initialize NATS bridge for message handling
 	if s.natsClient != nil {
 		s.natsBridge = NewNATSBridge(s, s.natsClient)
-
-		// Initialize JetStream streams for chat/presence
-		streamMgr, err := natslib.NewStreamManager(s.natsClient.RawConn())
-		if err != nil {
-			log.Printf("[NATS] Warning: Failed to create stream manager: %v", err)
-		} else {
-			s.streamManager = streamMgr
-			if err := s.streamManager.SetupStreams(); err != nil {
-				log.Printf("[NATS] Warning: Failed to setup JetStream streams: %v", err)
-			} else {
-				log.Printf("[NATS] JetStream streams initialized (CHAT, PRESENCE, COMMANDS)")
-			}
-		}
-
-		// Initialize presence tracker
-		s.presenceTracker = NewPresenceTracker(s.natsClient.RawConn(), s)
-		log.Printf("[NATS] Presence tracker initialized")
 	}
 
 	// Pass NATS URL to spawner
 	if s.natsServer != nil && s.natsServer.IsRunning() {
 		s.spawner.SetNATSURL(s.natsServer.URL())
-	}
-
-	// Seed default prompts from files if DB is empty
-	if s.memDB != nil {
-		if sqliteDB, ok := s.memDB.(*memory.SQLiteMemoryDB); ok {
-			promptsDir := filepath.Join(basePath, "configs", "prompts")
-			if err := sqliteDB.SeedDefaultPrompts(promptsDir); err != nil {
-				log.Printf("[SERVER] Warning: Failed to seed default prompts: %v", err)
-			}
-		}
-	}
-
-	// Seed configs from YAML files if DB is empty
-	if s.memDB != nil {
-		configsDir := filepath.Join(basePath, "configs")
-
-		// Seed teams.yaml
-		teamsPath := filepath.Join(configsDir, "teams.yaml")
-		if content, err := os.ReadFile(teamsPath); err == nil {
-			if existing, _ := s.memDB.GetConfig("teams"); existing == nil {
-				if err := s.memDB.SaveConfig("teams", string(content), "yaml"); err != nil {
-					log.Printf("[SERVER] Warning: Failed to seed teams config: %v", err)
-				} else {
-					log.Printf("[SERVER] Seeded teams config from teams.yaml")
-				}
-			}
-		}
-
-		// Seed projects.yaml
-		projectsPath := filepath.Join(configsDir, "projects.yaml")
-		if content, err := os.ReadFile(projectsPath); err == nil {
-			if existing, _ := s.memDB.GetConfig("projects"); existing == nil {
-				if err := s.memDB.SaveConfig("projects", string(content), "yaml"); err != nil {
-					log.Printf("[SERVER] Warning: Failed to seed projects config: %v", err)
-				} else {
-					log.Printf("[SERVER] Seeded projects config from projects.yaml")
-				}
-			}
-		}
-
-		// Seed notifications.yaml
-		notificationsPath := filepath.Join(configsDir, "notifications.yaml")
-		if content, err := os.ReadFile(notificationsPath); err == nil {
-			if existing, _ := s.memDB.GetConfig("notifications"); existing == nil {
-				if err := s.memDB.SaveConfig("notifications", string(content), "yaml"); err != nil {
-					log.Printf("[SERVER] Warning: Failed to seed notifications config: %v", err)
-				} else {
-					log.Printf("[SERVER] Seeded notifications config from notifications.yaml")
-				}
-			}
-		}
-	}
-
-	// Connect spawner to memDB
-	if s.spawner != nil && s.memDB != nil {
-		s.spawner.SetMemoryDB(s.memDB)
 	}
 
 	// Initialize NATS connection status in store
@@ -503,41 +424,31 @@ func (s *Server) setupRoutes() {
 func (s *Server) setupMCPCallbacks() {
 	callbacks := mcp.ToolCallbacks{
 		OnRegisterAgent: func(agentID, role string) (interface{}, error) {
-			// Two-phase registration: validate transition from pending -> connected
-			// Phase 1: Spawner creates record with "pending" status
-			// Phase 2: Agent calls register_agent via MCP to become "connected"
+			// Update agent status
+			s.store.UpdateAgent(agentID, func(a *types.Agent) {
+				a.Status = types.StatusConnected
+				a.LastSeen = time.Now()
+			})
 
-			// Check if agent exists and is in pending state
+			// Update status in database
 			if s.memDB != nil {
-				agent, err := s.memDB.GetAgent(agentID)
-				if err != nil {
-					log.Printf("[MCP] Warning: Could not check agent %s status: %v", agentID, err)
-					// Allow registration anyway - agent may have been created differently
-				} else if agent != nil {
-					if agent.Status != "pending" && agent.Status != "starting" && agent.Status != "disconnected" {
-						log.Printf("[MCP] Agent %s transitioning from '%s' to 'connected'", agentID, agent.Status)
-					} else {
-						log.Printf("[MCP] Two-phase registration: Agent %s transitioning from '%s' to 'connected'", agentID, agent.Status)
-					}
-				}
+				s.memDB.UpdateStatus(agentID, "connected", "")
 			}
 
-			// Use atomic update to keep stores in sync
-			if err := s.atomicAgentUpdate(agentID, "connected", ""); err != nil {
-				log.Printf("[MCP] ERROR: Failed to register agent %s: %v", agentID, err)
-				return nil, fmt.Errorf("registration failed: %w", err)
-			}
-
-			log.Printf("[MCP] Agent %s registered successfully (connected)", agentID)
 			s.broadcastState()
 			return map[string]string{"status": "registered"}, nil
 		},
 
 		OnReportStatus: func(agentID, status, task string) (interface{}, error) {
-			// Use atomic update to keep stores in sync
-			if err := s.atomicAgentUpdate(agentID, status, task); err != nil {
-				log.Printf("[MCP] ERROR: Failed to update status for agent %s: %v", agentID, err)
-				// Don't fail the whole call, just log the error
+			s.store.UpdateAgent(agentID, func(a *types.Agent) {
+				a.Status = types.AgentStatus(status)
+				a.CurrentTask = task
+				a.LastSeen = time.Now()
+			})
+
+			// Update status in database
+			if s.memDB != nil {
+				s.memDB.UpdateStatus(agentID, status, task)
 			}
 
 			// Update metrics idle tracking
@@ -1608,31 +1519,6 @@ func (s *Server) setupMCPCallbacks() {
 				log.Printf("[REVIEW-BOARD] Failed to update quality scores: %v", err)
 			}
 
-			// Generate and save review report to documents table
-			report, err := s.memDB.GenerateReviewReport(boardID)
-			if err != nil {
-				// Log but don't fail - report generation is nice-to-have
-				log.Printf("[REVIEW-BOARD] Failed to generate report: %v", err)
-			} else {
-				// Get assignment to determine project context
-				assignment, err := s.memDB.GetAssignment(board.AssignmentID)
-				projectID := "unknown"
-				if err == nil && assignment != nil {
-					// Use task ID as project identifier if available
-					if assignment.TaskID != "" {
-						projectID = assignment.TaskID
-					}
-				}
-
-				reportTitle := fmt.Sprintf("Review Board #%d - %s", boardID, consensus.Decision)
-				if err := s.memDB.SaveReviewReport(boardID, reportTitle, report, projectID); err != nil {
-					// Log but don't fail
-					log.Printf("[REVIEW-BOARD] Failed to save report: %v", err)
-				} else {
-					log.Printf("[REVIEW-BOARD] Saved review report for board %d", boardID)
-				}
-			}
-
 			s.logActivity("[REVIEW-FINALIZED]", fmt.Sprintf("Board %d: %s (votes: %d/%d, defects: %d)", boardID, consensus.Decision, consensus.VotesFor, consensus.VotesFor+consensus.VotesAgainst, consensus.TotalDefects))
 
 			return map[string]interface{}{
@@ -1675,152 +1561,6 @@ func (s *Server) setupMCPCallbacks() {
 				"count":      len(categories),
 			}, nil
 		},
-
-		// Document storage callbacks
-		OnSaveDocument: func(agentID string, doc map[string]interface{}) (interface{}, error) {
-			// Extract fields from map
-			docType, _ := doc["doc_type"].(string)
-			title, _ := doc["title"].(string)
-			content, _ := doc["content"].(string)
-			format := "markdown" // default
-			if f, ok := doc["format"].(string); ok && f != "" {
-				format = f
-			}
-
-			// Build Document object
-			document := &memory.Document{
-				DocType:   docType,
-				Title:     title,
-				Content:   content,
-				Format:    format,
-				AuthorID:  agentID,
-				Status:    "active",
-				Version:   1,
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
-			}
-
-			// Optional fields
-			if projectID, ok := doc["project_id"].(string); ok {
-				document.ProjectID = projectID
-			}
-			if taskID, ok := doc["task_id"].(string); ok {
-				document.TaskID = taskID
-			}
-			if tagsRaw, ok := doc["tags"].([]interface{}); ok {
-				var tags []string
-				for _, t := range tagsRaw {
-					if s, ok := t.(string); ok {
-						tags = append(tags, s)
-					}
-				}
-				document.Tags = tags
-			}
-
-			// Save to database
-			if err := s.memDB.CreateDocument(document); err != nil {
-				return nil, fmt.Errorf("failed to save document: %w", err)
-			}
-
-			s.logActivity("[DOCUMENT]", fmt.Sprintf("Agent %s saved document: %s (type=%s, id=%d)", agentID, title, docType, document.ID))
-
-			return map[string]interface{}{
-				"id":      document.ID,
-				"status":  "saved",
-				"message": fmt.Sprintf("Document saved with ID %d", document.ID),
-			}, nil
-		},
-
-		OnGetDocument: func(id int64) (interface{}, error) {
-			doc, err := s.memDB.GetDocument(id)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get document: %w", err)
-			}
-
-			return map[string]interface{}{
-				"document": doc,
-			}, nil
-		},
-
-		OnSearchDocuments: func(query, docType, projectID, authorID string, limit int) (interface{}, error) {
-			if limit <= 0 {
-				limit = 20
-			}
-
-			var docs []*memory.Document
-			var err error
-
-			// If query is provided, use full-text search
-			if query != "" {
-				docs, err = s.memDB.SearchDocuments(query, limit)
-			} else if docType != "" {
-				docs, err = s.memDB.GetDocumentsByType(docType, limit)
-			} else if projectID != "" {
-				docs, err = s.memDB.GetDocumentsByProject(projectID, limit)
-			} else if authorID != "" {
-				docs, err = s.memDB.GetDocumentsByAuthor(authorID, limit)
-			} else {
-				// No filters - return recent documents by type
-				docs, err = s.memDB.GetDocumentsByType("", limit)
-			}
-
-			if err != nil {
-				return nil, fmt.Errorf("failed to search documents: %w", err)
-			}
-
-			// Apply additional filters if provided
-			if query == "" && len(docs) > 0 {
-				var filtered []*memory.Document
-				for _, doc := range docs {
-					match := true
-					if docType != "" && doc.DocType != docType {
-						match = false
-					}
-					if projectID != "" && doc.ProjectID != projectID {
-						match = false
-					}
-					if authorID != "" && doc.AuthorID != authorID {
-						match = false
-					}
-					if match {
-						filtered = append(filtered, doc)
-					}
-				}
-				docs = filtered
-			}
-
-			return map[string]interface{}{
-				"documents": docs,
-				"count":     len(docs),
-			}, nil
-		},
-
-		OnListMyDocuments: func(agentID, docType string, limit int) (interface{}, error) {
-			if limit <= 0 {
-				limit = 20
-			}
-
-			docs, err := s.memDB.GetDocumentsByAuthor(agentID, limit)
-			if err != nil {
-				return nil, fmt.Errorf("failed to list documents: %w", err)
-			}
-
-			// Filter by doc type if provided
-			if docType != "" {
-				var filtered []*memory.Document
-				for _, doc := range docs {
-					if doc.DocType == docType {
-						filtered = append(filtered, doc)
-					}
-				}
-				docs = filtered
-			}
-
-			return map[string]interface{}{
-				"documents": docs,
-				"count":     len(docs),
-			}, nil
-		},
 	}
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
@@ -1828,50 +1568,20 @@ func (s *Server) setupMCPCallbacks() {
 	// Set connection callbacks
 	s.mcp.SetConnectionCallbacks(
 		func(agentID string) {
-			// Agent connected via SSE - publish to NATS presence
-			if s.natsClient != nil {
-				presenceSubject := fmt.Sprintf("presence.online.%s", agentID)
-				if err := s.natsClient.Publish(presenceSubject, []byte(`{"status":"online"}`)); err != nil {
-					log.Printf("[MCP] Warning: Failed to publish presence.online for %s: %v", agentID, err)
-				} else {
-					log.Printf("[MCP] Published presence.online.%s to NATS", agentID)
-				}
-			}
-
-			// Also update directly (for non-NATS fallback)
-			if err := s.atomicAgentUpdate(agentID, "connected", ""); err != nil {
-				log.Printf("[MCP] ERROR: Failed to mark agent %s as connected: %v", agentID, err)
-			}
-			log.Printf("[MCP] Agent %s SSE connected", agentID)
+			// Agent connected
+			s.store.UpdateAgent(agentID, func(a *types.Agent) {
+				a.Status = types.StatusConnected
+				a.LastSeen = time.Now()
+			})
 			s.broadcastState()
 		},
 		func(agentID string) {
-			// Agent SSE connection closed - publish to NATS presence
-			if s.natsClient != nil {
-				presenceSubject := fmt.Sprintf("presence.offline.%s", agentID)
-				if err := s.natsClient.Publish(presenceSubject, []byte(`{"status":"offline"}`)); err != nil {
-					log.Printf("[MCP] Warning: Failed to publish presence.offline for %s: %v", agentID, err)
-				} else {
-					log.Printf("[MCP] Published presence.offline.%s to NATS", agentID)
-				}
-			}
-
-			log.Printf("[MCP] Agent %s SSE disconnected", agentID)
-
-			// Record the disconnect time but don't change status yet
+			// Agent disconnected
 			s.store.UpdateAgent(agentID, func(a *types.Agent) {
-				// Keep current status - don't assume anything
-				// Just update LastSeen so verification can check timing
-				a.LastSeen = time.Now()
+				a.Status = types.StatusDisconnected
 			})
 
-			// Schedule verification in 30 seconds
-			// This gives the agent time to reconnect if it's just between calls
-			go func() {
-				time.Sleep(30 * time.Second)
-				s.verifyAgentStatus(agentID)
-			}()
-
+			s.checkAlerts()
 			s.broadcastState()
 		},
 	)
@@ -1945,12 +1655,6 @@ func (s *Server) Start(addr string) error {
 		}
 	}
 
-	// Start presence tracker for agent online/offline detection
-	if s.presenceTracker != nil {
-		s.presenceTracker.Start()
-		log.Printf("[NATS] Presence tracker started")
-	}
-
 	fmt.Printf("Dashboard ready at http://localhost%s\n", addr)
 	return s.httpServer.ListenAndServe()
 }
@@ -1962,11 +1666,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// Stop cleanup service
 	if s.cleanupCancel != nil {
 		s.cleanupCancel()
-	}
-
-	// Stop presence tracker
-	if s.presenceTracker != nil {
-		s.presenceTracker.Stop()
 	}
 
 	// Stop NATS bridge
@@ -2106,67 +1805,4 @@ func (s *Server) logActivity(action, details string) {
 		Details:   details,
 		Timestamp: time.Now(),
 	})
-}
-
-// atomicAgentUpdate updates both JSONStore and SQLite DB atomically.
-// If DB update fails, it rolls back the JSONStore change to keep them in sync.
-func (s *Server) atomicAgentUpdate(agentID, status, task string) error {
-	// Store the previous status in case we need to rollback
-	var previousStatus types.AgentStatus
-	state := s.store.GetState()
-	if agent, ok := state.Agents[agentID]; ok {
-		previousStatus = agent.Status
-	}
-
-	// Update JSONStore (in-memory)
-	s.store.UpdateAgent(agentID, func(a *types.Agent) {
-		a.Status = types.AgentStatus(status)
-		a.CurrentTask = task
-		a.LastSeen = time.Now()
-	})
-
-	// Update SQLite DB
-	if s.memDB != nil {
-		if err := s.memDB.UpdateStatus(agentID, status, task); err != nil {
-			// Rollback JSONStore on DB failure to maintain consistency
-			s.store.UpdateAgent(agentID, func(a *types.Agent) {
-				a.Status = previousStatus
-			})
-			return fmt.Errorf("DB update failed, rolled back: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// verifyAgentStatus checks if an agent is actually running and updates status accordingly.
-// Used after SSE disconnects to verify if agent is still alive.
-func (s *Server) verifyAgentStatus(agentID string) {
-	state := s.store.GetState()
-	agent, ok := state.Agents[agentID]
-	if !ok {
-		return
-	}
-
-	// Check if process is still running
-	if agent.PID > 0 && s.spawner.IsAgentRunning(agent.PID) {
-		// Process still alive - keep current status
-		log.Printf("[VERIFY] Agent %s (PID %d) still running", agentID, agent.PID)
-		return
-	}
-
-	// Check last heartbeat time (allow 60 second grace period)
-	if time.Since(agent.LastSeen) < 60*time.Second {
-		log.Printf("[VERIFY] Agent %s last seen %v ago, keeping status", agentID, time.Since(agent.LastSeen))
-		return
-	}
-
-	// Process not running and no recent heartbeat - mark as disconnected
-	log.Printf("[VERIFY] Agent %s appears dead (PID %d, last seen %v ago), marking disconnected",
-		agentID, agent.PID, time.Since(agent.LastSeen))
-
-	if err := s.atomicAgentUpdate(agentID, "disconnected", ""); err != nil {
-		log.Printf("[VERIFY] Failed to update agent %s status: %v", agentID, err)
-	}
-	s.broadcastState()
 }

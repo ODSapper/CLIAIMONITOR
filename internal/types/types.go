@@ -191,6 +191,17 @@ type CaptainMessage struct {
 	Read      bool                   `json:"read"`
 }
 
+// ChatMessage represents a chat message between agents, Captain, and dashboard
+type ChatMessage struct {
+	ID        string                 `json:"id"`
+	From      string                 `json:"from"`
+	To        string                 `json:"to,omitempty"`
+	Type      string                 `json:"type"`
+	Text      string                 `json:"text"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Timestamp int64                  `json:"timestamp"`
+}
+
 // SessionStats tracks aggregate statistics for the current session
 type SessionStats struct {
 	TotalAgentsSpawned int       `json:"total_agents_spawned"`

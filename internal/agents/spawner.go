@@ -66,6 +66,11 @@ func (s *ProcessSpawner) GetNATSURL() string {
 	return s.natsURL
 }
 
+// SetMemoryDB sets the memory database for the spawner
+func (s *ProcessSpawner) SetMemoryDB(db memory.MemoryDB) {
+	s.memDB = db
+}
+
 // GenerateAgentID creates a team-compatible agent ID in format: team-{type}{seq}
 // Example: team-opusgreen001, team-sntpurple002, team-snake003
 func (s *ProcessSpawner) GenerateAgentID(agentType string) string {
@@ -153,15 +158,48 @@ func (s *ProcessSpawner) createSystemPrompt(agentID string, config types.AgentCo
 	if promptFile == "" {
 		promptFile = GetPromptFilename(config.Role)
 	}
-	basePath := filepath.Join(s.promptsPath, promptFile)
 
-	data, err := os.ReadFile(basePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read prompt %s: %w", promptFile, err)
+	var promptContent string
+
+	// Try to get prompt template from database first
+	if s.memDB != nil {
+		// Extract template name by removing .md extension
+		templateName := strings.TrimSuffix(promptFile, ".md")
+
+		// Try by name first
+		template, err := s.memDB.GetPromptTemplate(templateName)
+		if err != nil {
+			log.Printf("[SPAWNER] Warning: DB lookup for %s failed: %v", templateName, err)
+		}
+
+		// If not found by name, try by role
+		if template == nil {
+			template, err = s.memDB.GetPromptTemplateByRole(string(config.Role))
+			if err != nil {
+				log.Printf("[SPAWNER] Warning: DB lookup by role %s failed: %v", config.Role, err)
+			}
+		}
+
+		// Use template content if found
+		if template != nil {
+			promptContent = template.Content
+			log.Printf("[SPAWNER] Using prompt template from DB: %s (role: %s)", template.Name, template.Role)
+		}
+	}
+
+	// Fall back to reading from file if DB lookup didn't work
+	if promptContent == "" {
+		basePath := filepath.Join(s.promptsPath, promptFile)
+		data, err := os.ReadFile(basePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read prompt %s: %w", promptFile, err)
+		}
+		promptContent = string(data)
+		log.Printf("[SPAWNER] Using prompt template from file: %s", promptFile)
 	}
 
 	// Replace placeholder with actual agent ID
-	prompt := strings.ReplaceAll(string(data), "{{AGENT_ID}}", agentID)
+	prompt := strings.ReplaceAll(promptContent, "{{AGENT_ID}}", agentID)
 
 	// Add project context section
 	projectContext := s.buildProjectContext(projectPath, projectName, config.Role, agentID)
@@ -171,7 +209,7 @@ func (s *ProcessSpawner) createSystemPrompt(agentID string, config types.AgentCo
 	prompt = strings.ReplaceAll(prompt, "{{ACCESS_RULES}}", s.getAccessRules(config.Role, projectPath))
 
 	// If placeholders weren't in template, append project context
-	if !strings.Contains(string(data), "{{PROJECT_CONTEXT}}") && projectContext != "" {
+	if !strings.Contains(promptContent, "{{PROJECT_CONTEXT}}") && projectContext != "" {
 		prompt += "\n\n" + projectContext
 	}
 
@@ -303,7 +341,8 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	// Note: We can't reliably track the agent PID since it runs in Windows Terminal.
 	// Agents register themselves via MCP when they connect.
 
-	// Register in DB
+	// Register in DB with "pending" status (Phase 1 of two-phase registration)
+	// Agent will transition to "connected" when it calls register_agent via MCP
 	if s.memDB != nil {
 		agentControl := &memory.AgentControl{
 			AgentID:     agentID,
@@ -311,13 +350,14 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 			Role:        string(config.Role),
 			ProjectPath: projectPath,
 			PID:         &pid,
-			Status:      "starting",
+			Status:      "pending", // Two-phase: pending -> connected (via MCP)
 			Model:       config.Model,
 			Color:       config.Color,
 		}
 		if err := s.memDB.RegisterAgent(agentControl); err != nil {
 			log.Printf("Warning: Failed to register agent in DB: %v", err)
 		}
+		log.Printf("[SPAWNER] Agent %s registered with 'pending' status, awaiting MCP connection", agentID)
 
 		// Only spawn PowerShell heartbeat if NATS is not available
 		// NATS handles heartbeats natively via pub/sub

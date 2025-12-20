@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -40,7 +41,13 @@ func NewNATSBridge(s *Server, client *natslib.Client) *NATSBridge {
 
 // Start begins processing NATS messages
 func (b *NATSBridge) Start() error {
-	return b.handler.Start()
+	// Start standard NATS message handlers
+	if err := b.handler.Start(); err != nil {
+		return err
+	}
+
+	// Setup chat bridge for NATS chat messaging
+	return b.setupChatBridge()
 }
 
 // Stop terminates message processing
@@ -52,22 +59,22 @@ func (b *NATSBridge) Stop() {
 func (b *NATSBridge) handleHeartbeat(agentID, status, task, configName, projectPath string) error {
 	log.Printf("[NATS-BRIDGE] Heartbeat from %s: status=%s task=%s", agentID, status, task)
 
-	// Update agent in store
-	b.server.store.UpdateAgent(agentID, func(a *types.Agent) {
-		a.Status = types.AgentStatus(status)
-		a.CurrentTask = task
-		a.LastSeen = time.Now()
-		if configName != "" {
-			a.ConfigName = configName
-		}
-		if projectPath != "" {
-			a.ProjectPath = projectPath
-		}
-	})
+	// Use atomic update to keep stores in sync
+	if err := b.server.atomicAgentUpdate(agentID, status, task); err != nil {
+		log.Printf("[NATS-BRIDGE] ERROR: Failed to update agent %s: %v", agentID, err)
+		// Don't fail heartbeat processing, just log the error
+	}
 
-	// Update database status
-	if b.server.memDB != nil {
-		b.server.memDB.UpdateStatus(agentID, status, task)
+	// Update additional fields that aren't in atomicAgentUpdate
+	if configName != "" || projectPath != "" {
+		b.server.store.UpdateAgent(agentID, func(a *types.Agent) {
+			if configName != "" {
+				a.ConfigName = configName
+			}
+			if projectPath != "" {
+				a.ProjectPath = projectPath
+			}
+		})
 	}
 
 	// Publish agent signals to event bus
@@ -94,22 +101,17 @@ func (b *NATSBridge) handleHeartbeat(agentID, status, task, configName, projectP
 func (b *NATSBridge) handleStatusUpdate(agentID, status, message string) error {
 	log.Printf("[NATS-BRIDGE] Status update from %s: %s - %s", agentID, status, message)
 
-	b.server.store.UpdateAgent(agentID, func(a *types.Agent) {
-		a.Status = types.AgentStatus(status)
-		a.CurrentTask = message
-		a.LastSeen = time.Now()
-	})
+	// Use atomic update to keep stores in sync
+	if err := b.server.atomicAgentUpdate(agentID, status, message); err != nil {
+		log.Printf("[NATS-BRIDGE] ERROR: Failed to update agent %s status: %v", agentID, err)
+		// Don't fail status update processing, just log the error
+	}
 
 	// Update metrics idle tracking
 	if status == string(types.StatusIdle) {
 		b.server.metrics.SetAgentIdle(agentID)
 	} else {
 		b.server.metrics.SetAgentActive(agentID)
-	}
-
-	// Update database status
-	if b.server.memDB != nil {
-		b.server.memDB.UpdateStatus(agentID, status, message)
 	}
 
 	b.server.broadcastState()
@@ -167,15 +169,9 @@ func (b *NATSBridge) handleStopApproval(agentID, reason, context string, workCom
 func (b *NATSBridge) handleShutdownNotify(agentID, reason string, approved, force bool) error {
 	log.Printf("[NATS-BRIDGE] Shutdown notification from %s: reason=%s approved=%v force=%v", agentID, reason, approved, force)
 
-	// Update agent status to disconnected
-	b.server.store.UpdateAgent(agentID, func(a *types.Agent) {
-		a.Status = types.StatusDisconnected
-		a.LastSeen = time.Now()
-	})
-
-	// Update database
-	if b.server.memDB != nil {
-		b.server.memDB.UpdateStatus(agentID, "disconnected", fmt.Sprintf("shutdown: %s", reason))
+	// Use atomic update to keep stores in sync
+	if err := b.server.atomicAgentUpdate(agentID, "disconnected", fmt.Sprintf("shutdown: %s", reason)); err != nil {
+		log.Printf("[NATS-BRIDGE] ERROR: Failed to update agent %s shutdown status: %v", agentID, err)
 	}
 
 	b.server.broadcastState()
@@ -319,5 +315,66 @@ func (b *NATSBridge) handleSystemBroadcast(msgType, message string, data map[str
 	// Broadcast alert to dashboard
 	b.server.hub.BroadcastAlert(alert)
 
+	return nil
+}
+
+// setupChatBridge subscribes to NATS chat topics and bridges them to WebSocket
+func (b *NATSBridge) setupChatBridge() error {
+	client := b.handler.GetClient()
+	if client == nil {
+		return fmt.Errorf("NATS client not available")
+	}
+
+	// Subscribe to chat.dashboard - messages intended for dashboard
+	_, err := client.Subscribe("chat.dashboard", func(msg *natslib.Message) {
+		var chatMsg types.ChatMessage
+		if err := json.Unmarshal(msg.Data, &chatMsg); err != nil {
+			log.Printf("[CHAT-BRIDGE] Failed to unmarshal chat.dashboard message: %v", err)
+			return
+		}
+
+		log.Printf("[CHAT-BRIDGE] Received chat.dashboard message: from=%s to=%s type=%s",
+			chatMsg.From, chatMsg.To, chatMsg.Type)
+
+		// Forward to WebSocket hub
+		b.server.hub.BroadcastChat(&chatMsg)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to chat.dashboard: %w", err)
+	}
+	log.Printf("[CHAT-BRIDGE] Subscribed to chat.dashboard")
+
+	// Subscribe to chat.broadcast - messages for all connected clients
+	_, err = client.Subscribe("chat.broadcast", func(msg *natslib.Message) {
+		var chatMsg types.ChatMessage
+		if err := json.Unmarshal(msg.Data, &chatMsg); err != nil {
+			log.Printf("[CHAT-BRIDGE] Failed to unmarshal chat.broadcast message: %v", err)
+			return
+		}
+
+		log.Printf("[CHAT-BRIDGE] Received chat.broadcast message: from=%s type=%s text=%s",
+			chatMsg.From, chatMsg.Type, chatMsg.Text)
+
+		// Forward to all WebSocket clients
+		b.server.hub.BroadcastChat(&chatMsg)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to chat.broadcast: %w", err)
+	}
+	log.Printf("[CHAT-BRIDGE] Subscribed to chat.broadcast")
+
+	// Subscribe to presence.> - trigger state broadcast on presence changes
+	_, err = client.Subscribe("presence.>", func(msg *natslib.Message) {
+		log.Printf("[CHAT-BRIDGE] Received presence update on %s", msg.Subject)
+
+		// Broadcast updated state to dashboard when presence changes
+		b.server.broadcastState()
+	})
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to presence.>: %w", err)
+	}
+	log.Printf("[CHAT-BRIDGE] Subscribed to presence.>")
+
+	log.Printf("[CHAT-BRIDGE] Chat bridge setup complete")
 	return nil
 }

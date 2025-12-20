@@ -884,6 +884,159 @@ func (m *SQLiteMemoryDB) UpdateQualityScoresAfterReview(boardID int64, consensus
 	})
 }
 
+// SaveReviewReport generates and saves a review report to the documents table
+// This is called after FinalizeBoard to persist the full review results
+func (m *SQLiteMemoryDB) SaveReviewReport(boardID int64, title, content, projectID string) error {
+	// Note: Document struct and CreateDocument will be added by another subagent
+	// This is a placeholder wrapper method that will call CreateDocument once available
+
+	// For now, we'll implement the insert directly to ensure compatibility
+	query := `
+		INSERT INTO documents (
+			doc_type, title, content, format, author_id, project_id, status
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err := m.db.Exec(
+		query,
+		"review",      // doc_type
+		title,         // title
+		content,       // content
+		"markdown",    // format
+		"system",      // author_id
+		projectID,     // project_id
+		"active",      // status
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save review report: %w", err)
+	}
+
+	return nil
+}
+
+// GenerateReviewReport creates a markdown report from review board data
+func (m *SQLiteMemoryDB) GenerateReviewReport(boardID int64) (string, error) {
+	// Get board details
+	board, err := m.GetReviewBoard(boardID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get review board: %w", err)
+	}
+
+	// Get votes
+	votes, err := m.GetReviewerVotes(boardID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get votes: %w", err)
+	}
+
+	// Get defects
+	defects, err := m.GetBoardDefects(boardID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get defects: %w", err)
+	}
+
+	// Get consensus
+	consensus, err := m.CalculateConsensus(boardID)
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate consensus: %w", err)
+	}
+
+	// Build markdown report
+	var report string
+	report += fmt.Sprintf("# Review Board #%d - Final Report\n\n", boardID)
+	report += fmt.Sprintf("**Status:** %s\n", board.Status)
+	report += fmt.Sprintf("**Final Verdict:** %s\n", board.FinalVerdict)
+	report += fmt.Sprintf("**Assignment ID:** %d\n", board.AssignmentID)
+	report += fmt.Sprintf("**Reviewer Count:** %d\n", board.ReviewerCount)
+	report += fmt.Sprintf("**Complexity Score:** %d\n", board.ComplexityScore)
+	report += fmt.Sprintf("**Risk Level:** %s\n\n", board.RiskLevel)
+
+	// Consensus results
+	report += "## Consensus Results\n\n"
+	report += fmt.Sprintf("- **Decision:** %s\n", consensus.Decision)
+	report += fmt.Sprintf("- **Approved:** %t\n", consensus.Approved)
+	report += fmt.Sprintf("- **Votes For:** %d\n", consensus.VotesFor)
+	report += fmt.Sprintf("- **Votes Against:** %d\n", consensus.VotesAgainst)
+	report += fmt.Sprintf("- **Total Defects:** %d\n", consensus.TotalDefects)
+	report += fmt.Sprintf("- **Critical Defects:** %d\n", consensus.CriticalDefects)
+	report += fmt.Sprintf("- **High Defects:** %d\n\n", consensus.HighDefects)
+
+	// Aggregated feedback
+	if board.AggregatedFeedback != "" {
+		report += "## Summary\n\n"
+		report += board.AggregatedFeedback + "\n\n"
+	}
+
+	// Reviewer votes
+	report += "## Reviewer Votes\n\n"
+	for _, vote := range votes {
+		report += fmt.Sprintf("### %s\n", vote.ReviewerID)
+		report += fmt.Sprintf("- **Approved:** %t\n", vote.Approved)
+		report += fmt.Sprintf("- **Confidence Score:** %d/100\n", vote.ConfidenceScore)
+		report += fmt.Sprintf("- **Defects Found:** %d\n", vote.DefectsFound)
+		report += fmt.Sprintf("- **Review Time:** %d seconds\n", vote.ReviewTimeSeconds)
+		report += fmt.Sprintf("- **Tokens Used:** %d\n\n", vote.TokensUsed)
+	}
+
+	// Defects by severity
+	if len(defects) > 0 {
+		report += "## Defects Found\n\n"
+
+		// Group by severity
+		severityOrder := []string{"critical", "high", "medium", "low", "info"}
+		for _, severity := range severityOrder {
+			sevDefects := []*ReviewDefect{}
+			for _, d := range defects {
+				if d.Severity == severity {
+					sevDefects = append(sevDefects, d)
+				}
+			}
+
+			if len(sevDefects) > 0 {
+				report += fmt.Sprintf("### %s Severity (%d)\n\n", severity, len(sevDefects))
+				for _, d := range sevDefects {
+					report += fmt.Sprintf("#### %s\n", d.Title)
+					report += fmt.Sprintf("- **Category:** %s\n", d.Category)
+					report += fmt.Sprintf("- **Found By:** %s\n", d.ReviewerID)
+					if d.FilePath != "" {
+						report += fmt.Sprintf("- **File:** %s", d.FilePath)
+						if d.LineStart > 0 {
+							if d.LineEnd > 0 && d.LineEnd != d.LineStart {
+								report += fmt.Sprintf(" (lines %d-%d)", d.LineStart, d.LineEnd)
+							} else {
+								report += fmt.Sprintf(" (line %d)", d.LineStart)
+							}
+						}
+						report += "\n"
+					}
+					report += fmt.Sprintf("- **Status:** %s\n", d.Status)
+					report += fmt.Sprintf("\n%s\n\n", d.Description)
+
+					if d.SuggestedFix != "" {
+						report += "**Suggested Fix:**\n"
+						report += fmt.Sprintf("```\n%s\n```\n\n", d.SuggestedFix)
+					}
+
+					if d.ResolutionNotes != "" {
+						report += fmt.Sprintf("**Resolution:** %s\n\n", d.ResolutionNotes)
+					}
+				}
+			}
+		}
+	}
+
+	// Timestamps
+	report += "## Timeline\n\n"
+	report += fmt.Sprintf("- **Created:** %s\n", board.CreatedAt.Format("2006-01-02 15:04:05"))
+	if board.StartedAt != nil {
+		report += fmt.Sprintf("- **Started:** %s\n", board.StartedAt.Format("2006-01-02 15:04:05"))
+	}
+	if board.CompletedAt != nil {
+		report += fmt.Sprintf("- **Completed:** %s\n", board.CompletedAt.Format("2006-01-02 15:04:05"))
+	}
+
+	return report, nil
+}
+
 // Helper function
 
 // nullInt converts an int to sql.NullInt64

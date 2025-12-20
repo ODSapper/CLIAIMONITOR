@@ -1,0 +1,47 @@
+--- a/internal/server/server.go
++++ b/internal/server/server.go
+@@ -1575,14 +1575,26 @@ func (s *Server) setupMCP() {
+ 			s.broadcastState()
+ 		},
+ 		func(agentID string) {
+-			// Agent disconnected
+-			s.store.UpdateAgent(agentID, func(a *types.Agent) {
+-				a.Status = types.StatusDisconnected
+-			})
++			// Agent SSE connection closed - but agent may still be running
++			// Only mark as disconnected if the process is actually dead
++			state := s.store.GetState()
++			if agent, ok := state.Agents[agentID]; ok && agent.PID > 0 {
++				if s.spawner.IsAgentRunning(agent.PID) {
++					// Process still alive - agent is just between MCP calls
++					s.store.UpdateAgent(agentID, func(a *types.Agent) {
++						if a.Status == types.StatusConnected {
++							a.Status = types.StatusWorking
++						}
++						a.LastSeen = time.Now()
++					})
++					s.broadcastState()
++					return
++				}
++			}
++			// Process not running - mark as disconnected
++			s.store.UpdateAgent(agentID, func(a *types.Agent) {
++				a.Status = types.StatusDisconnected
++			})
+ 			s.checkAlerts()
+ 			s.broadcastState()
+ 		},
+
+# Bug Analysis:
+#
+# ROOT CAUSE: When an agent's SSE connection closes (even temporarily for a
+# reconnect or between tool calls), the onDisconnect callback immediately sets
+# the agent status to "disconnected". Claude Code agents don't maintain
+# persistent SSE connections - they connect briefly to make MCP tool calls.
+#
+# FIX: Before marking as disconnected, check if the agent process (PID) is
+# still running. If the process is alive, keep the agent in "working" status
+# instead of marking as disconnected. Only mark disconnected when the process
+# actually terminates.
+#
+# To apply: git apply fix-disconnected-status.patch
