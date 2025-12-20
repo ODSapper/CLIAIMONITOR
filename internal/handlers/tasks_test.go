@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/CLIAIMONITOR/internal/tasks"
+	"github.com/gorilla/mux"
 )
 
 func TestTasksListHandler(t *testing.T) {
@@ -193,6 +194,8 @@ func TestTasksUpdateHandler_TaskNotFound(t *testing.T) {
 	body, _ := json.Marshal(updates)
 	req := httptest.NewRequest("PATCH", "/api/tasks/nonexistent", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	// Set mux URL vars to simulate gorilla/mux routing
+	req = mux.SetURLVars(req, map[string]string{"id": "nonexistent"})
 	w := httptest.NewRecorder()
 
 	handler.HandleUpdate(w, req)

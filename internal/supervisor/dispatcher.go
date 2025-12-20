@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -163,6 +164,7 @@ func (d *StandardDispatcher) spawnAgents(ctx context.Context, plan *ActionPlan, 
 	// For now, use current working directory as default project path
 	projectPath := state.projectPath
 	if projectPath == "" {
+		log.Printf("[DISPATCHER] Warning: No project path specified, defaulting to current directory")
 		// Fall back to current working directory if not provided in plan
 		projectPath = "."
 		// In production: would extract from plan.ReportID context or memory DB repo lookup
@@ -296,8 +298,7 @@ func (d *StandardDispatcher) AbortDispatch(ctx context.Context, dispatchID strin
 	// Stop all agents
 	for agentID := range state.agents {
 		if err := d.spawner.StopAgent(agentID); err != nil {
-			// Log error but continue
-			fmt.Printf("Failed to stop agent %s: %v\n", agentID, err)
+			log.Printf("[DISPATCHER] Failed to stop agent %s: %v", agentID, err)
 		}
 	}
 
@@ -381,7 +382,11 @@ func (d *StandardDispatcher) buildInitialPrompt(rec *AgentRecommendation, agentI
 }
 
 func (d *StandardDispatcher) storeDispatch(result *DispatchResult) error {
-	// Store dispatch metadata in memory DB
-	// This would use a proper storage mechanism in production
+	// TODO: Implement dispatch result persistence
+	// Currently a no-op - dispatch results are only tracked in memory via dispatchState map
+	// Production implementation should:
+	// - Store to memory DB for recovery after restart
+	// - Enable historical dispatch tracking
+	// - Support dispatch result auditing and analysis
 	return nil
 }

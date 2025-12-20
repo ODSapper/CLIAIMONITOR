@@ -3,6 +3,7 @@ package supervisor
 import (
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,7 +111,7 @@ func (s *Scanner) ScanForWorkflows(repoID string) (*ScanResult, error) {
 		for _, planFile := range planFiles {
 			tasks, err := s.ParseWorkflowYAML(repoID, planFile.FilePath, planFile.Content)
 			if err != nil {
-				// Log but don't fail - some plan files might not be task lists
+				log.Printf("[SCANNER] Skipping plan file %s: not a valid task list (%v)", planFile.FilePath, err)
 				continue
 			}
 			result.DiscoveredTasks = append(result.DiscoveredTasks, tasks...)
@@ -271,6 +272,7 @@ func (s *Scanner) scanPlanFiles(dir string) ([]*PlanFile, error) {
 		path := filepath.Join(dir, name)
 		content, err := os.ReadFile(path)
 		if err != nil {
+			log.Printf("[SCANNER] Failed to read file %s: %v", path, err)
 			continue
 		}
 
@@ -305,6 +307,7 @@ func (s *Scanner) scanWorkflowFiles(dir string) ([]*WorkflowFile, error) {
 		path := filepath.Join(dir, name)
 		content, err := os.ReadFile(path)
 		if err != nil {
+			log.Printf("[SCANNER] Failed to read file %s: %v", path, err)
 			continue
 		}
 

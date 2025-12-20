@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/memory"
@@ -15,6 +16,15 @@ const (
 	ModeDirectControl  OperationalMode = "direct"       // High risk, low familiarity - Captain spawns with specific instructions
 	ModeTaskDispatch   OperationalMode = "dispatch"     // Low risk, high familiarity - Use task dispatch system
 	ModeHierarchical   OperationalMode = "hierarchical" // Large scope, complex - Opus agents direct Sonnet workers
+)
+
+// Effort estimation constants (hours per finding by severity)
+const (
+	HoursPerCriticalFinding = 2.0  // Critical findings require more investigation
+	HoursPerHighFinding     = 1.0  // High findings are significant but less complex
+	HoursPerMediumFinding   = 0.5  // Medium findings are routine fixes
+	HoursPerLowFinding      = 0.25 // Low findings are minor improvements
+	EffortBufferFactor      = 1.2  // 20% buffer for uncertainty
 )
 
 // DecisionEngine analyzes reconnaissance reports and recommends actions
@@ -290,23 +300,23 @@ func (e *StandardDecisionEngine) assessPriority(findings *ReconFindings) string 
 }
 
 func (e *StandardDecisionEngine) estimateEffort(findings *ReconFindings, recs *ReconRecommendations) float64 {
-	// Rough estimation based on finding counts
+	// Estimation based on finding counts using defined constants
 	hours := 0.0
 
-	// Critical findings = 2 hours each
-	hours += float64(len(findings.Critical)) * 2.0
+	// Critical findings
+	hours += float64(len(findings.Critical)) * HoursPerCriticalFinding
 
-	// High findings = 1 hour each
-	hours += float64(len(findings.High)) * 1.0
+	// High findings
+	hours += float64(len(findings.High)) * HoursPerHighFinding
 
-	// Medium findings = 0.5 hours each
-	hours += float64(len(findings.Medium)) * 0.5
+	// Medium findings
+	hours += float64(len(findings.Medium)) * HoursPerMediumFinding
 
-	// Low findings = 0.25 hours each
-	hours += float64(len(findings.Low)) * 0.25
+	// Low findings
+	hours += float64(len(findings.Low)) * HoursPerLowFinding
 
 	// Add buffer for coordination
-	hours *= 1.2
+	hours *= EffortBufferFactor
 
 	return hours
 }
@@ -425,38 +435,12 @@ func (e *StandardDecisionEngine) buildRationale(action PlannedAction, agentType 
 
 // containsKeyword checks if text contains any of the keywords (case-insensitive)
 func containsKeyword(text string, keywords []string) bool {
-	lowerText := toLower(text)
+	lowerText := strings.ToLower(text)
 	for _, kw := range keywords {
-		if contains(lowerText, toLower(kw)) {
+		if strings.Contains(lowerText, strings.ToLower(kw)) {
 			return true
 		}
 	}
 	return false
 }
 
-func toLower(s string) string {
-	// Simple ASCII lowercase
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			result[i] = c + 32
-		} else {
-			result[i] = c
-		}
-	}
-	return string(result)
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 || indexOf(s, substr) >= 0)
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}

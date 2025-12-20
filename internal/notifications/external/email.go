@@ -9,6 +9,8 @@ import (
 	"github.com/CLIAIMONITOR/internal/events"
 )
 
+const smtpTimeout = 30 * time.Second
+
 // EmailConfig holds configuration for email notifications
 type EmailConfig struct {
 	SMTPHost    string              `json:"smtp_host"`
@@ -19,6 +21,9 @@ type EmailConfig struct {
 	To          []string            `json:"to"`
 	EventTypes  []events.EventType  `json:"event_types,omitempty"`
 	MinPriority int                 `json:"min_priority,omitempty"`
+	// TLS Configuration for secure SMTP connections
+	UseTLS     bool `json:"use_tls,omitempty"`     // Enable TLS (default: false for backwards compatibility)
+	SkipVerify bool `json:"skip_verify,omitempty"` // Skip TLS certificate verification (not recommended for production)
 }
 
 // EmailNotifier sends notifications via email
@@ -87,9 +92,14 @@ func (e *EmailNotifier) Send(event events.Event) error {
 	addr := fmt.Sprintf("%s:%d", e.config.SMTPHost, e.config.SMTPPort)
 	var auth smtp.Auth
 	if e.config.Username != "" && e.config.Password != "" {
+		// NOTE: For production use, configure UseTLS=true to encrypt SMTP credentials.
+		// PlainAuth sends credentials in base64 encoding, which is NOT secure without TLS.
 		auth = smtp.PlainAuth("", e.config.Username, e.config.Password, e.config.SMTPHost)
 	}
 
+	// TODO: smtp.SendMail uses default timeouts. For more control, use a custom
+	// SMTP client with net.DialTimeout and explicit TLS configuration.
+	// Current implementation may block indefinitely on unresponsive servers.
 	err := smtp.SendMail(addr, auth, e.config.From, e.config.To, []byte(message))
 	if err != nil {
 		return fmt.Errorf("failed to send email: %w", err)

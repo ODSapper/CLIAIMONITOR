@@ -171,6 +171,8 @@ func (p *Planner) ProposeAgents(repoID string, analysis *TaskAnalysis) ([]AgentP
 	}
 
 	// 4. Additional coders for large workload
+	// TODO: Simple half-split doesn't consider task complexity or dependencies.
+	// Future improvement: use complexity-weighted load balancing.
 	if len(tasksByCategory["implementation"]) > 10 {
 		// Split tasks for multiple coders
 		allCoderTasks := tasksByCategory["implementation"]
@@ -306,7 +308,9 @@ func extractTaskIDs(tasks []*memory.WorkflowTask) []string {
 
 func determineStrategy(analysis *TaskAnalysis, proposals []AgentProposal) string {
 	// If many dependencies, use sequential
-	if len(analysis.Dependencies) > analysis.TotalTasks/2 {
+	// Use multiplication to avoid integer division edge case
+	// (e.g., 5 deps in 11 tasks: 5 > 5 is false, but 5 > 5.5 should be false)
+	if len(analysis.Dependencies)*2 > analysis.TotalTasks {
 		return "sequential"
 	}
 
@@ -332,6 +336,14 @@ func generateRationale(analysis *TaskAnalysis, proposals []AgentProposal, strate
 	return strings.Join(parts, ". ") + "."
 }
 
+// EstimateTime provides a rough time estimate based on complexity score.
+// Formula: hours = complexity_score / 2, with minimum of 2 hours
+// Calibration notes:
+// - ComplexityScore of 4 = "1-2 hours" (small task)
+// - ComplexityScore of 10 = "4-8 hours" (medium task)
+// - ComplexityScore of 20 = "8-16 hours" (medium-large task)
+// - ComplexityScore of 40+ = "1-2 weeks" (large task)
+// This is a heuristic and should be refined based on actual project data.
 func estimateTime(analysis *TaskAnalysis) string {
 	// Simple heuristic: complexity score maps to hours
 	hours := analysis.ComplexityScore / 2

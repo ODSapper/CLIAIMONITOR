@@ -261,24 +261,23 @@ func (h *CaptainHandler) HandleRecon(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+// reconFocusDescriptions maps recon focus areas to detailed descriptions
+var reconFocusDescriptions = map[string]string{
+	"security":     "Focus on security vulnerabilities: OWASP Top 10, command injection, SQL injection, XSS, authentication/authorization issues, secrets in code, input validation.",
+	"architecture": "Focus on architecture: project structure, design patterns, dependencies between packages, potential refactoring opportunities, code organization.",
+	"dependencies": "Focus on dependency health: outdated packages, known vulnerabilities, unnecessary dependencies, version conflicts.",
+	"testing":      "Focus on test coverage: identify untested code paths, missing test cases, test quality assessment.",
+	"full":         "Perform full reconnaissance covering security, architecture, dependencies, code quality, and process evaluation. Provide comprehensive findings.",
+}
+
 // buildReconDescription creates a detailed recon prompt based on focus
 func buildReconDescription(focus string) string {
 	base := "Conduct reconnaissance on this codebase. "
 
-	switch focus {
-	case "security":
-		return base + "Focus on security vulnerabilities: OWASP Top 10, command injection, SQL injection, XSS, authentication/authorization issues, secrets in code, input validation."
-	case "architecture":
-		return base + "Focus on architecture: project structure, design patterns, dependencies between packages, potential refactoring opportunities, code organization."
-	case "dependencies":
-		return base + "Focus on dependency health: outdated packages, known vulnerabilities, unnecessary dependencies, version conflicts."
-	case "testing":
-		return base + "Focus on test coverage: identify untested code paths, missing test cases, test quality assessment."
-	case "full":
-		return base + "Perform full reconnaissance covering security, architecture, dependencies, code quality, and process evaluation. Provide comprehensive findings."
-	default:
-		return base + "Identify any issues, vulnerabilities, or improvement opportunities. Report findings by severity."
+	if desc, ok := reconFocusDescriptions[focus]; ok {
+		return base + desc
 	}
+	return base + "Identify any issues, vulnerabilities, or improvement opportunities. Report findings by severity."
 }
 
 // SubmitTaskRequest is the payload for submitting a task to Captain
@@ -340,9 +339,22 @@ func (h *CaptainHandler) HandleSubmitTask(w http.ResponseWriter, r *http.Request
 
 	// Execute mission asynchronously
 	ctx, cancel := context.WithTimeout(context.Background(), ParallelMissionsTimeout)
-	defer cancel()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Log panic to activity log
+				h.store.AddActivity(&types.ActivityLog{
+					ID:        fmt.Sprintf("activity-%d", time.Now().UnixNano()),
+					AgentID:   "Captain",
+					Action:    "task_panic",
+					Details:   fmt.Sprintf("Task %s panicked: %v", mission.ID, r),
+					Timestamp: time.Now(),
+				})
+			}
+		}()
+		defer cancel() // Cancel when goroutine completes
+
 		result, err := h.captain.ExecuteMission(ctx, mission)
 		if err != nil {
 			// Log error to activity log
@@ -466,9 +478,22 @@ func (h *CaptainHandler) HandleTriggerRecon(w http.ResponseWriter, r *http.Reque
 
 	// Execute asynchronously
 	ctx, cancel := context.WithTimeout(context.Background(), ReconExecutionTimeout)
-	defer cancel()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Log panic to activity log
+				h.store.AddActivity(&types.ActivityLog{
+					ID:        fmt.Sprintf("activity-%d", time.Now().UnixNano()),
+					AgentID:   "Captain",
+					Action:    "recon_panic",
+					Details:   fmt.Sprintf("Recon %s panicked: %v", reconID, r),
+					Timestamp: time.Now(),
+				})
+			}
+		}()
+		defer cancel() // Cancel when goroutine completes
+
 		result, err := h.captain.ExecuteMission(ctx, mission)
 		if err != nil {
 			h.store.AddActivity(&types.ActivityLog{
@@ -632,6 +657,10 @@ func inferTaskTypeFromRequest(title, description string, needsRecon bool) captai
 	}
 
 	combined := strings.ToLower(title + " " + description)
+
+	// TODO: Task type inference using case-insensitive substring matching is fragile.
+	// Consider using explicit task type field in the request or more robust NLP.
+	// Current approach may cause false positives (e.g., "test coverage" vs "attest").
 
 	// Use similar logic to captain.inferTaskType
 	if containsAny(combined, []string{"scan", "recon", "audit", "discover"}) {

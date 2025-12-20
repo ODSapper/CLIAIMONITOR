@@ -404,7 +404,7 @@ func (h *CoordinationHandler) storeReconReport(report *supervisor.ReconReport) e
 
 func (h *CoordinationHandler) storeAsLearning(report *supervisor.ReconReport) error {
 	// Store report as agent learning
-	reportJSON, err := json.Marshal(report)
+	reportJSON, err := h.marshalToJSON(report)
 	if err != nil {
 		return err
 	}
@@ -413,7 +413,7 @@ func (h *CoordinationHandler) storeAsLearning(report *supervisor.ReconReport) er
 		AgentID:  report.AgentID,
 		Category: "reconnaissance",
 		Title:    fmt.Sprintf("Recon: %s - %s", report.Environment, report.Mission),
-		Content:  string(reportJSON),
+		Content:  reportJSON,
 	}
 
 	return h.memDB.StoreAgentLearning(learning)
@@ -422,7 +422,7 @@ func (h *CoordinationHandler) storeAsLearning(report *supervisor.ReconReport) er
 func (h *CoordinationHandler) storeActionPlan(plan *supervisor.ActionPlan) error {
 	// Store action plan as agent learning for now
 	// In production, this would use a dedicated action plan storage
-	planJSON, err := json.Marshal(plan)
+	planJSON, err := h.marshalToJSON(plan)
 	if err != nil {
 		return err
 	}
@@ -431,7 +431,7 @@ func (h *CoordinationHandler) storeActionPlan(plan *supervisor.ActionPlan) error
 		AgentID:  "Captain",
 		Category: "action_plan",
 		Title:    fmt.Sprintf("Action Plan %s", plan.ID),
-		Content:  string(planJSON),
+		Content:  planJSON,
 	}
 
 	return h.memDB.StoreAgentLearning(learning)
@@ -449,6 +449,8 @@ func (h *CoordinationHandler) getActionPlan(planID string) (*supervisor.ActionPl
 	}
 
 	// Find matching plan
+	// TODO: O(n) search with repeated JSON unmarshaling. Consider adding an index
+	// or caching for frequently accessed plans if this becomes a performance bottleneck.
 	for _, learning := range learnings {
 		var plan supervisor.ActionPlan
 		if err := json.Unmarshal([]byte(learning.Content), &plan); err == nil {
@@ -459,6 +461,14 @@ func (h *CoordinationHandler) getActionPlan(planID string) (*supervisor.ActionPl
 	}
 
 	return nil, fmt.Errorf("plan not found: %s", planID)
+}
+
+func (h *CoordinationHandler) marshalToJSON(v interface{}) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+	return string(data), nil
 }
 
 func parsePositiveInt(s string) (int, error) {

@@ -3,7 +3,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/tasks"
@@ -24,15 +26,31 @@ func NewTasksHandler(queue *tasks.Queue, store *tasks.Store) *TasksHandler {
 	}
 }
 
-// HandleList returns all tasks
+// HandleList returns all tasks with pagination support
 func (h *TasksHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
+	// Parse pagination parameters
+	query := r.URL.Query()
+	limit := 100 // default
+	offset := 0
+
+	if l := query.Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+	if o := query.Get("offset"); o != "" {
+		if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+			offset = parsed
+		}
+	}
+
 	// Filter by status if provided
-	status := r.URL.Query().Get("status")
+	status := query.Get("status")
 	var taskList []*tasks.Task
 
 	if status != "" {
@@ -41,10 +59,24 @@ func (h *TasksHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 		taskList = h.queue.All()
 	}
 
+	// Apply pagination
+	total := len(taskList)
+	if offset < len(taskList) {
+		end := offset + limit
+		if end > len(taskList) {
+			end = len(taskList)
+		}
+		taskList = taskList[offset:end]
+	} else {
+		taskList = []*tasks.Task{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"tasks": taskList,
-		"total": len(taskList),
+		"tasks":  taskList,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
 	})
 }
 
@@ -84,8 +116,8 @@ func (h *TasksHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 
 	if h.store != nil {
 		if err := h.store.Save(task); err != nil {
-			// Log error but don't fail the request
-			// The task is already in memory queue
+			log.Printf("[TASKS] Failed to persist task %s: %v", task.ID, err)
+			// Task is already in memory queue, continue
 		}
 	}
 
@@ -103,6 +135,12 @@ func (h *TasksHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 	vars := mux.Vars(r)
 	id := vars["id"]
+
+	// Validate task ID
+	if id == "" || len(id) > 100 {
+		http.Error(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
 
 	task := h.queue.GetByID(id)
 	if task == nil {
@@ -126,6 +164,12 @@ func (h *TasksHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 
 	vars := mux.Vars(r)
 	id := vars["id"]
+
+	// Validate task ID
+	if id == "" || len(id) > 100 {
+		http.Error(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
 
 	task := h.queue.GetByID(id)
 	if task == nil {
@@ -157,7 +201,10 @@ func (h *TasksHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	h.queue.Update(task)
 
 	if h.store != nil {
-		h.store.Save(task)
+		if err := h.store.Save(task); err != nil {
+			log.Printf("[TASKS] Failed to persist updated task %s: %v", task.ID, err)
+			// Task is already in memory queue, continue
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -174,13 +221,22 @@ func (h *TasksHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
 
+	// Validate task ID
+	if id == "" || len(id) > 100 {
+		http.Error(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
+
 	if !h.queue.Remove(id) {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
 
 	if h.store != nil {
-		h.store.Delete(id)
+		if err := h.store.Delete(id); err != nil {
+			log.Printf("[TASKS] Failed to delete task %s from store: %v", id, err)
+			// Task already removed from memory queue, continue
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -195,6 +251,12 @@ func (h *TasksHandler) HandleAgentTasks(w http.ResponseWriter, r *http.Request) 
 
 	vars := mux.Vars(r)
 	agentID := vars["agent_id"]
+
+	// Validate agent ID
+	if agentID == "" || len(agentID) > 100 {
+		http.Error(w, "Invalid agent ID", http.StatusBadRequest)
+		return
+	}
 
 	taskList := h.queue.GetByAgent(agentID)
 

@@ -43,7 +43,7 @@ func NewManager(config Config) *Manager {
 	}
 
 	m := &Manager{
-		toast:    NewToastNotifier(config.AppID),
+		toast:    NewToastNotifierWithURL(config.AppID, config.DashboardURL),
 		terminal: NewTerminalNotifier(),
 		banner:   NewBannerNotifier(),
 		enabled:  config.EnableToast || config.EnableTerminal || config.EnableBanner,
@@ -70,41 +70,48 @@ func NewDefaultManager() *Manager {
 
 // NotifySupervisorNeedsInput triggers all notification channels for supervisor alerts
 func (m *Manager) NotifySupervisorNeedsInput(message string) error {
-	if !m.enabled {
+	// Snapshot state under lock
+	m.mu.RLock()
+	enabled := m.enabled
+	toast := m.toast
+	terminal := m.terminal
+	banner := m.banner
+	logger := m.logger
+	m.mu.RUnlock()
+
+	if !enabled {
 		return fmt.Errorf("notifications are disabled")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	// Perform I/O without holding lock
 	var errors []error
 
 	// Send toast notification
-	if m.toast.IsSupported() {
-		if err := m.toast.NotifySupervisorNeedsInput(message); err != nil {
-			m.logger.Printf("[NOTIFICATION] Toast notification failed: %v", err)
+	if toast.IsSupported() {
+		if err := toast.NotifySupervisorNeedsInput(message); err != nil {
+			logger.Printf("[NOTIFICATION] Toast notification failed: %v", err)
 			errors = append(errors, fmt.Errorf("toast: %w", err))
 		} else {
-			m.logger.Printf("[NOTIFICATION] Toast notification sent: %s", message)
+			logger.Printf("[NOTIFICATION] Toast notification sent: %s", message)
 		}
 	}
 
 	// Flash terminal title
-	if m.terminal.IsSupported() {
-		if err := m.terminal.NotifySupervisorNeedsInput(message); err != nil {
-			m.logger.Printf("[NOTIFICATION] Terminal notification failed: %v", err)
+	if terminal.IsSupported() {
+		if err := terminal.NotifySupervisorNeedsInput(message); err != nil {
+			logger.Printf("[NOTIFICATION] Terminal notification failed: %v", err)
 			errors = append(errors, fmt.Errorf("terminal: %w", err))
 		} else {
-			m.logger.Printf("[NOTIFICATION] Terminal title updated: %s", message)
+			logger.Printf("[NOTIFICATION] Terminal title updated: %s", message)
 		}
 	}
 
 	// Show dashboard banner
-	if err := m.banner.Show(message, "supervisor"); err != nil {
-		m.logger.Printf("[NOTIFICATION] Banner notification failed: %v", err)
+	if err := banner.Show(message, "supervisor"); err != nil {
+		logger.Printf("[NOTIFICATION] Banner notification failed: %v", err)
 		errors = append(errors, fmt.Errorf("banner: %w", err))
 	} else {
-		m.logger.Printf("[NOTIFICATION] Dashboard banner shown: %s", message)
+		logger.Printf("[NOTIFICATION] Dashboard banner shown: %s", message)
 	}
 
 	if len(errors) > 0 {
@@ -172,20 +179,25 @@ func (m *Manager) ShowDashboardBanner(message string) error {
 
 // ClearAlert clears all active notifications
 func (m *Manager) ClearAlert() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Snapshot state under lock
+	m.mu.RLock()
+	terminal := m.terminal
+	banner := m.banner
+	logger := m.logger
+	m.mu.RUnlock()
 
+	// Perform I/O without holding lock
 	var errors []error
 
 	// Restore terminal title
-	if m.terminal.IsSupported() {
-		if err := m.terminal.ClearAlert(); err != nil {
+	if terminal.IsSupported() {
+		if err := terminal.ClearAlert(); err != nil {
 			errors = append(errors, fmt.Errorf("terminal: %w", err))
 		}
 	}
 
 	// Clear dashboard banner
-	if err := m.banner.Clear(); err != nil {
+	if err := banner.Clear(); err != nil {
 		errors = append(errors, fmt.Errorf("banner: %w", err))
 	}
 
@@ -193,7 +205,7 @@ func (m *Manager) ClearAlert() error {
 		return fmt.Errorf("some clear operations failed: %v", errors)
 	}
 
-	m.logger.Printf("[NOTIFICATION] All alerts cleared")
+	logger.Printf("[NOTIFICATION] All alerts cleared")
 	return nil
 }
 

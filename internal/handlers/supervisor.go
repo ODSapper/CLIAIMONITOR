@@ -12,6 +12,30 @@ import (
 	"github.com/gorilla/mux"
 )
 
+const (
+	DefaultLimit = 100
+	MaxLimit     = 1000
+)
+
+// Package-level valid statuses maps (created once for performance)
+var validTaskStatuses = map[string]bool{
+	"pending":     true,
+	"assigned":    true,
+	"in_progress": true,
+	"completed":   true,
+	"blocked":     true,
+	"cancelled":   true,
+}
+
+var validDeploymentStatuses = map[string]bool{
+	"proposed":  true,
+	"approved":  true,
+	"executing": true,
+	"completed": true,
+	"failed":    true,
+	"cancelled": true,
+}
+
 // SupervisorHandler handles supervisor-related HTTP endpoints
 type SupervisorHandler struct {
 	memDB    memory.MemoryDB
@@ -170,9 +194,9 @@ func (h *SupervisorHandler) handleGetTasks(w http.ResponseWriter, r *http.Reques
 	// Parse query parameters for filtering
 	query := r.URL.Query()
 
-	limit := 100
+	limit := DefaultLimit
 	if l := query.Get("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 1000 {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= MaxLimit {
 			limit = parsed
 		}
 	}
@@ -245,15 +269,7 @@ func (h *SupervisorHandler) handleUpdateTaskStatus(w http.ResponseWriter, r *htt
 	}
 
 	// Validate status
-	validStatuses := map[string]bool{
-		"pending":     true,
-		"assigned":    true,
-		"in_progress": true,
-		"completed":   true,
-		"blocked":     true,
-		"cancelled":   true,
-	}
-	if !validStatuses[req.Status] {
+	if !validTaskStatuses[req.Status] {
 		respondError(w, http.StatusBadRequest, "Invalid status value")
 		return
 	}
@@ -347,15 +363,7 @@ func (h *SupervisorHandler) handleUpdateDeploymentStatus(w http.ResponseWriter, 
 	}
 
 	// Validate status
-	validStatuses := map[string]bool{
-		"proposed":   true,
-		"approved":   true,
-		"executing":  true,
-		"completed":  true,
-		"failed":     true,
-		"cancelled":  true,
-	}
-	if !validStatuses[req.Status] {
+	if !validDeploymentStatuses[req.Status] {
 		respondError(w, http.StatusBadRequest, "Invalid status value")
 		return
 	}

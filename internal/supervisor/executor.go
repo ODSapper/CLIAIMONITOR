@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync/atomic"
 
 	"github.com/CLIAIMONITOR/internal/agents"
 	"github.com/CLIAIMONITOR/internal/memory"
@@ -212,10 +213,9 @@ func buildInitialPrompt(proposal AgentProposal) string {
 	)
 }
 
-// Simple sequence number generator for unique agent IDs
-var sequenceCounter int
+// Simple sequence number generator for unique agent IDs (thread-safe)
+var sequenceCounter int32
 
 func generateSequenceNum() int {
-	sequenceCounter++
-	return sequenceCounter
+	return int(atomic.AddInt32(&sequenceCounter, 1))
 }

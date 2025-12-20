@@ -82,6 +82,38 @@ func (r *Router) Route(event events.Event) {
 	}
 }
 
+// RouteWithWait routes an event and waits for all channels to complete
+// Unlike Route, this method blocks until all notification channels have finished processing
+func (r *Router) RouteWithWait(event events.Event) {
+	// Copy channels slice under read lock
+	r.mu.RLock()
+	channels := make([]NotificationChannel, len(r.channels))
+	copy(channels, r.channels)
+	r.mu.RUnlock()
+
+	// Send to each channel in a separate goroutine with WaitGroup tracking
+	var wg sync.WaitGroup
+	for _, ch := range channels {
+		wg.Add(1)
+		go func(channel NotificationChannel) {
+			defer wg.Done()
+
+			// Check if the channel should handle this event
+			if !channel.ShouldNotify(event) {
+				return
+			}
+
+			// Send the event to the channel
+			if err := channel.Send(event); err != nil {
+				log.Printf("[NOTIFY-ROUTER] failed to send event %s to channel %s: %v", event.ID, channel.Name(), err)
+			}
+		}(ch)
+	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+}
+
 // GetChannels returns a list of all registered channel names
 func (r *Router) GetChannels() []string {
 	r.mu.RLock()

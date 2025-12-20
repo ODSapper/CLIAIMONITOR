@@ -9,7 +9,8 @@ import (
 
 // ToastNotifier handles Windows toast notifications
 type ToastNotifier struct {
-	appID string
+	appID       string
+	dashboardURL string
 }
 
 // NewToastNotifier creates a new toast notifier
@@ -18,7 +19,22 @@ func NewToastNotifier(appID string) *ToastNotifier {
 		appID = "CLIAIMONITOR"
 	}
 	return &ToastNotifier{
-		appID: appID,
+		appID:       appID,
+		dashboardURL: "http://localhost:8080",
+	}
+}
+
+// NewToastNotifierWithURL creates a new toast notifier with a custom dashboard URL
+func NewToastNotifierWithURL(appID, dashboardURL string) *ToastNotifier {
+	if appID == "" {
+		appID = "CLIAIMONITOR"
+	}
+	if dashboardURL == "" {
+		dashboardURL = "http://localhost:8080"
+	}
+	return &ToastNotifier{
+		appID:       appID,
+		dashboardURL: dashboardURL,
 	}
 }
 
@@ -39,7 +55,7 @@ func (t *ToastNotifier) ShowToast(title, message string) error {
 			{
 				Type:      "protocol",
 				Label:     "Open Dashboard",
-				Arguments: "http://localhost:8080", // Will be configurable
+				Arguments: t.dashboardURL,
 			},
 		},
 	}
@@ -63,7 +79,7 @@ func (t *ToastNotifier) NotifySupervisorNeedsInput(message string) error {
 			{
 				Type:      "protocol",
 				Label:     "View Now",
-				Arguments: "http://localhost:8080",
+				Arguments: t.dashboardURL,
 			},
 		},
 	}
