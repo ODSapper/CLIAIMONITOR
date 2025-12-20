@@ -19,23 +19,22 @@ import (
 // Spawner manages agent process lifecycle
 type Spawner interface {
 	SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (pid int, err error)
-	SpawnSupervisor(config types.AgentConfig) (pid int, err error)
 	StopAgent(agentID string) error
 	StopAgentWithReason(agentID string, reason string) error
 	IsAgentRunning(pid int) bool
 	GetRunningAgents() map[string]int // agentID -> PID
 }
 
-// ProcessSpawner implements Spawner using PowerShell
+// ProcessSpawner implements Spawner using WezTerm
 type ProcessSpawner struct {
 	mu             sync.RWMutex
 	basePath       string // CLIAIMONITOR directory
 	mcpServerURL   string
 	natsURL        string // NATS server URL for agent connections
-	promptsPath    string
 	scriptsPath    string
 	configsPath    string
 	runningAgents  map[string]int // agentID -> PID
+	agentPanes     map[string]int // agentID -> WezTerm pane ID
 	agentCounters  map[string]int // agentType -> sequence counter
 	memDB          memory.MemoryDB
 	heartbeatPIDs  map[string]int // agentID -> heartbeat script PID
@@ -46,10 +45,10 @@ func NewSpawner(basePath string, mcpServerURL string, memDB memory.MemoryDB) *Pr
 	return &ProcessSpawner{
 		basePath:      basePath,
 		mcpServerURL:  mcpServerURL,
-		promptsPath:   filepath.Join(basePath, "configs", "prompts"),
 		scriptsPath:   filepath.Join(basePath, "scripts"),
 		configsPath:   filepath.Join(basePath, "configs"),
 		runningAgents: make(map[string]int),
+		agentPanes:    make(map[string]int),
 		agentCounters: make(map[string]int),
 		memDB:         memDB,
 		heartbeatPIDs: make(map[string]int),
@@ -93,6 +92,24 @@ func (s *ProcessSpawner) GetNextSequence(agentType string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.agentCounters[agentType] + 1
+}
+
+// GetAgentPaneID returns the WezTerm pane ID for an agent
+func (s *ProcessSpawner) GetAgentPaneID(agentID string) (int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	paneID, ok := s.agentPanes[agentID]
+	return paneID, ok
+}
+
+// SetAgentPaneID stores the WezTerm pane ID for an agent
+func (s *ProcessSpawner) SetAgentPaneID(agentID string, paneID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.agentPanes == nil {
+		s.agentPanes = make(map[string]int)
+	}
+	s.agentPanes[agentID] = paneID
 }
 
 // MCPConfig structure for agent config file
@@ -151,146 +168,8 @@ func (s *ProcessSpawner) createMCPConfig(agentID string, projectPath string, acc
 	return configPath, nil
 }
 
-// createSystemPrompt creates agent-specific system prompt with project context
-func (s *ProcessSpawner) createSystemPrompt(agentID string, config types.AgentConfig, projectPath string, projectName string) (string, error) {
-	// Use override prompt file if specified, otherwise derive from role
-	promptFile := config.PromptFile
-	if promptFile == "" {
-		promptFile = GetPromptFilename(config.Role)
-	}
-
-	var promptContent string
-
-	// Try to get prompt template from database first
-	if s.memDB != nil {
-		// Extract template name by removing .md extension
-		templateName := strings.TrimSuffix(promptFile, ".md")
-
-		// Try by name first
-		template, err := s.memDB.GetPromptTemplate(templateName)
-		if err != nil {
-			log.Printf("[SPAWNER] Warning: DB lookup for %s failed: %v", templateName, err)
-		}
-
-		// If not found by name, try by role
-		if template == nil {
-			template, err = s.memDB.GetPromptTemplateByRole(string(config.Role))
-			if err != nil {
-				log.Printf("[SPAWNER] Warning: DB lookup by role %s failed: %v", config.Role, err)
-			}
-		}
-
-		// Use template content if found
-		if template != nil {
-			promptContent = template.Content
-			log.Printf("[SPAWNER] Using prompt template from DB: %s (role: %s)", template.Name, template.Role)
-		}
-	}
-
-	// Fall back to reading from file if DB lookup didn't work
-	if promptContent == "" {
-		basePath := filepath.Join(s.promptsPath, promptFile)
-		data, err := os.ReadFile(basePath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read prompt %s: %w", promptFile, err)
-		}
-		promptContent = string(data)
-		log.Printf("[SPAWNER] Using prompt template from file: %s", promptFile)
-	}
-
-	// Replace placeholder with actual agent ID
-	prompt := strings.ReplaceAll(promptContent, "{{AGENT_ID}}", agentID)
-
-	// Add project context section
-	projectContext := s.buildProjectContext(projectPath, projectName, config.Role, agentID)
-	prompt = strings.ReplaceAll(prompt, "{{PROJECT_CONTEXT}}", projectContext)
-	prompt = strings.ReplaceAll(prompt, "{{PROJECT_NAME}}", projectName)
-	prompt = strings.ReplaceAll(prompt, "{{PROJECT_PATH}}", projectPath)
-	prompt = strings.ReplaceAll(prompt, "{{ACCESS_RULES}}", s.getAccessRules(config.Role, projectPath))
-
-	// If placeholders weren't in template, append project context
-	if !strings.Contains(promptContent, "{{PROJECT_CONTEXT}}") && projectContext != "" {
-		prompt += "\n\n" + projectContext
-	}
-
-	// Write agent-specific prompt
-	activeDir := filepath.Join(s.promptsPath, "active")
-	if err := os.MkdirAll(activeDir, 0755); err != nil {
-		return "", err
-	}
-
-	outPath := filepath.Join(activeDir, fmt.Sprintf("%s-prompt.md", agentID))
-
-	if err := os.WriteFile(outPath, []byte(prompt), 0644); err != nil {
-		return "", err
-	}
-
-	return outPath, nil
-}
-
-// buildProjectContext builds the project context section for prompts
-func (s *ProcessSpawner) buildProjectContext(projectPath string, projectName string, role types.AgentRole, agentID string) string {
-	var sb strings.Builder
-
-	sb.WriteString("# Project Context\n\n")
-	sb.WriteString(fmt.Sprintf("You are working on: **%s**\n", projectName))
-	sb.WriteString(fmt.Sprintf("Project path: `%s`\n\n", projectPath))
-
-	// Try to read CLAUDE.md from the project
-	claudeMD, err := ReadClaudeMD(projectPath)
-	if err == nil && claudeMD != "" {
-		sb.WriteString("## Project Instructions (from CLAUDE.md)\n\n")
-		sb.WriteString(claudeMD)
-		sb.WriteString("\n\n")
-	}
-
-	// Add team context override to suppress team ID questions
-	sb.WriteString("## Team Context Override\n\n")
-	sb.WriteString(fmt.Sprintf("Your team ID is '%s'. Use this for all Planner API interactions.\n", agentID))
-	sb.WriteString("Do NOT ask about team assignments or workflow procedures from project CLAUDE.md.\n")
-	sb.WriteString("Work autonomously on your assigned tasks. Use MCP tools to communicate status.\n")
-	sb.WriteString(fmt.Sprintf("For Planner API calls, use header: X-API-Key: %s\n\n", agentID))
-
-	// Add access rules
-	sb.WriteString("## Access Rules\n\n")
-	sb.WriteString(s.getAccessRules(role, projectPath))
-
-	return sb.String()
-}
-
-// getAccessRules returns the access rules text for a role
-func (s *ProcessSpawner) getAccessRules(role types.AgentRole, projectPath string) string {
-	switch role {
-	case types.RoleCodeAuditor, types.RoleSecurity:
-		return fmt.Sprintf("You may read files from any project in the Magnolia ecosystem for review purposes. You may only WRITE files within `%s`.", projectPath)
-	case types.RoleSupervisor:
-		return "You may read files from all projects. You should not write code files directly."
-	default:
-		// Go Developer, Engineer - strict isolation
-		return fmt.Sprintf("You may ONLY read and write files within `%s`. Do not access other repositories.", projectPath)
-	}
-}
-
-// SpawnAgent launches a team agent in Windows Terminal
+// SpawnAgent launches a team agent in WezTerm
 func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (int, error) {
-	// Derive project name from path
-	projectName := filepath.Base(projectPath)
-
-	// Get access level for this role
-	accessLevel := types.GetAccessLevelForRole(config.Role)
-
-	// Create MCP config for this agent with project context
-	mcpConfigPath, err := s.createMCPConfig(agentID, projectPath, accessLevel)
-	if err != nil {
-		return 0, fmt.Errorf("failed to create MCP config: %w", err)
-	}
-
-	// Create system prompt for this agent with project context
-	promptPath, err := s.createSystemPrompt(agentID, config, projectPath, projectName)
-	if err != nil {
-		return 0, fmt.Errorf("failed to create system prompt: %w", err)
-	}
-
 	// Generate NATS client ID using convention: agent-{configName}-{seq}
 	// Extract sequence from agentID (e.g., "team-coder001" -> 1)
 	var seq int
@@ -300,43 +179,82 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	}
 	natsClientID := fmt.Sprintf("agent-%s-%d", strings.ToLower(config.Name), seq)
 
-	// Build PowerShell command
-	scriptPath := filepath.Join(s.scriptsPath, "agent-launcher.ps1")
+	// Build inline commands for agent setup and launch
+	mcpServerName := fmt.Sprintf("cliaimonitor-%s", agentID)
 
-	args := []string{
-		"-ExecutionPolicy", "Bypass",
-		"-File", scriptPath,
-		"-AgentID", agentID,
-		"-AgentName", config.Name,
-		"-Model", config.Model,
-		"-Role", string(config.Role),
-		"-Color", config.Color,
-		"-ProjectPath", projectPath,
-		"-MCPConfigPath", mcpConfigPath,
-		"-SystemPromptPath", promptPath,
-		"-InitialPrompt", initialPrompt,
+	// Escape the initial prompt for shell
+	escapedPrompt := strings.ReplaceAll(initialPrompt, `"`, `\"`)
+	escapedPrompt = strings.ReplaceAll(escapedPrompt, `'`, `''`)
+
+	// Build command chain: set title, configure MCP, run Claude
+	// Using cmd.exe for simplicity and avoiding PowerShell overhead
+	cmdChain := fmt.Sprintf(
+		`title %s && claude mcp remove %s 2>nul & claude mcp add --transport sse %s http://localhost:3000/mcp/sse --header "X-Agent-ID: %s" --header "X-Project-Path: %s" && claude --model %s --dangerously-skip-permissions "%s"`,
+		agentID,
+		mcpServerName,
+		mcpServerName,
+		agentID,
+		projectPath,
+		config.Model,
+		escapedPrompt,
+	)
+
+	// WezTerm only - no fallbacks to other terminals
+	var cmd *exec.Cmd
+	var paneID int
+
+	if _, err := exec.LookPath("wezterm.exe"); err == nil {
+		// Try using wezterm cli spawn to get pane ID
+		// This requires a running mux server but gives us the pane ID
+		cmd = exec.Command("wezterm.exe", "cli", "spawn", "--new-window", "--cwd", projectPath, "--",
+			"cmd.exe", "/k", cmdChain)
+
+		// Set NATS_CLIENT_ID environment variable for the agent process
+		cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
+
+		output, err := cmd.Output()
+		if err != nil {
+			// Fallback: Use wezterm start if cli spawn fails (no mux server)
+			log.Printf("[SPAWNER] wezterm cli spawn failed, falling back to wezterm start: %v", err)
+			cmd = exec.Command("wezterm.exe", "start", "--always-new-process", "--cwd", projectPath, "--",
+				"cmd.exe", "/k", cmdChain)
+			cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
+
+			if err := cmd.Start(); err != nil {
+				return 0, fmt.Errorf("failed to start agent in WezTerm: %w", err)
+			}
+			paneID = -1 // No pane ID available with wezterm start
+		} else {
+			// Successfully got pane ID from wezterm cli spawn
+			paneIDStr := strings.TrimSpace(string(output))
+			if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
+				paneID = parsedID
+				log.Printf("[SPAWNER] Agent %s spawned in pane %d", agentID, paneID)
+			} else {
+				log.Printf("[SPAWNER] Warning: Could not parse pane ID from output: %s", paneIDStr)
+				paneID = -1
+			}
+		}
+	} else {
+		return 0, fmt.Errorf("WezTerm not found in PATH - required for agent spawning")
 	}
 
-	// Add skip permissions flag if enabled
-	if config.SkipPermissions {
-		args = append(args, "-SkipPermissions")
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
 	}
-
-	cmd := exec.Command("powershell.exe", args...)
-
-	// Set NATS_CLIENT_ID environment variable for the agent process
-	cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
-
-	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("failed to start agent: %w", err)
-	}
-
-	pid := cmd.Process.Pid
+	log.Printf("[SPAWNER] Agent %s launched in WezTerm (PID: %d, Pane: %d)", agentID, pid, paneID)
 
 	// Don't wait - let it run independently
-	// The launcher script spawns a detached Windows Terminal process and exits,
-	// so we don't track the launcher PID. Agent registration happens via MCP.
-	go cmd.Wait()
+	if cmd.Process != nil {
+		go cmd.Wait()
+	}
+
+	// Store the pane ID for later use (cleanup, etc.)
+	if paneID > 0 {
+		s.SetAgentPaneID(agentID, paneID)
+		log.Printf("[SPAWNER] Stored pane ID %d for agent %s", paneID, agentID)
+	}
 
 	// Note: We can't reliably track the agent PID since it runs in Windows Terminal.
 	// Agents register themselves via MCP when they connect.
@@ -371,12 +289,6 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	}
 
 	return pid, nil
-}
-
-// SpawnSupervisor launches the supervisor agent
-func (s *ProcessSpawner) SpawnSupervisor(config types.AgentConfig) (int, error) {
-	initialPrompt := "You are the Supervisor agent. Call mcp__cliaimonitor__register_agent with agent_id='Supervisor' and role='Supervisor' to register with the dashboard. Begin your monitoring cycle."
-	return s.SpawnAgent(config, "Supervisor", s.basePath, initialPrompt)
 }
 
 // spawnHeartbeatScript spawns the heartbeat monitor script for an agent
@@ -458,7 +370,22 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 	delete(s.runningAgents, agentID)
 	s.mu.Unlock()
 
-	// 6. Try to kill the agent process using PID file (preferred method)
+	// 6. Try to kill by WezTerm pane ID first (most reliable method)
+	if paneID, ok := s.GetAgentPaneID(agentID); ok && paneID > 0 {
+		log.Printf("[SPAWNER] Killing agent %s via pane ID %d", agentID, paneID)
+		if err := s.KillByPaneID(paneID); err != nil {
+			log.Printf("Warning: Failed to kill by pane ID: %v", err)
+		} else {
+			// Successfully killed by pane ID, remove from tracking
+			s.mu.Lock()
+			delete(s.agentPanes, agentID)
+			s.mu.Unlock()
+			log.Printf("[SPAWNER] Successfully killed agent %s via pane ID", agentID)
+			// Still continue with other cleanup methods as fallback
+		}
+	}
+
+	// 7. Try to kill the agent process using PID file (fallback method)
 	// PID file contains PowerShell process PID inside the terminal
 	pid, err := s.GetAgentPIDFromFile(agentID)
 	if err == nil && pid > 0 {
@@ -478,16 +405,27 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 		s.CleanupAgentPIDFile(agentID)
 	}
 
-	// 7. Also try killing by window title (catches any stragglers)
+	// 8. Also try killing by window title (catches any stragglers)
 	if err := s.KillByWindowTitle(agentID); err != nil {
 		log.Printf("Warning: Failed to kill agent by window title: %v", err)
 	}
 
-	// 8. Kill any remaining powershell processes with our temp script
+	// 9. Kill any remaining powershell processes with our temp script
 	if err := s.KillByTempScript(agentID); err != nil {
 		log.Printf("Warning: Failed to kill by temp script: %v", err)
 	}
 
+	return nil
+}
+
+// KillByPaneID kills a WezTerm pane by its pane ID
+func (s *ProcessSpawner) KillByPaneID(paneID int) error {
+	cmd := exec.Command("wezterm.exe", "cli", "kill-pane", "--pane-id", fmt.Sprintf("%d", paneID))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to kill pane %d: %w (output: %s)", paneID, err, string(output))
+	}
+	log.Printf("[SPAWNER] Successfully killed pane %d", paneID)
 	return nil
 }
 
@@ -608,6 +546,7 @@ func (s *ProcessSpawner) GetRunningAgents() map[string]int {
 func (s *ProcessSpawner) RemoveAgent(agentID string) {
 	s.mu.Lock()
 	delete(s.runningAgents, agentID)
+	delete(s.agentPanes, agentID)
 	s.mu.Unlock()
 }
 
@@ -632,19 +571,13 @@ func (s *ProcessSpawner) CleanupAgentFiles(agentID string) error {
 		return fmt.Errorf("failed to remove MCP config: %w", err)
 	}
 
-	// Remove active prompt
-	promptPath := filepath.Join(s.promptsPath, "active", fmt.Sprintf("%s-prompt.md", agentID))
-	if err := os.Remove(promptPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove prompt: %w", err)
-	}
-
 	// Remove PID tracking file
 	s.CleanupAgentPIDFile(agentID)
 
 	return nil
 }
 
-// CleanupAllAgentFiles removes all generated config, prompt, and PID files
+// CleanupAllAgentFiles removes all generated config and PID files
 func (s *ProcessSpawner) CleanupAllAgentFiles() error {
 	// Clean MCP configs
 	mcpDir := filepath.Join(s.configsPath, "mcp")
@@ -653,17 +586,6 @@ func (s *ProcessSpawner) CleanupAllAgentFiles() error {
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), "-mcp.json") {
 				os.Remove(filepath.Join(mcpDir, entry.Name()))
-			}
-		}
-	}
-
-	// Clean active prompts
-	activeDir := filepath.Join(s.promptsPath, "active")
-	entries, err = os.ReadDir(activeDir)
-	if err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), "-prompt.md") {
-				os.Remove(filepath.Join(activeDir, entry.Name()))
 			}
 		}
 	}

@@ -190,17 +190,13 @@ func (m *SQLiteMemoryDB) DeletePromptTemplate(name string) error {
 // SeedDefaultPrompts loads default prompts from configs/prompts if DB is empty
 // This is called during initialization to migrate from files to DB
 func (m *SQLiteMemoryDB) SeedDefaultPrompts(promptsDir string) error {
-	// Check if we already have prompts
-	templates, err := m.GetAllPromptTemplates()
-	if err != nil {
-		return err
-	}
+	// Always sync from files - this ensures file updates are reflected in DB
+	return m.SyncPromptTemplates(promptsDir)
+}
 
-	if len(templates) > 0 {
-		// Already seeded
-		return nil
-	}
-
+// SyncPromptTemplates syncs prompt templates from files to DB
+// Updates existing templates if file content differs, creates new ones if missing
+func (m *SQLiteMemoryDB) SyncPromptTemplates(promptsDir string) error {
 	// Default prompts that should exist
 	defaults := []struct {
 		name        string
@@ -211,24 +207,30 @@ func (m *SQLiteMemoryDB) SeedDefaultPrompts(promptsDir string) error {
 		{"go-developer", "go_developer", "Go/Golang specialist"},
 		{"security", "security", "Security analysis and hardening"},
 		{"code-auditor", "code_auditor", "Code review and quality auditing"},
-		{"supervisor", "supervisor", "Orchestration and coordination"},
 		{"snake", "snake", "Reconnaissance and intelligence gathering"},
 		{"sgt-green", "sgt_green", "Implementation Sergeant - orchestrates implementation work"},
 		{"sgt-purple", "sgt_purple", "Review Sergeant - orchestrates Fagan-style code reviews"},
 	}
 
-	fmt.Printf("[PROMPTS] Seeding %d default prompt templates\n", len(defaults))
-
+	synced := 0
 	for _, def := range defaults {
 		// Read from file if exists
 		filePath := promptsDir + "/" + def.name + ".md"
 		content, err := readFileContent(filePath)
 		if err != nil {
-			// Use placeholder content if file doesn't exist
-			content = fmt.Sprintf("# %s: {{AGENT_ID}}\n\nDefault prompt for %s role.\n\n{{PROJECT_CONTEXT}}\n", def.name, def.role)
-			fmt.Printf("[PROMPTS] Using placeholder for %s (file not found)\n", def.name)
-		} else {
-			fmt.Printf("[PROMPTS] Loaded %s from file\n", def.name)
+			// Skip if file doesn't exist - don't create placeholders
+			continue
+		}
+
+		// Check existing template
+		existing, err := m.GetPromptTemplate(def.name)
+		if err != nil {
+			return fmt.Errorf("failed to check template %s: %w", def.name, err)
+		}
+
+		// Skip if content is identical
+		if existing != nil && existing.Content == content {
+			continue
 		}
 
 		template := &PromptTemplate{
@@ -242,11 +244,20 @@ func (m *SQLiteMemoryDB) SeedDefaultPrompts(promptsDir string) error {
 		}
 
 		if err := m.SavePromptTemplate(template); err != nil {
-			return fmt.Errorf("failed to seed %s: %w", def.name, err)
+			return fmt.Errorf("failed to sync %s: %w", def.name, err)
 		}
+
+		if existing != nil {
+			fmt.Printf("[PROMPTS] Updated %s from file (v%d -> v%d)\n", def.name, existing.Version, existing.Version+1)
+		} else {
+			fmt.Printf("[PROMPTS] Created %s from file\n", def.name)
+		}
+		synced++
 	}
 
-	fmt.Println("[PROMPTS] Successfully seeded default prompt templates")
+	if synced > 0 {
+		fmt.Printf("[PROMPTS] Synced %d prompt templates from files\n", synced)
+	}
 	return nil
 }
 

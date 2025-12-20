@@ -1,6 +1,10 @@
 package mcp
 
 import (
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/events"
@@ -682,6 +686,9 @@ func registerLearningTools(s *Server, callbacks ToolCallbacks) {
 
 	// Skill Router tools
 	registerSkillRouterTools(s, callbacks)
+
+	// WezTerm control tools
+	registerWezTermTools(s)
 }
 
 // registerSkillRouterTools adds the skill router query tool
@@ -1535,6 +1542,215 @@ func registerDocumentTools(s *Server, callbacks ToolCallbacks) {
 				limit = int(l)
 			}
 			return callbacks.OnListMyDocuments(agentID, docType, limit)
+		},
+	})
+}
+
+// registerWezTermTools adds WezTerm pane control tools for Captain
+func registerWezTermTools(s *Server) {
+	// wezterm_spawn_pane - Spawn a new pane in WezTerm
+	s.RegisterTool(ToolDefinition{
+		Name:        "wezterm_spawn_pane",
+		Description: "Spawn a new pane in WezTerm by splitting an existing pane. Returns the new pane ID.",
+		Parameters: map[string]ParameterDef{
+			"direction": {
+				Type:        "string",
+				Description: "Split direction: right, left, top, or bottom",
+				Required:    true,
+			},
+			"command": {
+				Type:        "string",
+				Description: "Command to run in the new pane (e.g., 'cmd.exe', 'powershell.exe')",
+				Required:    true,
+			},
+			"pane_id": {
+				Type:        "string",
+				Description: "Optional: target pane to split (if not provided, splits the active pane)",
+				Required:    false,
+			},
+			"cwd": {
+				Type:        "string",
+				Description: "Optional: working directory for the new pane",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			direction, _ := params["direction"].(string)
+			command, _ := params["command"].(string)
+			paneID, _ := params["pane_id"].(string)
+			cwd, _ := params["cwd"].(string)
+
+			if direction == "" || command == "" {
+				return map[string]interface{}{"error": "direction and command are required"}, nil
+			}
+
+			// Validate direction
+			validDirections := map[string]bool{"right": true, "left": true, "top": true, "bottom": true}
+			if !validDirections[direction] {
+				return map[string]interface{}{"error": "invalid direction, must be: right, left, top, or bottom"}, nil
+			}
+
+			// Build wezterm cli command
+			args := []string{"cli", "split-pane", "--" + direction}
+			if paneID != "" {
+				args = append(args, "--pane-id", paneID)
+			}
+			if cwd != "" {
+				args = append(args, "--cwd", cwd)
+			}
+			args = append(args, "--", command)
+
+			cmd := exec.Command("wezterm.exe", args...)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to spawn pane: %v, output: %s", err, string(output)),
+				}, nil
+			}
+
+			newPaneID := strings.TrimSpace(string(output))
+			return map[string]interface{}{
+				"success":     true,
+				"new_pane_id": newPaneID,
+			}, nil
+		},
+	})
+
+	// wezterm_list_panes - List all panes in WezTerm
+	s.RegisterTool(ToolDefinition{
+		Name:        "wezterm_list_panes",
+		Description: "List all panes in WezTerm with their IDs, titles, and working directories.",
+		Parameters:  map[string]ParameterDef{},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			cmd := exec.Command("wezterm.exe", "cli", "list", "--format", "json")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to list panes: %v, output: %s", err, string(output)),
+				}, nil
+			}
+
+			// Parse JSON output
+			var panes []map[string]interface{}
+			if err := json.Unmarshal(output, &panes); err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to parse pane list: %v", err),
+				}, nil
+			}
+
+			return map[string]interface{}{
+				"success": true,
+				"panes":   panes,
+				"count":   len(panes),
+			}, nil
+		},
+	})
+
+	// wezterm_send_text - Send text/command to a specific pane
+	s.RegisterTool(ToolDefinition{
+		Name:        "wezterm_send_text",
+		Description: "Send text or a command to a specific pane. Useful for programmatically controlling terminals.",
+		Parameters: map[string]ParameterDef{
+			"pane_id": {
+				Type:        "string",
+				Description: "Target pane ID",
+				Required:    true,
+			},
+			"text": {
+				Type:        "string",
+				Description: "Text or command to send to the pane",
+				Required:    true,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			paneID, _ := params["pane_id"].(string)
+			text, _ := params["text"].(string)
+
+			if paneID == "" || text == "" {
+				return map[string]interface{}{"error": "pane_id and text are required"}, nil
+			}
+
+			cmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneID, "--", text)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to send text: %v, output: %s", err, string(output)),
+				}, nil
+			}
+
+			return map[string]interface{}{
+				"success": true,
+			}, nil
+		},
+	})
+
+	// wezterm_close_pane - Close a specific pane
+	s.RegisterTool(ToolDefinition{
+		Name:        "wezterm_close_pane",
+		Description: "Close a specific pane by its ID.",
+		Parameters: map[string]ParameterDef{
+			"pane_id": {
+				Type:        "string",
+				Description: "Pane ID to close",
+				Required:    true,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			paneID, _ := params["pane_id"].(string)
+
+			if paneID == "" {
+				return map[string]interface{}{"error": "pane_id is required"}, nil
+			}
+
+			cmd := exec.Command("wezterm.exe", "cli", "kill-pane", "--pane-id", paneID)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to close pane: %v, output: %s", err, string(output)),
+				}, nil
+			}
+
+			return map[string]interface{}{
+				"success": true,
+			}, nil
+		},
+	})
+
+	// wezterm_focus_pane - Focus/activate a specific pane
+	s.RegisterTool(ToolDefinition{
+		Name:        "wezterm_focus_pane",
+		Description: "Focus or activate a specific pane by its ID, bringing it to the foreground.",
+		Parameters: map[string]ParameterDef{
+			"pane_id": {
+				Type:        "string",
+				Description: "Pane ID to focus",
+				Required:    true,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			paneID, _ := params["pane_id"].(string)
+
+			if paneID == "" {
+				return map[string]interface{}{"error": "pane_id is required"}, nil
+			}
+
+			cmd := exec.Command("wezterm.exe", "cli", "activate-pane", "--pane-id", paneID)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to focus pane: %v, output: %s", err, string(output)),
+				}, nil
+			}
+
+			return map[string]interface{}{
+				"success": true,
+			}, nil
 		},
 	})
 }

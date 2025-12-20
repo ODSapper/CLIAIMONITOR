@@ -22,6 +22,12 @@ type AgentControlRepository interface {
 	GetStaleAgents(threshold time.Duration) ([]*AgentControl, error)
 	GetAgentsByStatus(status string) ([]*AgentControl, error)
 	CheckShutdownFlag(agentID string) (bool, string, error)
+
+	// Pane tracking operations
+	UpdateAgentPaneID(agentID, paneID string) error
+	GetAgentByPaneID(paneID string) (*AgentControl, error)
+	LogPaneEvent(agentID, paneID, action, statusBefore, statusAfter, details string) error
+	GetPaneHistory(agentID string, limit int) ([]*PaneHistoryEntry, error)
 }
 
 // AgentControl represents an agent's lifecycle state
@@ -48,8 +54,21 @@ type AgentControl struct {
 	StopReason string
 
 	// Metadata
-	Model string
-	Color string
+	Model  string
+	Color  string
+	PaneID string // WezTerm pane ID
+}
+
+// PaneHistoryEntry represents a pane lifecycle event
+type PaneHistoryEntry struct {
+	ID           int64
+	AgentID      string
+	PaneID       string
+	Action       string
+	StatusBefore string
+	StatusAfter  string
+	Details      string
+	Timestamp    time.Time
 }
 
 // RegisterAgent registers a new agent in the control table
@@ -59,8 +78,8 @@ func (m *SQLiteMemoryDB) RegisterAgent(agent *AgentControl) error {
 			agent_id, config_name, role, project_path, pid,
 			status, heartbeat_at, current_task,
 			shutdown_flag, shutdown_reason, priority_override,
-			model, color
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			model, color, pane_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(agent_id) DO UPDATE SET
 			config_name = excluded.config_name,
 			role = excluded.role,
@@ -70,7 +89,8 @@ func (m *SQLiteMemoryDB) RegisterAgent(agent *AgentControl) error {
 			heartbeat_at = excluded.heartbeat_at,
 			current_task = excluded.current_task,
 			model = excluded.model,
-			color = excluded.color
+			color = excluded.color,
+			pane_id = excluded.pane_id
 	`
 
 	_, err := m.db.Exec(query,
@@ -79,7 +99,7 @@ func (m *SQLiteMemoryDB) RegisterAgent(agent *AgentControl) error {
 		agent.Status, nullTimePtr(agent.HeartbeatAt), nullString(agent.CurrentTask),
 		boolToInt(agent.ShutdownFlag), nullString(agent.ShutdownReason),
 		nullInt64Ptr(agent.PriorityOverride),
-		nullString(agent.Model), nullString(agent.Color),
+		nullString(agent.Model), nullString(agent.Color), nullString(agent.PaneID),
 	)
 
 	if err != nil {
@@ -219,13 +239,13 @@ func (m *SQLiteMemoryDB) GetAgent(agentID string) (*AgentControl, error) {
 		       status, heartbeat_at, current_task,
 		       shutdown_flag, shutdown_reason, priority_override,
 		       spawned_at, stopped_at, stop_reason,
-		       model, color
+		       model, color, pane_id
 		FROM agent_control
 		WHERE agent_id = ?
 	`
 
 	var agent AgentControl
-	var role, projectPath, currentTask, shutdownReason, stopReason, model, color sql.NullString
+	var role, projectPath, currentTask, shutdownReason, stopReason, model, color, paneID sql.NullString
 	var pid, priorityOverride sql.NullInt64
 	var heartbeatAt, stoppedAt sql.NullTime
 	var shutdownFlag int
@@ -235,7 +255,7 @@ func (m *SQLiteMemoryDB) GetAgent(agentID string) (*AgentControl, error) {
 		&agent.Status, &heartbeatAt, &currentTask,
 		&shutdownFlag, &shutdownReason, &priorityOverride,
 		&agent.SpawnedAt, &stoppedAt, &stopReason,
-		&model, &color,
+		&model, &color, &paneID,
 	)
 
 	if err != nil {
@@ -253,6 +273,7 @@ func (m *SQLiteMemoryDB) GetAgent(agentID string) (*AgentControl, error) {
 	agent.StopReason = stopReason.String
 	agent.Model = model.String
 	agent.Color = color.String
+	agent.PaneID = paneID.String
 	agent.ShutdownFlag = shutdownFlag != 0
 
 	if pid.Valid {
@@ -283,7 +304,7 @@ func (m *SQLiteMemoryDB) GetAllAgents() ([]*AgentControl, error) {
 		       status, heartbeat_at, current_task,
 		       shutdown_flag, shutdown_reason, priority_override,
 		       spawned_at, stopped_at, stop_reason,
-		       model, color
+		       model, color, pane_id
 		FROM agent_control
 		ORDER BY spawned_at DESC
 	`
@@ -314,7 +335,7 @@ func (m *SQLiteMemoryDB) GetStaleAgents(threshold time.Duration) ([]*AgentContro
 		       status, heartbeat_at, current_task,
 		       shutdown_flag, shutdown_reason, priority_override,
 		       spawned_at, stopped_at, stop_reason,
-		       model, color
+		       model, color, pane_id
 		FROM agent_control
 		WHERE status NOT IN ('stopped', 'dead')
 		  AND (
@@ -355,7 +376,7 @@ func (m *SQLiteMemoryDB) GetAgentsByStatus(status string) ([]*AgentControl, erro
 		       status, heartbeat_at, current_task,
 		       shutdown_flag, shutdown_reason, priority_override,
 		       spawned_at, stopped_at, stop_reason,
-		       model, color
+		       model, color, pane_id
 		FROM agent_control
 		WHERE status = ?
 		ORDER BY spawned_at DESC
@@ -404,7 +425,7 @@ func scanAgentControl(scanner interface {
 	Scan(...interface{}) error
 }) (*AgentControl, error) {
 	var agent AgentControl
-	var role, projectPath, currentTask, shutdownReason, stopReason, model, color sql.NullString
+	var role, projectPath, currentTask, shutdownReason, stopReason, model, color, paneID sql.NullString
 	var pid, priorityOverride sql.NullInt64
 	var heartbeatAt, stoppedAt sql.NullTime
 	var shutdownFlag int
@@ -414,7 +435,7 @@ func scanAgentControl(scanner interface {
 		&agent.Status, &heartbeatAt, &currentTask,
 		&shutdownFlag, &shutdownReason, &priorityOverride,
 		&agent.SpawnedAt, &stoppedAt, &stopReason,
-		&model, &color,
+		&model, &color, &paneID,
 	)
 
 	if err != nil {
@@ -429,6 +450,7 @@ func scanAgentControl(scanner interface {
 	agent.StopReason = stopReason.String
 	agent.Model = model.String
 	agent.Color = color.String
+	agent.PaneID = paneID.String
 	agent.ShutdownFlag = shutdownFlag != 0
 
 	if pid.Valid {
@@ -474,4 +496,163 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// UpdateAgentPaneID updates the pane_id for an agent
+func (m *SQLiteMemoryDB) UpdateAgentPaneID(agentID, paneID string) error {
+	query := `
+		UPDATE agent_control
+		SET pane_id = ?
+		WHERE agent_id = ?
+	`
+
+	result, err := m.db.Exec(query, nullString(paneID), agentID)
+	if err != nil {
+		return fmt.Errorf("failed to update pane ID: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check affected rows: %w", err)
+	}
+
+	if rows == 0 {
+		return fmt.Errorf("agent not found: %s", agentID)
+	}
+
+	return nil
+}
+
+// GetAgentByPaneID retrieves an agent by its WezTerm pane ID
+func (m *SQLiteMemoryDB) GetAgentByPaneID(paneID string) (*AgentControl, error) {
+	query := `
+		SELECT agent_id, config_name, role, project_path, pid,
+		       status, heartbeat_at, current_task,
+		       shutdown_flag, shutdown_reason, priority_override,
+		       spawned_at, stopped_at, stop_reason,
+		       model, color, pane_id
+		FROM agent_control
+		WHERE pane_id = ?
+	`
+
+	var agent AgentControl
+	var role, projectPath, currentTask, shutdownReason, stopReason, model, color, paneIDNullable sql.NullString
+	var pid, priorityOverride sql.NullInt64
+	var heartbeatAt, stoppedAt sql.NullTime
+	var shutdownFlag int
+
+	err := m.db.QueryRow(query, paneID).Scan(
+		&agent.AgentID, &agent.ConfigName, &role, &projectPath, &pid,
+		&agent.Status, &heartbeatAt, &currentTask,
+		&shutdownFlag, &shutdownReason, &priorityOverride,
+		&agent.SpawnedAt, &stoppedAt, &stopReason,
+		&model, &color, &paneIDNullable,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("agent not found for pane: %s", paneID)
+		}
+		return nil, fmt.Errorf("failed to get agent by pane ID: %w", err)
+	}
+
+	// Convert nullable fields
+	agent.Role = role.String
+	agent.ProjectPath = projectPath.String
+	agent.CurrentTask = currentTask.String
+	agent.ShutdownReason = shutdownReason.String
+	agent.StopReason = stopReason.String
+	agent.Model = model.String
+	agent.Color = color.String
+	agent.PaneID = paneIDNullable.String
+	agent.ShutdownFlag = shutdownFlag != 0
+
+	if pid.Valid {
+		pidInt := int(pid.Int64)
+		agent.PID = &pidInt
+	}
+
+	if priorityOverride.Valid {
+		priorityInt := int(priorityOverride.Int64)
+		agent.PriorityOverride = &priorityInt
+	}
+
+	if heartbeatAt.Valid {
+		agent.HeartbeatAt = &heartbeatAt.Time
+	}
+
+	if stoppedAt.Valid {
+		agent.StoppedAt = &stoppedAt.Time
+	}
+
+	return &agent, nil
+}
+
+// LogPaneEvent records a pane lifecycle event in pane_history
+func (m *SQLiteMemoryDB) LogPaneEvent(agentID, paneID, action, statusBefore, statusAfter, details string) error {
+	query := `
+		INSERT INTO pane_history (agent_id, pane_id, action, status_before, status_after, details)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`
+
+	_, err := m.db.Exec(query,
+		agentID,
+		paneID,
+		action,
+		nullString(statusBefore),
+		nullString(statusAfter),
+		nullString(details),
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to log pane event: %w", err)
+	}
+
+	return nil
+}
+
+// GetPaneHistory retrieves pane lifecycle events for an agent
+func (m *SQLiteMemoryDB) GetPaneHistory(agentID string, limit int) ([]*PaneHistoryEntry, error) {
+	query := `
+		SELECT id, agent_id, pane_id, action, status_before, status_after, details, timestamp
+		FROM pane_history
+		WHERE agent_id = ?
+		ORDER BY timestamp DESC, id DESC
+		LIMIT ?
+	`
+
+	rows, err := m.db.Query(query, agentID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pane history: %w", err)
+	}
+	defer rows.Close()
+
+	var history []*PaneHistoryEntry
+	for rows.Next() {
+		var entry PaneHistoryEntry
+		var statusBefore, statusAfter, details sql.NullString
+
+		err := rows.Scan(
+			&entry.ID,
+			&entry.AgentID,
+			&entry.PaneID,
+			&entry.Action,
+			&statusBefore,
+			&statusAfter,
+			&details,
+			&entry.Timestamp,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan pane history entry: %w", err)
+		}
+
+		entry.StatusBefore = statusBefore.String
+		entry.StatusAfter = statusAfter.String
+		entry.Details = details.String
+
+		history = append(history, &entry)
+	}
+
+	return history, rows.Err()
 }

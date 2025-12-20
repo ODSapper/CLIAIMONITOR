@@ -43,11 +43,6 @@ func TestNewSpawner(t *testing.T) {
 		t.Errorf("Expected mcpServerURL %s, got %s", mcpURL, spawner.mcpServerURL)
 	}
 
-	expectedPromptsPath := filepath.Join(basePath, "configs", "prompts")
-	if spawner.promptsPath != expectedPromptsPath {
-		t.Errorf("Expected promptsPath %s, got %s", expectedPromptsPath, spawner.promptsPath)
-	}
-
 	expectedScriptsPath := filepath.Join(basePath, "scripts")
 	if spawner.scriptsPath != expectedScriptsPath {
 		t.Errorf("Expected scriptsPath %s, got %s", expectedScriptsPath, spawner.scriptsPath)
@@ -59,6 +54,10 @@ func TestNewSpawner(t *testing.T) {
 
 	if spawner.agentCounters == nil {
 		t.Error("agentCounters map not initialized")
+	}
+
+	if spawner.agentPanes == nil {
+		t.Error("agentPanes map not initialized")
 	}
 }
 
@@ -188,18 +187,24 @@ func TestGetRunningAgents(t *testing.T) {
 func TestRemoveAgent(t *testing.T) {
 	spawner := NewSpawner(t.TempDir(), "http://localhost:3000/mcp/sse", nil)
 
-	// Add an agent
+	// Add an agent with both PID and pane ID
 	spawner.mu.Lock()
 	spawner.runningAgents["test-agent-001"] = 12345
+	spawner.agentPanes["test-agent-001"] = 42
 	spawner.mu.Unlock()
 
 	// Remove it
 	spawner.RemoveAgent("test-agent-001")
 
-	// Should be gone
+	// Should be gone from running agents
 	agents := spawner.GetRunningAgents()
 	if _, ok := agents["test-agent-001"]; ok {
-		t.Error("Agent should have been removed")
+		t.Error("Agent should have been removed from running agents")
+	}
+
+	// Should be gone from panes
+	if _, ok := spawner.GetAgentPaneID("test-agent-001"); ok {
+		t.Error("Agent pane ID should have been removed")
 	}
 }
 
@@ -225,35 +230,6 @@ func TestGetAgentByPID(t *testing.T) {
 	// Non-existent PID
 	if id := spawner.GetAgentByPID(99999); id != "" {
 		t.Errorf("Expected empty string for non-existent PID, got %s", id)
-	}
-}
-
-// TestGetAccessRules tests access rule generation for different roles
-func TestGetAccessRules(t *testing.T) {
-	spawner := NewSpawner(t.TempDir(), "http://localhost:3000/mcp/sse", nil)
-	projectPath := "/test/project"
-
-	tests := []struct {
-		role     types.AgentRole
-		contains string
-	}{
-		{types.RoleCodeAuditor, "read files from any project"},
-		{types.RoleSecurity, "read files from any project"},
-		{types.RoleSupervisor, "should not write code files"},
-		{types.RoleGoDeveloper, "ONLY read and write files within"},
-		{types.RoleEngineer, "ONLY read and write files within"},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.role), func(t *testing.T) {
-			rules := spawner.getAccessRules(tt.role, projectPath)
-			if rules == "" {
-				t.Error("Access rules should not be empty")
-			}
-			if !contains(rules, tt.contains) {
-				t.Errorf("Expected rules for %s to contain '%s', got: %s", tt.role, tt.contains, rules)
-			}
-		})
 	}
 }
 
@@ -511,6 +487,66 @@ func TestTrackHeartbeatPID(t *testing.T) {
 	}
 }
 
+// TestGetAgentPaneID tests retrieving WezTerm pane IDs
+func TestGetAgentPaneID(t *testing.T) {
+	spawner := NewSpawner(t.TempDir(), "http://localhost:3000/mcp/sse", nil)
+
+	// Test non-existent pane ID
+	_, ok := spawner.GetAgentPaneID("non-existent")
+	if ok {
+		t.Error("Expected pane ID lookup to fail for non-existent agent")
+	}
+
+	// Set a pane ID
+	spawner.SetAgentPaneID("agent-001", 42)
+
+	// Retrieve it
+	paneID, ok := spawner.GetAgentPaneID("agent-001")
+	if !ok {
+		t.Error("Expected pane ID lookup to succeed")
+	}
+	if paneID != 42 {
+		t.Errorf("Expected pane ID 42, got %d", paneID)
+	}
+}
+
+// TestSetAgentPaneID tests storing WezTerm pane IDs
+func TestSetAgentPaneID(t *testing.T) {
+	spawner := NewSpawner(t.TempDir(), "http://localhost:3000/mcp/sse", nil)
+
+	// Set multiple pane IDs
+	spawner.SetAgentPaneID("agent-001", 10)
+	spawner.SetAgentPaneID("agent-002", 20)
+	spawner.SetAgentPaneID("agent-003", 30)
+
+	// Verify all are stored
+	tests := []struct {
+		agentID  string
+		expected int
+	}{
+		{"agent-001", 10},
+		{"agent-002", 20},
+		{"agent-003", 30},
+	}
+
+	for _, tt := range tests {
+		paneID, ok := spawner.GetAgentPaneID(tt.agentID)
+		if !ok {
+			t.Errorf("Expected pane ID for %s to exist", tt.agentID)
+		}
+		if paneID != tt.expected {
+			t.Errorf("Expected pane ID %d for %s, got %d", tt.expected, tt.agentID, paneID)
+		}
+	}
+
+	// Update an existing pane ID
+	spawner.SetAgentPaneID("agent-001", 99)
+	paneID, _ := spawner.GetAgentPaneID("agent-001")
+	if paneID != 99 {
+		t.Errorf("Expected updated pane ID 99, got %d", paneID)
+	}
+}
+
 // TestCleanupAllAgentFiles tests bulk file cleanup
 func TestCleanupAllAgentFiles(t *testing.T) {
 	basePath := t.TempDir()
@@ -610,196 +646,6 @@ func TestStopAllAgents(t *testing.T) {
 	}
 }
 
-// TestBuildProjectContext tests project context building
-func TestBuildProjectContext(t *testing.T) {
-	basePath := t.TempDir()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", nil)
-
-	projectPath := basePath
-	projectName := "TestProject"
-	agentID := "team-test001"
-	role := types.RoleGoDeveloper
-
-	// Create CLAUDE.md in project
-	claudeContent := "# Project Instructions\n\nThis is a test project."
-	os.WriteFile(filepath.Join(basePath, "CLAUDE.md"), []byte(claudeContent), 0644)
-
-	context := spawner.buildProjectContext(projectPath, projectName, role, agentID)
-
-	// Verify key sections
-	if !contains(context, "# Project Context") {
-		t.Error("Missing project context header")
-	}
-	if !contains(context, projectName) {
-		t.Error("Missing project name")
-	}
-	if !contains(context, projectPath) {
-		t.Error("Missing project path")
-	}
-	if !contains(context, "## Project Instructions (from CLAUDE.md)") {
-		t.Error("Missing CLAUDE.md section")
-	}
-	if !contains(context, claudeContent) {
-		t.Error("Missing CLAUDE.md content")
-	}
-	if !contains(context, "## Team Context Override") {
-		t.Error("Missing team context override")
-	}
-	if !contains(context, agentID) {
-		t.Error("Missing agent ID in team context")
-	}
-	if !contains(context, "## Access Rules") {
-		t.Error("Missing access rules section")
-	}
-}
-
-// TestBuildProjectContextWithoutClaudeMD tests context when CLAUDE.md doesn't exist
-func TestBuildProjectContextWithoutClaudeMD(t *testing.T) {
-	basePath := t.TempDir()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", nil)
-
-	projectPath := basePath
-	projectName := "TestProject"
-	agentID := "team-test001"
-	role := types.RoleGoDeveloper
-
-	context := spawner.buildProjectContext(projectPath, projectName, role, agentID)
-
-	// Should still have basic sections
-	if !contains(context, "# Project Context") {
-		t.Error("Missing project context header")
-	}
-	if !contains(context, projectName) {
-		t.Error("Missing project name")
-	}
-	// Should NOT have CLAUDE.md section
-	if contains(context, "## Project Instructions (from CLAUDE.md)") {
-		t.Error("Should not have CLAUDE.md section when file doesn't exist")
-	}
-}
-
-// TestCreateSystemPrompt tests system prompt creation
-func TestCreateSystemPrompt(t *testing.T) {
-	basePath := t.TempDir()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", nil)
-
-	// Create prompts directory and template
-	promptsDir := filepath.Join(basePath, "configs", "prompts")
-	os.MkdirAll(promptsDir, 0755)
-
-	templateContent := `# System Prompt for {{AGENT_ID}}
-
-Project: {{PROJECT_NAME}}
-Path: {{PROJECT_PATH}}
-
-## Project Context
-{{PROJECT_CONTEXT}}
-
-## Access Rules
-{{ACCESS_RULES}}
-`
-	templatePath := filepath.Join(promptsDir, "go-developer.md")
-	os.WriteFile(templatePath, []byte(templateContent), 0644)
-
-	config := types.AgentConfig{
-		Name:  "TestAgent",
-		Model: "claude-sonnet-4-5",
-		Role:  types.RoleGoDeveloper,
-		Color: "#00cc66",
-	}
-
-	agentID := "team-test001"
-	projectPath := basePath
-	projectName := "TestProject"
-
-	promptPath, err := spawner.createSystemPrompt(agentID, config, projectPath, projectName)
-	if err != nil {
-		t.Fatalf("createSystemPrompt failed: %v", err)
-	}
-
-	// Verify file exists
-	if _, err := os.Stat(promptPath); os.IsNotExist(err) {
-		t.Fatalf("Prompt file not created at %s", promptPath)
-	}
-
-	// Read and verify content
-	data, err := os.ReadFile(promptPath)
-	if err != nil {
-		t.Fatalf("Failed to read prompt: %v", err)
-	}
-
-	content := string(data)
-	// Verify all placeholders were replaced
-	if contains(content, "{{AGENT_ID}}") {
-		t.Error("AGENT_ID placeholder not replaced")
-	}
-	if contains(content, "{{PROJECT_NAME}}") {
-		t.Error("PROJECT_NAME placeholder not replaced")
-	}
-	if contains(content, "{{PROJECT_PATH}}") {
-		t.Error("PROJECT_PATH placeholder not replaced")
-	}
-	if contains(content, "{{PROJECT_CONTEXT}}") {
-		t.Error("PROJECT_CONTEXT placeholder not replaced")
-	}
-	if contains(content, "{{ACCESS_RULES}}") {
-		t.Error("ACCESS_RULES placeholder not replaced")
-	}
-
-	// Verify actual values are present
-	if !contains(content, agentID) {
-		t.Error("Agent ID not in prompt")
-	}
-	if !contains(content, projectName) {
-		t.Error("Project name not in prompt")
-	}
-	if !contains(content, projectPath) {
-		t.Error("Project path not in prompt")
-	}
-}
-
-// TestCreateSystemPromptWithCustomPromptFile tests using custom prompt file
-func TestCreateSystemPromptWithCustomPromptFile(t *testing.T) {
-	basePath := t.TempDir()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", nil)
-
-	// Create prompts directory and custom template
-	promptsDir := filepath.Join(basePath, "configs", "prompts")
-	os.MkdirAll(promptsDir, 0755)
-
-	customContent := "# Custom Prompt for {{AGENT_ID}}"
-	customPath := filepath.Join(promptsDir, "custom-prompt.md")
-	os.WriteFile(customPath, []byte(customContent), 0644)
-
-	config := types.AgentConfig{
-		Name:       "CustomAgent",
-		Model:      "claude-opus-4-5",
-		Role:       types.RoleCodeAuditor,
-		Color:      "#bb66ff",
-		PromptFile: "custom-prompt.md", // Override default
-	}
-
-	agentID := "team-custom001"
-	promptPath, err := spawner.createSystemPrompt(agentID, config, basePath, "TestProject")
-	if err != nil {
-		t.Fatalf("createSystemPrompt with custom file failed: %v", err)
-	}
-
-	// Read and verify it used the custom template
-	data, err := os.ReadFile(promptPath)
-	if err != nil {
-		t.Fatalf("Failed to read prompt: %v", err)
-	}
-
-	content := string(data)
-	if !contains(content, "Custom Prompt for") {
-		t.Error("Should have used custom prompt template")
-	}
-	if !contains(content, agentID) {
-		t.Error("Agent ID not replaced in custom prompt")
-	}
-}
-
 // TestIsAgentRunning tests process running detection
 func TestIsAgentRunning(t *testing.T) {
 	spawner := NewSpawner(t.TempDir(), "http://localhost:3000/mcp/sse", nil)
@@ -849,50 +695,6 @@ func TestKillHeartbeatFromPIDFile(t *testing.T) {
 	// Verify file was cleaned up
 	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
 		t.Error("Heartbeat PID file should be removed")
-	}
-}
-
-// TestSpawnSupervisor tests supervisor spawning (mock test)
-func TestSpawnSupervisor(t *testing.T) {
-	basePath := t.TempDir()
-	db := newTestDB(t)
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", db)
-
-	// Create necessary directories
-	os.MkdirAll(filepath.Join(basePath, "configs", "prompts"), 0755)
-	os.MkdirAll(filepath.Join(basePath, "configs", "mcp"), 0755)
-	os.MkdirAll(filepath.Join(basePath, "scripts"), 0755)
-
-	// Create dummy prompt template
-	promptPath := filepath.Join(basePath, "configs", "prompts", "supervisor.md")
-	os.WriteFile(promptPath, []byte("# Supervisor {{AGENT_ID}}"), 0644)
-
-	// Create dummy launcher script (needed for SpawnAgent)
-	scriptPath := filepath.Join(basePath, "scripts", "agent-launcher.ps1")
-	os.WriteFile(scriptPath, []byte("# Mock launcher"), 0644)
-
-	config := types.AgentConfig{
-		Name:  "Supervisor",
-		Model: "claude-opus-4-5",
-		Role:  types.RoleSupervisor,
-		Color: "#ffd700",
-	}
-
-	// Note: This will fail to actually spawn because we're not on Windows with PowerShell,
-	// but we can test the setup logic
-	_, err := spawner.SpawnSupervisor(config)
-
-	// We expect this to fail in test environment (no PowerShell), but config should be created
-	if err == nil {
-		t.Log("SpawnSupervisor succeeded (unexpected in test environment)")
-	} else {
-		t.Logf("SpawnSupervisor failed as expected in test: %v", err)
-	}
-
-	// Verify MCP config was created
-	mcpConfig := filepath.Join(basePath, "configs", "mcp", "Supervisor-mcp.json")
-	if _, err := os.Stat(mcpConfig); os.IsNotExist(err) {
-		t.Error("MCP config should be created for supervisor")
 	}
 }
 

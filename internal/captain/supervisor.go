@@ -221,7 +221,7 @@ func (s *CaptainSupervisor) createCaptainMCPConfig() (string, error) {
 	return configPath, nil
 }
 
-// spawnCaptain launches the Captain in a new Windows Terminal
+// spawnCaptain launches the Captain in a new WezTerm window
 func (s *CaptainSupervisor) spawnCaptain() error {
 	// Build Captain system prompt
 	captainPrompt := s.buildCaptainPrompt()
@@ -287,18 +287,17 @@ claude --model claude-opus-4-5-20251101 --mcp-config '%s' --dangerously-skip-per
 		return fmt.Errorf("failed to write launcher script: %w", err)
 	}
 
-	// Spawn in Windows Terminal using PowerShell
-	cmd := exec.Command("wt", "new-tab",
-		"--title", "CLIAIMONITOR Captain",
-		"--tabColor", "#ffd700",
-		"-d", s.basePath,
-		"powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", launcherFile)
+	// Spawn in WezTerm using PowerShell
+	cmd := exec.Command("wezterm.exe", "start", "--always-new-process",
+		"--class", "CLIAIMONITOR",
+		"--cwd", s.basePath,
+		"--", "powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", launcherFile)
 
 	if err := cmd.Start(); err != nil {
 		s.mu.Lock()
 		s.status = StatusCrashed
 		s.mu.Unlock()
-		return fmt.Errorf("failed to spawn captain terminal: %w", err)
+		return fmt.Errorf("failed to spawn captain in WezTerm: %w", err)
 	}
 
 	s.mu.Lock()
@@ -336,7 +335,7 @@ func (s *CaptainSupervisor) monitorCaptain(cmd *exec.Cmd) {
 	// Handle based on exit code
 	if exitCode == 0 {
 		// Check if process ran long enough to be a real Captain exit
-		// wt.exe (Windows Terminal launcher) exits immediately with code 0
+		// wezterm.exe launcher exits immediately with code 0 when using --always-new-process
 		// A real Captain session would run for at least 5 seconds
 		runtime := time.Since(s.startTime)
 		if runtime < 5*time.Second {
@@ -345,7 +344,7 @@ func (s *CaptainSupervisor) monitorCaptain(cmd *exec.Cmd) {
 			s.captainPID = 0         // We don't have the real PID
 			s.captainCmd = nil       // Can't track the real process
 			s.mu.Unlock()
-			fmt.Printf("Windows Terminal launcher exited (runtime: %v) - Captain running in separate terminal\n", runtime)
+			fmt.Printf("WezTerm launcher exited (runtime: %v) - Captain running in separate terminal\n", runtime)
 			return
 		}
 
