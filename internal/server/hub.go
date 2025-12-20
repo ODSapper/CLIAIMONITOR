@@ -29,6 +29,7 @@ type Hub struct {
 	register   chan *Client
 	unregister chan *Client
 	broadcast  chan []byte
+	shutdown   chan struct{} // Shutdown signal channel
 }
 
 // NewHub creates a new WebSocket hub
@@ -38,6 +39,7 @@ func NewHub() *Hub {
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		broadcast:  make(chan []byte, WebSocketBufferSize),
+		shutdown:   make(chan struct{}),
 	}
 }
 
@@ -45,6 +47,20 @@ func NewHub() *Hub {
 func (h *Hub) Run() {
 	for {
 		select {
+		case <-h.shutdown:
+			// Shutdown: close all client channels and cleanup
+			h.mu.Lock()
+			for client := range h.clients {
+				close(client.send)
+				delete(h.clients, client)
+			}
+			h.mu.Unlock()
+			// Close hub channels to prevent goroutine leaks
+			close(h.register)
+			close(h.unregister)
+			close(h.broadcast)
+			return
+
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
@@ -145,6 +161,11 @@ func (h *Hub) ClientCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.clients)
+}
+
+// Shutdown gracefully shuts down the hub and closes all channels
+func (h *Hub) Shutdown() {
+	close(h.shutdown)
 }
 
 // readPump reads messages from the WebSocket

@@ -1983,6 +1983,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		log.Printf("[NATS] Server shutdown complete")
 	}
 
+	// Shutdown WebSocket hub to close all channels properly
+	if s.hub != nil {
+		s.hub.Shutdown()
+		log.Printf("[HUB] WebSocket hub shutdown complete")
+	}
+
 	// Save state
 	s.store.Save()
 

@@ -119,11 +119,21 @@ func (p *PresenceTracker) Stop() {
 }
 
 // monitorStaleAgents runs in the background and checks for agents that haven't been seen in 2 minutes
+// NOTE: Only marks agents as disconnected if they are in an idle state (connected, idle).
+// Agents that are actively working (working, blocked, etc.) are NOT marked stale.
 func (p *PresenceTracker) monitorStaleAgents() {
 	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
 	defer ticker.Stop()
 
 	const staleThreshold = 2 * time.Minute
+
+	// Active states that should NOT be marked as disconnected due to stale presence
+	activeStates := map[string]bool{
+		"working":     true,
+		"blocked":     true,
+		"in_progress": true,
+		"starting":    true,
+	}
 
 	for {
 		select {
@@ -134,6 +144,19 @@ func (p *PresenceTracker) monitorStaleAgents() {
 			now := time.Now()
 			for agentID, lastSeen := range p.lastSeen {
 				if now.Sub(lastSeen) > staleThreshold {
+					// Check current agent status before marking as disconnected
+					state := p.server.store.GetState()
+					if agent, ok := state.Agents[agentID]; ok {
+						if activeStates[string(agent.Status)] {
+							// Agent is actively working, don't mark as disconnected
+							log.Printf("[PRESENCE] Agent %s stale but status is '%s' - keeping active",
+								agentID, agent.Status)
+							// Update lastSeen to prevent repeated logs
+							p.lastSeen[agentID] = now
+							continue
+						}
+					}
+
 					log.Printf("[PRESENCE] Agent %s is stale (last seen: %v ago), marking as disconnected",
 						agentID, now.Sub(lastSeen))
 
