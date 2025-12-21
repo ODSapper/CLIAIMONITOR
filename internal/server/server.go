@@ -19,7 +19,6 @@ import (
 	"github.com/CLIAIMONITOR/internal/mcp"
 	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/metrics"
-	natslib "github.com/CLIAIMONITOR/internal/nats"
 	"github.com/CLIAIMONITOR/internal/notifications"
 	"github.com/CLIAIMONITOR/internal/notifications/external"
 	"github.com/CLIAIMONITOR/internal/persistence"
@@ -66,12 +65,7 @@ type Server struct {
 	eventStore   *events.SQLiteStore
 	notifyRouter *notifications.Router
 
-	// NATS messaging
-	natsServer      *natslib.EmbeddedServer
-	natsClient      *natslib.Client
-	natsBridge      *NATSBridge
-	streamManager   *natslib.StreamManager
-	presenceTracker *PresenceTracker
+	// Removed NATS fields
 
 	// Instance metadata
 	port      int
@@ -139,38 +133,7 @@ func NewServer(
 	// Initialize Captain orchestrator
 	cap := captain.NewCaptain(basePath, spawner, memDB, agentConfigs)
 
-	// Initialize embedded NATS server
-	natsConfig := natslib.EmbeddedServerConfig{
-		Port:          4222,
-		WebSocketPort: 4223, // Enable WebSocket on port 4223
-		JetStream:     true,
-		DataDir:       filepath.Join(basePath, "data", "nats"),
-	}
-	natsServer, err := natslib.NewEmbeddedServer(natsConfig)
-	if err != nil {
-		log.Printf("[NATS] Warning: Failed to create NATS server: %v", err)
-	} else {
-		if err := natsServer.Start(); err != nil {
-			log.Printf("[NATS] Warning: Failed to start NATS server: %v", err)
-		} else {
-			log.Printf("[NATS] Embedded server started on %s", natsServer.URL())
-			if wsURL := natsServer.WebSocketURL(); wsURL != "" {
-				log.Printf("[NATS] WebSocket available at %s", wsURL)
-			}
-		}
-	}
-
-	// Create NATS client with "server" as client ID
-	var natsClient *natslib.Client
-	if natsServer != nil && natsServer.IsRunning() {
-		client, err := natslib.NewClient(natsServer.URL(), "server")
-		if err != nil {
-			log.Printf("[NATS] Warning: Failed to create client: %v", err)
-		} else {
-			natsClient = client
-			log.Printf("[NATS] Client connected as 'server'")
-		}
-	}
+	// Removed NATS server initialization
 
 	s := &Server{
 		hub:            NewHub(),
@@ -189,37 +152,9 @@ func NewServer(
 		startTime:      time.Now(),
 		stopChan:       make(chan struct{}),
 		ShutdownChan:   make(chan struct{}),
-		natsServer:     natsServer,
-		natsClient:     natsClient,
-		natsBridge:     nil, // initialized after struct creation
 	}
 
-	// Initialize NATS bridge for message handling
-	if s.natsClient != nil {
-		s.natsBridge = NewNATSBridge(s, s.natsClient)
-
-		// Initialize JetStream streams for chat/presence
-		streamMgr, err := natslib.NewStreamManager(s.natsClient.RawConn())
-		if err != nil {
-			log.Printf("[NATS] Warning: Failed to create stream manager: %v", err)
-		} else {
-			s.streamManager = streamMgr
-			if err := s.streamManager.SetupStreams(); err != nil {
-				log.Printf("[NATS] Warning: Failed to setup JetStream streams: %v", err)
-			} else {
-				log.Printf("[NATS] JetStream streams initialized (CHAT, PRESENCE, COMMANDS)")
-			}
-		}
-
-		// Initialize presence tracker
-		s.presenceTracker = NewPresenceTracker(s.natsClient.RawConn(), s)
-		log.Printf("[NATS] Presence tracker initialized")
-	}
-
-	// Pass NATS URL to spawner
-	if s.natsServer != nil && s.natsServer.IsRunning() {
-		s.spawner.SetNATSURL(s.natsServer.URL())
-	}
+	// Removed NATS initialization code
 
 	// Seed default prompts from files if DB is empty
 	if s.memDB != nil {
@@ -481,7 +416,6 @@ func (s *Server) setupRoutes() {
 	// Escalation & Captain Control endpoints
 	api.HandleFunc("/escalation/{id}/respond", s.handleSubmitEscalationResponse).Methods("POST")
 	api.HandleFunc("/captain/command", s.handleSendCaptainCommand).Methods("POST")
-	api.HandleFunc("/nats/status", s.handleGetNATSStatus).Methods("GET")
 
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
@@ -1828,17 +1762,6 @@ func (s *Server) setupMCPCallbacks() {
 	// Set connection callbacks
 	s.mcp.SetConnectionCallbacks(
 		func(agentID string) {
-			// Agent connected via SSE - publish to NATS presence
-			if s.natsClient != nil {
-				presenceSubject := fmt.Sprintf("presence.online.%s", agentID)
-				if err := s.natsClient.Publish(presenceSubject, []byte(`{"status":"online"}`)); err != nil {
-					log.Printf("[MCP] Warning: Failed to publish presence.online for %s: %v", agentID, err)
-				} else {
-					log.Printf("[MCP] Published presence.online.%s to NATS", agentID)
-				}
-			}
-
-			// Also update directly (for non-NATS fallback)
 			if err := s.atomicAgentUpdate(agentID, "connected", ""); err != nil {
 				log.Printf("[MCP] ERROR: Failed to mark agent %s as connected: %v", agentID, err)
 			}
@@ -1846,16 +1769,6 @@ func (s *Server) setupMCPCallbacks() {
 			s.broadcastState()
 		},
 		func(agentID string) {
-			// Agent SSE connection closed - publish to NATS presence
-			if s.natsClient != nil {
-				presenceSubject := fmt.Sprintf("presence.offline.%s", agentID)
-				if err := s.natsClient.Publish(presenceSubject, []byte(`{"status":"offline"}`)); err != nil {
-					log.Printf("[MCP] Warning: Failed to publish presence.offline for %s: %v", agentID, err)
-				} else {
-					log.Printf("[MCP] Published presence.offline.%s to NATS", agentID)
-				}
-			}
-
 			log.Printf("[MCP] Agent %s SSE disconnected", agentID)
 
 			// Record the disconnect time but don't change status yet
@@ -1936,21 +1849,6 @@ func (s *Server) Start(addr string) error {
 	// Start auto-cleanup service
 	go s.cleanup.Start(s.cleanupCtx)
 
-	// Start NATS message bridge
-	if s.natsBridge != nil {
-		if err := s.natsBridge.Start(); err != nil {
-			log.Printf("[NATS] Warning: Failed to start NATS bridge: %v", err)
-		} else {
-			log.Printf("[NATS] Bridge started, processing messages")
-		}
-	}
-
-	// Start presence tracker for agent online/offline detection
-	if s.presenceTracker != nil {
-		s.presenceTracker.Start()
-		log.Printf("[NATS] Presence tracker started")
-	}
-
 	fmt.Printf("Dashboard ready at http://localhost%s\n", addr)
 	return s.httpServer.ListenAndServe()
 }
@@ -1964,24 +1862,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		s.cleanupCancel()
 	}
 
-	// Stop presence tracker
-	if s.presenceTracker != nil {
-		s.presenceTracker.Stop()
-	}
-
-	// Stop NATS bridge
-	if s.natsBridge != nil {
-		s.natsBridge.Stop()
-	}
-
-	// Shutdown NATS
-	if s.natsClient != nil {
-		s.natsClient.Close()
-	}
-	if s.natsServer != nil {
-		s.natsServer.Shutdown()
-		log.Printf("[NATS] Server shutdown complete")
-	}
+	// Removed NATS-related shutdown code
 
 	// Shutdown WebSocket hub to close all channels properly
 	if s.hub != nil {
