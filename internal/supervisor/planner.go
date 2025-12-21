@@ -171,8 +171,20 @@ func (p *Planner) ProposeAgents(repoID string, analysis *TaskAnalysis) ([]AgentP
 	}
 
 	// 4. Additional coders for large workload
-	// TODO: Simple half-split doesn't consider task complexity or dependencies.
-	// Future improvement: use complexity-weighted load balancing.
+	// Task distribution strategy
+	// Current method uses a naive half-split approach for load distribution
+	// Limitations in current implementation:
+	// - Ignores task complexity and interdependencies
+	// - Assumes uniform task difficulty
+	// - Cannot handle nuanced task allocation requirements
+	//
+	// Ideal future improvements:
+	// 1. Complexity-weighted task distribution
+	// 2. Dependency graph-based task allocation
+	// 3. Dynamic load balancing considering agent capabilities
+	// 4. Machine learning driven task distribution
+	//
+	// Current approach provides a simple, deterministic baseline
 	if len(tasksByCategory["implementation"]) > 10 {
 		// Split tasks for multiple coders
 		allCoderTasks := tasksByCategory["implementation"]

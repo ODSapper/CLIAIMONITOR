@@ -14,7 +14,7 @@ import (
 
 // ToolCallbacks interface for tool handlers to call back into services
 type ToolCallbacks struct {
-	OnRegisterAgent          func(agentID, role string) (interface{}, error)
+	OnRegisterAgent          func(agentID, role string, paneID int) (interface{}, error)
 	OnReportStatus           func(agentID, status, task string) (interface{}, error)
 	OnReportMetrics          func(agentID string, metrics *types.AgentMetrics) (interface{}, error)
 	OnRequestHumanInput      func(req *types.HumanInputRequest) (interface{}, error)
@@ -99,10 +99,15 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 		Parameters: map[string]ParameterDef{
 			"agent_id": {Type: "string", Description: "The agent's unique ID", Required: true},
 			"role":     {Type: "string", Description: "The agent's role", Required: true},
+			"pane_id":  {Type: "number", Description: "WezTerm pane ID (from WEZTERM_PANE env var)", Required: false},
 		},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
 			role, _ := params["role"].(string)
-			return callbacks.OnRegisterAgent(agentID, role)
+			paneID := 0
+			if p, ok := params["pane_id"].(float64); ok {
+				paneID = int(p)
+			}
+			return callbacks.OnRegisterAgent(agentID, role, paneID)
 		},
 	})
 

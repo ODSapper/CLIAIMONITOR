@@ -434,7 +434,13 @@ func (s *Server) setupRoutes() {
 // setupMCPCallbacks wires MCP tool handlers to services
 func (s *Server) setupMCPCallbacks() {
 	callbacks := mcp.ToolCallbacks{
-		OnRegisterAgent: func(agentID, role string) (interface{}, error) {
+		OnRegisterAgent: func(agentID, role string, paneID int) (interface{}, error) {
+			// If Captain is registering with a pane ID, set it in the spawner
+			if agentID == "Captain" && paneID > 0 {
+				s.spawner.SetCaptainPaneID(paneID)
+				log.Printf("[MCP] Captain registered with pane ID %d - spawner updated", paneID)
+			}
+
 			// Check if agent exists in DB
 			var agentExists bool
 			if s.memDB != nil {

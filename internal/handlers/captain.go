@@ -658,9 +658,16 @@ func inferTaskTypeFromRequest(title, description string, needsRecon bool) captai
 
 	combined := strings.ToLower(title + " " + description)
 
-	// TODO: Task type inference using case-insensitive substring matching is fragile.
-	// Consider using explicit task type field in the request or more robust NLP.
-	// Current approach may cause false positives (e.g., "test coverage" vs "attest").
+	// Task type inference uses case-insensitive substring matching for best-effort categorization
+	// While fragile, this method provides a flexible way to classify tasks dynamically
+	// Current method uses keyword-based classification with a broad match strategy
+	// Known limitations:
+	// - Potential false positives due to keyword matching
+	// - No ability to handle highly context-specific or nuanced task descriptions
+	// Future improvements could include:
+	// 1. Explicit task type field in requests
+	// 2. More sophisticated NLP-based classification
+	// 3. Machine learning based task type inference
 
 	// Use similar logic to captain.inferTaskType
 	if containsAny(combined, []string{"scan", "recon", "audit", "discover"}) {

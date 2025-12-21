@@ -66,22 +66,6 @@ class Dashboard {
         }
     }
 
-    updateNATSStatus(connected) {
-        const el = document.getElementById('nats-status');
-        if (!el) {
-            console.warn('[DASHBOARD] NATS status element not found');
-            return;
-        }
-        const dot = el.querySelector('.dot');
-        if (!dot) {
-            console.warn('[DASHBOARD] NATS dot element not found');
-            return;
-        }
-        const newClass = connected ? 'dot connected' : 'dot disconnected';
-        dot.className = newClass;
-        console.log('[DASHBOARD] NATS status updated:', connected, '-> class:', newClass);
-    }
-
     updateCaptainStatus(connected, status) {
         const el = document.getElementById('captain-status');
         if (!el) {
@@ -105,7 +89,7 @@ class Dashboard {
     // WebSocket connection status (visual indicator could be added if needed)
     updateConnectionStatus(connected) {
         console.log('[DASHBOARD] WebSocket connection status:', connected);
-        // Currently just logs - status indicators show NATS/Captain status, not WebSocket
+        // Currently just logs
     }
 
     updateAgentCount(count) {
@@ -191,12 +175,10 @@ class Dashboard {
             const response = await fetch('/api/state');
             this.state = await response.json();
             console.log('[DASHBOARD] Initial state loaded:', {
-                nats_connected: this.state.nats_connected,
                 captain_connected: this.state.captain_connected,
                 captain_status: this.state.captain_status
             });
             // Explicitly update status indicators after loading state
-            this.updateNATSStatus(this.state.nats_connected || false);
             this.updateCaptainStatus(this.state.captain_connected || false, this.state.captain_status || '--');
             this.render();
         } catch (error) {

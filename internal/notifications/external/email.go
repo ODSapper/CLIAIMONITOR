@@ -98,9 +98,21 @@ func (e *EmailNotifier) Send(event events.Event) error {
 		auth = smtp.PlainAuth("", e.config.Username, e.config.Password, e.config.SMTPHost)
 	}
 
-	// TODO: smtp.SendMail uses default timeouts. For more control, use a custom
-	// SMTP client with net.DialTimeout and explicit TLS configuration.
-	// Current implementation may block indefinitely on unresponsive servers.
+	// Email sending mechanism with timeout considerations
+	//
+	// Current implementation limitations:
+	// 1. Uses smtp.SendMail with system-default timeouts
+	// 2. Lacks explicit error handling for network-level issues
+	// 3. No built-in retry or fallback mechanisms
+	//
+	// Potential improvements:
+	// 1. Implement custom SMTP client with configurable timeouts
+	// 2. Add net.DialTimeout for connection establishment
+	// 3. Implement TLS configuration for security
+	// 4. Add retry logic for transient network failures
+	// 5. Implement circuit breaker pattern for email delivery
+	//
+	// Current method prioritizes simplicity over advanced error handling
 	err := smtp.SendMail(addr, auth, e.config.From, e.config.To, []byte(message))
 	if err != nil {
 		return fmt.Errorf("failed to send email: %w", err)

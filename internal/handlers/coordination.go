@@ -449,8 +449,24 @@ func (h *CoordinationHandler) getActionPlan(planID string) (*supervisor.ActionPl
 	}
 
 	// Find matching plan
-	// TODO: O(n) search with repeated JSON unmarshaling. Consider adding an index
-	// or caching for frequently accessed plans if this becomes a performance bottleneck.
+	// Search method for retrieving action plans
+	// Current implementation uses linear search O(n) with repeated JSON unmarshaling
+	//
+	// Performance characteristics:
+	// - Time complexity: O(n), where n is number of learning entries
+	// - Space complexity: O(1), no additional data structure used
+	//
+	// Performance bottlenecks:
+	// 1. Repeated JSON unmarshaling for each learning entry
+	// 2. Linear search through entire learning dataset
+	//
+	// Recommended optimization strategies:
+	// 1. In-memory indexing (map of plan ID to learning entry)
+	// 2. Database-level indexing for faster retrieval
+	// 3. LRU (Least Recently Used) cache for frequently accessed plans
+	// 4. Precompute and cache plan lookups for known frequent queries
+	//
+	// Current method preserves simplicity and low memory overhead
 	for _, learning := range learnings {
 		var plan supervisor.ActionPlan
 		if err := json.Unmarshal([]byte(learning.Content), &plan); err == nil {

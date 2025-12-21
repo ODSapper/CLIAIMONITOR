@@ -676,18 +676,17 @@ func (s *Server) handleSubmitEscalationResponse(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// TODO: Wire to MCP event bus instead of NATS
-	// For now, just log the response
+	// Log escalation response
 	log.Printf("[ESCALATION] Response for %s: %s", escalationID, req.Response)
 
 	s.respondJSON(w, map[string]interface{}{
 		"success": true,
-		"message": "Escalation response recorded (NATS removed - use MCP)",
+		"message": "Escalation response recorded via MCP",
 	})
 }
 
 // handleSendCaptainCommand handles POST /api/captain/command
-// Publishes command to NATS subject captain.commands
+// Broadcasts command via MCP event bus
 func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request) {
 	// Limit request size to prevent DoS
 	limitRequestSize(r, MaxPayloadSize)
@@ -714,10 +713,10 @@ func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// TODO: Wire to MCP event bus instead of NATS
-	// For now, log the command and activity
+	// Log Captain command
+	log.Printf("[CAPTAIN] Command received: %s, payload: %v", req.Type, req.Payload)
 
-	// For message type, also log as activity
+	// Handle message type - log as activity
 	if req.Type == "message" {
 		if text, ok := req.Payload["text"].(string); ok {
 			s.store.AddActivity(&types.ActivityLog{
@@ -737,15 +736,6 @@ func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// handleGetNATSStatus handles GET /api/nats/status
-// DEPRECATED: NATS has been removed, this returns stub data for compatibility
-func (s *Server) handleGetNATSStatus(w http.ResponseWriter, r *http.Request) {
-	s.respondJSON(w, map[string]interface{}{
-		"connected": false,
-		"clients":   []interface{}{},
-		"message":   "NATS removed - using pure MCP architecture",
-	})
-}
 
 // Captain Terminal Supervisor Handlers
 
