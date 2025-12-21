@@ -212,15 +212,9 @@ func NewServer(
 		s.spawner.SetMemoryDB(s.memDB)
 	}
 
-	// Initialize NATS connection status in store
-	if s.natsServer != nil && s.natsServer.IsRunning() {
-		s.store.SetNATSConnected(true)
-		s.store.SetCaptainConnected(true) // Captain available when NATS is up
-		log.Printf("[CAPTAIN] Captain connected (NATS available)")
-	} else {
-		s.store.SetNATSConnected(false)
-		s.store.SetCaptainConnected(false)
-	}
+	// Initialize connection status in store (SSE-based, no NATS)
+	s.store.SetNATSConnected(false) // NATS removed - using pure MCP
+	s.store.SetCaptainConnected(false) // Will be set true when Captain registers via MCP
 
 	// Initialize task system
 	s.taskQueue = tasks.NewQueue()

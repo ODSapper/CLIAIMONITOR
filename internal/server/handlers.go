@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/agents"
-	natslib "github.com/CLIAIMONITOR/internal/nats"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -433,11 +433,8 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Check NATS connection
+	// NATS removed - using pure MCP
 	natsConnected := false
-	if s.natsClient != nil {
-		natsConnected = s.natsClient.IsConnected()
-	}
 
 	// Check memory database health
 	memoryHealth := map[string]interface{}{
@@ -679,30 +676,13 @@ func (s *Server) handleSubmitEscalationResponse(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Check if NATS client is available
-	if s.natsClient == nil {
-		s.respondError(w, http.StatusServiceUnavailable, "NATS client not available")
-		return
-	}
-
-	// Create escalation response message
-	responseMsg := natslib.EscalationResponseMessage{
-		ID:        escalationID,
-		Response:  req.Response,
-		From:      "human",
-		Timestamp: time.Now(),
-	}
-
-	// Publish to escalation.response.{id} subject
-	subject := fmt.Sprintf(natslib.SubjectEscalationResponse, escalationID)
-	if err := s.natsClient.PublishJSON(subject, responseMsg); err != nil {
-		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to publish response: %v", err))
-		return
-	}
+	// TODO: Wire to MCP event bus instead of NATS
+	// For now, just log the response
+	log.Printf("[ESCALATION] Response for %s: %s", escalationID, req.Response)
 
 	s.respondJSON(w, map[string]interface{}{
 		"success": true,
-		"message": "Response published to NATS",
+		"message": "Escalation response recorded (NATS removed - use MCP)",
 	})
 }
 
@@ -734,24 +714,8 @@ func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check if NATS client is available
-	if s.natsClient == nil {
-		s.respondError(w, http.StatusServiceUnavailable, "NATS client not available")
-		return
-	}
-
-	// Create captain command message
-	commandMsg := natslib.CaptainCommandMessage{
-		Type:    req.Type,
-		Payload: req.Payload,
-		From:    "human",
-	}
-
-	// Publish to captain.commands subject
-	if err := s.natsClient.PublishJSON(natslib.SubjectCaptainCommands, commandMsg); err != nil {
-		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to publish command: %v", err))
-		return
-	}
+	// TODO: Wire to MCP event bus instead of NATS
+	// For now, log the command and activity
 
 	// For message type, also log as activity
 	if req.Type == "message" {
@@ -774,21 +738,12 @@ func (s *Server) handleSendCaptainCommand(w http.ResponseWriter, r *http.Request
 }
 
 // handleGetNATSStatus handles GET /api/nats/status
-// Returns NATS connection status and list of connected clients
+// DEPRECATED: NATS has been removed, this returns stub data for compatibility
 func (s *Server) handleGetNATSStatus(w http.ResponseWriter, r *http.Request) {
-	connected := false
-	var clients []natslib.ClientInfo
-
-	// Check if NATS server is running
-	if s.natsServer != nil && s.natsServer.IsRunning() {
-		connected = true
-		// Get connected clients
-		clients = s.natsServer.GetConnectedClients()
-	}
-
 	s.respondJSON(w, map[string]interface{}{
-		"connected": connected,
-		"clients":   clients,
+		"connected": false,
+		"clients":   []interface{}{},
+		"message":   "NATS removed - using pure MCP architecture",
 	})
 }
 
@@ -1010,10 +965,8 @@ func (s *Server) handleGetMetricsByAgent(w http.ResponseWriter, r *http.Request)
 
 // handleCaptainHealth returns Captain health status
 func (s *Server) handleCaptainHealth(w http.ResponseWriter, r *http.Request) {
+	// NATS removed - using pure MCP
 	natsConnected := false
-	if s.natsClient != nil {
-		natsConnected = s.natsClient.IsConnected()
-	}
 
 	// Check memory database health
 	memoryConnected := false
