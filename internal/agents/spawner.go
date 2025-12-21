@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/CLIAIMONITOR/internal/instance"
 	"github.com/CLIAIMONITOR/internal/memory"
@@ -204,36 +205,46 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	var paneID int
 
 	if _, err := exec.LookPath("wezterm.exe"); err == nil {
-		// Try using wezterm cli spawn to get pane ID
-		// This requires a running mux server but gives us the pane ID
-		cmd = exec.Command("wezterm.exe", "cli", "spawn", "--new-window", "--cwd", projectPath, "--",
-			"cmd.exe", "/k", cmdChain)
+		// Step 1: Split pane with cmd.exe (spawns in current window, not new window)
+		// Using --right to split horizontally; command chaining via /k doesn't work reliably
+		cmd = exec.Command("wezterm.exe", "cli", "split-pane", "--right", "--cwd", projectPath, "--", "cmd.exe")
 
 		// Set NATS_CLIENT_ID environment variable for the agent process
 		cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
 
 		output, err := cmd.Output()
 		if err != nil {
-			// Fallback: Use wezterm start if cli spawn fails (no mux server)
-			log.Printf("[SPAWNER] wezterm cli spawn failed, falling back to wezterm start: %v", err)
-			cmd = exec.Command("wezterm.exe", "start", "--always-new-process", "--cwd", projectPath, "--",
-				"cmd.exe", "/k", cmdChain)
+			// Fallback: Try spawn --new-window if split-pane fails
+			log.Printf("[SPAWNER] wezterm cli split-pane failed, trying spawn: %v", err)
+			cmd = exec.Command("wezterm.exe", "cli", "spawn", "--cwd", projectPath, "--", "cmd.exe")
 			cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
 
-			if err := cmd.Start(); err != nil {
-				return 0, fmt.Errorf("failed to start agent in WezTerm: %w", err)
+			output, err = cmd.Output()
+			if err != nil {
+				return 0, fmt.Errorf("failed to spawn agent pane in WezTerm: %w", err)
 			}
-			paneID = -1 // No pane ID available with wezterm start
-		} else {
-			// Successfully got pane ID from wezterm cli spawn
-			paneIDStr := strings.TrimSpace(string(output))
-			if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
-				paneID = parsedID
-				log.Printf("[SPAWNER] Agent %s spawned in pane %d", agentID, paneID)
+		}
+
+		// Parse pane ID from output (works for both split-pane and spawn)
+		paneIDStr := strings.TrimSpace(string(output))
+		if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
+			paneID = parsedID
+			log.Printf("[SPAWNER] Agent %s spawned in pane %d", agentID, paneID)
+
+			// Step 2: Send command chain via send-text with --no-paste and \r\n to execute
+			// Small delay to let the cmd.exe prompt appear
+			time.Sleep(500 * time.Millisecond)
+
+			sendCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
+			sendCmd.Stdin = strings.NewReader(cmdChain + "\r\n")
+			if sendErr := sendCmd.Run(); sendErr != nil {
+				log.Printf("[SPAWNER] Warning: Failed to send command to pane %d: %v", paneID, sendErr)
 			} else {
-				log.Printf("[SPAWNER] Warning: Could not parse pane ID from output: %s", paneIDStr)
-				paneID = -1
+				log.Printf("[SPAWNER] Command chain sent to pane %d", paneID)
 			}
+		} else {
+			log.Printf("[SPAWNER] Warning: Could not parse pane ID from output: %s", paneIDStr)
+			paneID = -1
 		}
 	} else {
 		return 0, fmt.Errorf("WezTerm not found in PATH - required for agent spawning")

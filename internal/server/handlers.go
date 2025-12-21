@@ -198,9 +198,12 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build initial prompt - agent should register via MCP and start working
+	// Use the MCP server name that was configured for this agent
+	mcpServerName := fmt.Sprintf("cliaimonitor-%s", agentID)
 	mcpInstructions := fmt.Sprintf(
-		"You are agent '%s' with role '%s'. First, call mcp__cliaimonitor__register_agent with agent_id='%s' and role='%s' to register with the dashboard. ",
-		agentID, agentConfig.Role, agentID, agentConfig.Role)
+		"You are agent '%s' with role '%s'. You have an MCP server '%s' connected. "+
+			"Use the register_agent tool (from that server) with agent_id='%s' and role='%s' to register. ",
+		agentID, agentConfig.Role, mcpServerName, agentID, agentConfig.Role)
 
 	initialPrompt := ""
 	if req.Task != "" {
@@ -208,7 +211,7 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("TASK: %s. Work autonomously. Do NOT ask clarifying questions.", req.Task)
 	} else {
 		initialPrompt = mcpInstructions +
-			"Then wait for instructions. Work autonomously."
+			"Then report_status with status='idle' and wait for instructions via wait_for_events tool."
 	}
 
 	// Spawn agent with initial prompt

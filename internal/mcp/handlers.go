@@ -1664,16 +1664,29 @@ func registerWezTermTools(s *Server) {
 				Description: "Text or command to send to the pane",
 				Required:    true,
 			},
+			"execute": {
+				Type:        "boolean",
+				Description: "If true, append Enter key (CR+LF) to execute the command. Default: false",
+				Required:    false,
+			},
 		},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
 			paneID, _ := params["pane_id"].(string)
 			text, _ := params["text"].(string)
+			execute, _ := params["execute"].(bool)
 
 			if paneID == "" || text == "" {
 				return map[string]interface{}{"error": "pane_id and text are required"}, nil
 			}
 
-			cmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneID, "--", text)
+			// Append CR+LF if execute is true
+			if execute {
+				text = text + "\r\n"
+			}
+
+			// Use --no-paste for direct text input and pass via stdin for special char handling
+			cmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneID, "--no-paste")
+			cmd.Stdin = strings.NewReader(text)
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				return map[string]interface{}{
@@ -1684,6 +1697,7 @@ func registerWezTermTools(s *Server) {
 
 			return map[string]interface{}{
 				"success": true,
+				"executed": execute,
 			}, nil
 		},
 	})
@@ -1750,6 +1764,65 @@ func registerWezTermTools(s *Server) {
 
 			return map[string]interface{}{
 				"success": true,
+			}, nil
+		},
+	})
+
+	// wezterm_get_text - Read text content from a pane
+	s.RegisterTool(ToolDefinition{
+		Name:        "wezterm_get_text",
+		Description: "Read the text content of a WezTerm pane. Useful for seeing what's displayed in agent terminals.",
+		Parameters: map[string]ParameterDef{
+			"pane_id": {
+				Type:        "string",
+				Description: "Pane ID to read from",
+				Required:    true,
+			},
+			"start_line": {
+				Type:        "number",
+				Description: "Starting line number (0 = first line of screen, negative = scrollback). Default: -50",
+				Required:    false,
+			},
+			"end_line": {
+				Type:        "number",
+				Description: "Ending line number. Default: bottom of screen",
+				Required:    false,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			paneID, _ := params["pane_id"].(string)
+
+			if paneID == "" {
+				return map[string]interface{}{"error": "pane_id is required"}, nil
+			}
+
+			args := []string{"cli", "get-text", "--pane-id", paneID}
+
+			// Add optional line range
+			if startLine, ok := params["start_line"].(float64); ok {
+				args = append(args, "--start-line", fmt.Sprintf("%d", int(startLine)))
+			} else {
+				// Default to last 50 lines of scrollback
+				args = append(args, "--start-line", "-50")
+			}
+
+			if endLine, ok := params["end_line"].(float64); ok {
+				args = append(args, "--end-line", fmt.Sprintf("%d", int(endLine)))
+			}
+
+			cmd := exec.Command("wezterm.exe", args...)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to get pane text: %v, output: %s", err, string(output)),
+				}, nil
+			}
+
+			return map[string]interface{}{
+				"success": true,
+				"text":    string(output),
+				"pane_id": paneID,
 			}, nil
 		},
 	})
