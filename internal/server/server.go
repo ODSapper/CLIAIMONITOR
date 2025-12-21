@@ -435,32 +435,48 @@ func (s *Server) setupRoutes() {
 func (s *Server) setupMCPCallbacks() {
 	callbacks := mcp.ToolCallbacks{
 		OnRegisterAgent: func(agentID, role string) (interface{}, error) {
-			// Two-phase registration: validate transition from pending -> connected
-			// Phase 1: Spawner creates record with "pending" status
-			// Phase 2: Agent calls register_agent via MCP to become "connected"
-
-			// Check if agent exists and is in pending state
+			// Check if agent exists in DB
+			var agentExists bool
 			if s.memDB != nil {
 				agent, err := s.memDB.GetAgent(agentID)
 				if err != nil {
 					log.Printf("[MCP] Warning: Could not check agent %s status: %v", agentID, err)
-					// Allow registration anyway - agent may have been created differently
-				} else if agent != nil {
-					if agent.Status != "pending" && agent.Status != "starting" && agent.Status != "disconnected" {
-						log.Printf("[MCP] Agent %s transitioning from '%s' to 'connected'", agentID, agent.Status)
-					} else {
-						log.Printf("[MCP] Two-phase registration: Agent %s transitioning from '%s' to 'connected'", agentID, agent.Status)
-					}
+				}
+				agentExists = (agent != nil)
+				if agentExists {
+					log.Printf("[MCP] Agent %s transitioning from '%s' to 'connected'", agentID, agent.Status)
 				}
 			}
 
-			// Use atomic update to keep stores in sync
-			if err := s.atomicAgentUpdate(agentID, "connected", ""); err != nil {
-				log.Printf("[MCP] ERROR: Failed to register agent %s: %v", agentID, err)
-				return nil, fmt.Errorf("registration failed: %w", err)
+			// If agent doesn't exist, create it first (handles Captain and direct registrations)
+			if !agentExists && s.memDB != nil {
+				now := time.Now()
+				agentControl := &memory.AgentControl{
+					AgentID:     agentID,
+					Role:        role,
+					Status:      "connected",
+					HeartbeatAt: &now,
+				}
+				if err := s.memDB.RegisterAgent(agentControl); err != nil {
+					log.Printf("[MCP] ERROR: Failed to create agent %s: %v", agentID, err)
+					return nil, fmt.Errorf("registration failed: %w", err)
+				}
+				log.Printf("[MCP] Agent %s created and registered (connected)", agentID)
+			} else {
+				// Agent exists, use atomic update to transition to connected
+				if err := s.atomicAgentUpdate(agentID, "connected", ""); err != nil {
+					log.Printf("[MCP] ERROR: Failed to register agent %s: %v", agentID, err)
+					return nil, fmt.Errorf("registration failed: %w", err)
+				}
+				log.Printf("[MCP] Agent %s registered successfully (connected)", agentID)
 			}
 
-			log.Printf("[MCP] Agent %s registered successfully (connected)", agentID)
+			// Update in-memory store
+			s.store.UpdateAgent(agentID, func(a *types.Agent) {
+				a.Status = types.StatusConnected
+				a.LastSeen = time.Now()
+			})
+
 			s.broadcastState()
 			return map[string]string{"status": "registered"}, nil
 		},

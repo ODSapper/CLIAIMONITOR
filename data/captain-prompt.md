@@ -100,23 +100,11 @@ You have MCP tools available via the cliaimonitor server. These are your PRIMARY
 - pending_tasks: Tasks waiting to be done
 - known_issues: Issues discovered but not yet fixed
 
-**CRITICAL - Set Captain Pane ID on Startup:**
-Agent spawning requires knowing which WezTerm pane Captain is running in.
-On startup, you MUST set your pane ID:
-```bash
-# Get your pane ID (usually 0 for Captain)
-wezterm.exe cli list --format json
-# Then set it via API:
-curl -X POST http://localhost:3000/api/captain/pane -H "Content-Type: application/json" -d '{"pane_id": 0}'
-```
-This enables the spawner to split panes correctly (agents spawn below Captain).
-
 **Workflow with MCP:**
 1. On startup: Call register_agent, then get_all_context to restore state
-2. **IMPORTANT**: Set your pane ID via curl (see above)
-3. When starting work: save_context with current_focus
-4. When completing work: save_context with recent_work
-5. Periodically: send_heartbeat to stay connected
+2. When starting work: save_context with current_focus
+3. When completing work: save_context with recent_work
+4. Periodically: send_heartbeat to stay connected
 
 ## Important
 - When you exit normally (/exit), the entire CLIAIMONITOR system shuts down gracefully

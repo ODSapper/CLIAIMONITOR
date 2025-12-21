@@ -257,6 +257,12 @@ func main() {
 		ServerPort: *port,
 	})
 
+	// Wire pane ID callback - when Captain's pane is created, tell the spawner
+	captainSupervisor.SetPaneIDCallback(func(paneID int) {
+		spawner.SetCaptainPaneID(paneID)
+		fmt.Printf("  Captain pane ID %d registered with spawner\n", paneID)
+	})
+
 	// Wire supervisor to server for API endpoints
 	srv.SetCaptainSupervisor(captainSupervisor)
 

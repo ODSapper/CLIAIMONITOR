@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,13 +32,14 @@ type CaptainSupervisor struct {
 	serverPort int
 
 	// Process tracking
-	captainPID int
-	captainCmd *exec.Cmd
+	captainPID    int
+	captainPaneID int // WezTerm pane ID for Captain
+	captainCmd    *exec.Cmd
 
 	// Crash loop protection
-	respawnCount  int
-	respawnWindow time.Time
-	maxRespawns   int
+	respawnCount   int
+	respawnWindow  time.Time
+	maxRespawns    int
 	windowDuration time.Duration
 
 	// State
@@ -172,6 +175,13 @@ func (s *CaptainSupervisor) ShutdownChan() <-chan struct{} {
 	return s.shutdownChan
 }
 
+// GetCaptainPaneID returns Captain's WezTerm pane ID (0 if unknown)
+func (s *CaptainSupervisor) GetCaptainPaneID() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.captainPaneID
+}
+
 // MCPConfig structure for Captain's MCP config file
 type MCPConfig struct {
 	MCPServers map[string]MCPServerConfig `json:"mcpServers"`
@@ -221,7 +231,21 @@ func (s *CaptainSupervisor) createCaptainMCPConfig() (string, error) {
 	return configPath, nil
 }
 
-// spawnCaptain launches the Captain in a new WezTerm window
+// PaneIDCallback is called when Captain's pane ID is known
+type PaneIDCallback func(paneID int)
+
+// onPaneIDReady is called when we know Captain's pane ID
+var onPaneIDReady PaneIDCallback
+
+// SetPaneIDCallback sets the callback for when Captain's pane ID is available
+func (s *CaptainSupervisor) SetPaneIDCallback(cb PaneIDCallback) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	onPaneIDReady = cb
+}
+
+// spawnCaptain launches the Captain in WezTerm
+// If already in WezTerm, splits a pane. Otherwise creates new window.
 func (s *CaptainSupervisor) spawnCaptain() error {
 	// Build Captain system prompt
 	captainPrompt := s.buildCaptainPrompt()
@@ -247,51 +271,114 @@ func (s *CaptainSupervisor) spawnCaptain() error {
 		return fmt.Errorf("failed to write captain settings: %w", err)
 	}
 
-	// Create MCP config for Captain to connect to the server
-	mcpConfigPath, err := s.createCaptainMCPConfig()
-	if err != nil {
-		return fmt.Errorf("failed to create MCP config: %w", err)
-	}
-
 	// Initial prompt - register via MCP and check infrastructure
 	initialPrompt := fmt.Sprintf("You are Captain (Orchestrator). First, call mcp__cliaimonitor__register_agent with agent_id='Captain' and role='Orchestrator' to register with the dashboard. Then call mcp__cliaimonitor__get_all_context to restore your session state. Check your monitoring infrastructure: curl http://localhost:%d/api/state", s.serverPort)
 
+	// Build the command to run Claude
+	mcpServerName := "cliaimonitor-test"
+	claudeCmd := fmt.Sprintf(
+		`title Captain && claude mcp remove %s 2>nul & claude mcp add --transport sse %s http://localhost:%d/mcp/sse --header "X-Agent-ID: Captain" --header "X-Access-Level: admin" && claude --model claude-opus-4-5-20251101 --dangerously-skip-permissions "%s"`,
+		mcpServerName,
+		mcpServerName,
+		s.serverPort,
+		initialPrompt,
+	)
+
+	var cmd *exec.Cmd
+	var captainPaneID int
+
+	// Check if we're running inside WezTerm by looking for WEZTERM_PANE env var
+	weztermPane := os.Getenv("WEZTERM_PANE")
+
+	if weztermPane != "" {
+		// We're inside WezTerm - split pane below current pane
+		fmt.Printf("[SUPERVISOR] Running inside WezTerm (pane %s), splitting for Captain\n", weztermPane)
+
+		// Split the current pane to create Captain's pane below
+		splitCmd := exec.Command("wezterm.exe", "cli", "split-pane",
+			"--bottom",
+			"--percent", "70",
+			"--cwd", s.basePath,
+			"--", "cmd.exe")
+
+		output, err := splitCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("failed to split pane for Captain: %w (output: %s)", err, string(output))
+		}
+
+		// Parse pane ID from output
+		paneIDStr := strings.TrimSpace(string(output))
+		if paneID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
+			captainPaneID = paneID
+			fmt.Printf("[SUPERVISOR] Captain pane created: %d\n", captainPaneID)
+
+			// Notify spawner of Captain's pane ID
+			if onPaneIDReady != nil {
+				onPaneIDReady(captainPaneID)
+			}
+
+			// Small delay then send the command
+			time.Sleep(500 * time.Millisecond)
+
+			// Send the claude command to the new pane
+			sendCmd := exec.Command("wezterm.exe", "cli", "send-text",
+				"--pane-id", paneIDStr,
+				"--no-paste")
+			sendCmd.Stdin = strings.NewReader(claudeCmd + "\r\n")
+			if sendErr := sendCmd.Run(); sendErr != nil {
+				fmt.Printf("[SUPERVISOR] Warning: Failed to send command to Captain pane: %v\n", sendErr)
+			}
+		} else {
+			fmt.Printf("[SUPERVISOR] Warning: Could not parse pane ID from output: %s\n", paneIDStr)
+		}
+
+		// We don't have a direct handle to the process, mark as running
+		s.mu.Lock()
+		s.captainPID = 0 // Can't track PID when using split-pane
+		s.status = StatusRunning
+		s.startTime = time.Now()
+		s.mu.Unlock()
+
+		// Store pane ID for later cleanup
+		s.mu.Lock()
+		s.captainPaneID = captainPaneID
+		s.mu.Unlock()
+
+		return nil
+	}
+
+	// Not in WezTerm - spawn a new WezTerm window
+	fmt.Println("[SUPERVISOR] Not in WezTerm, spawning new WezTerm window for Captain")
+
 	// Create launcher script with PID tracking
-	launcherScript := fmt.Sprintf(`# Set unique window title for process tracking
-$Host.UI.RawUI.WindowTitle = 'CLIAIMONITOR-Captain'
+	launcherScript := fmt.Sprintf(`@echo off
+title CLIAIMONITOR-Captain
 
-# Write PID to tracking file for reliable termination
-$pidDir = '%s\data\pids'
-if (-not (Test-Path $pidDir)) { New-Item -ItemType Directory -Path $pidDir -Force | Out-Null }
-$PID | Out-File -FilePath (Join-Path $pidDir 'Captain.pid') -Encoding ASCII -NoNewline
+echo.
+echo   ================================================
+echo     CLIAIMONITOR CAPTAIN - Orchestrator
+echo   ================================================
+echo.
+echo   Dashboard: http://localhost:%d
+echo   Project:   %s
+echo.
 
-Write-Host ''
-Write-Host '  ================================================' -ForegroundColor Yellow
-Write-Host '    CLIAIMONITOR CAPTAIN - Orchestrator' -ForegroundColor Yellow
-Write-Host '  ================================================' -ForegroundColor Yellow
-Write-Host ''
-Write-Host '  Dashboard: http://localhost:%d' -ForegroundColor Cyan
-Write-Host '  MCP:       %s' -ForegroundColor Cyan
-Write-Host '  Project:   %s' -ForegroundColor Cyan
-Write-Host "  PID:       $PID" -ForegroundColor DarkGray
-Write-Host ''
+cd /d "%s"
 
-Set-Location -Path '%s'
-
-claude --model claude-opus-4-5-20251101 --mcp-config '%s' --dangerously-skip-permissions "%s"
-`, s.basePath, s.serverPort, mcpConfigPath, s.basePath, s.basePath, mcpConfigPath, initialPrompt)
+%s
+`, s.serverPort, s.basePath, s.basePath, claudeCmd)
 
 	// Write launcher script
-	launcherFile := filepath.Join(os.TempDir(), "cliaimonitor-captain-launcher.ps1")
+	launcherFile := filepath.Join(os.TempDir(), "cliaimonitor-captain-launcher.cmd")
 	if err := os.WriteFile(launcherFile, []byte(launcherScript), 0644); err != nil {
 		return fmt.Errorf("failed to write launcher script: %w", err)
 	}
 
-	// Spawn in WezTerm using PowerShell
-	cmd := exec.Command("wezterm.exe", "start", "--always-new-process",
+	// Spawn in WezTerm
+	cmd = exec.Command("wezterm.exe", "start", "--always-new-process",
 		"--class", "CLIAIMONITOR",
 		"--cwd", s.basePath,
-		"--", "powershell.exe", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", launcherFile)
+		"--", "cmd.exe", "/c", launcherFile)
 
 	if err := cmd.Start(); err != nil {
 		s.mu.Lock()
