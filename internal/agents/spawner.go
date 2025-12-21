@@ -1,7 +1,6 @@
 package agents
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -31,7 +30,6 @@ type ProcessSpawner struct {
 	mu             sync.RWMutex
 	basePath       string // CLIAIMONITOR directory
 	mcpServerURL   string
-	natsURL        string // NATS server URL for agent connections
 	scriptsPath    string
 	configsPath    string
 	runningAgents  map[string]int // agentID -> PID
@@ -62,16 +60,6 @@ func NewSpawner(basePath string, mcpServerURL string, memDB memory.MemoryDB) *Pr
 		agentRows:       make([][]int, 0),
 		maxAgentsPerRow: 3,              // 3 agents per row
 	}
-}
-
-// SetNATSURL sets the NATS URL for agent connections
-func (s *ProcessSpawner) SetNATSURL(url string) {
-	s.natsURL = url
-}
-
-// GetNATSURL returns the configured NATS URL
-func (s *ProcessSpawner) GetNATSURL() string {
-	return s.natsURL
 }
 
 // SetMemoryDB sets the memory database for the spawner
@@ -186,89 +174,19 @@ func (s *ProcessSpawner) SetAgentPaneID(agentID string, paneID int) {
 	s.agentPanes[agentID] = paneID
 }
 
-// MCPConfig structure for agent config file
-type MCPConfig struct {
-	MCPServers map[string]MCPServerConfig `json:"mcpServers"`
-}
-
-// MCPServerConfig defines an MCP server connection
-type MCPServerConfig struct {
-	Type    string            `json:"type"`
-	URL     string            `json:"url,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	// NATS connection info
-	NATSURL string `json:"nats_url,omitempty"`
-}
-
-// createMCPConfig creates agent-specific MCP config file with project context
-func (s *ProcessSpawner) createMCPConfig(agentID string, projectPath string, accessLevel types.AccessLevel) (string, error) {
-	mcpServer := MCPServerConfig{
-		Type: "sse",
-		URL:  s.mcpServerURL,
-		Headers: map[string]string{
-			"X-Agent-ID":     agentID,
-			"X-Project-Path": projectPath,
-			"X-Access-Level": string(accessLevel),
-		},
-	}
-
-	// Add NATS URL if available
-	if s.natsURL != "" {
-		mcpServer.NATSURL = s.natsURL
-	}
-
-	config := MCPConfig{
-		MCPServers: map[string]MCPServerConfig{
-			"cliaimonitor": mcpServer,
-		},
-	}
-
-	mcpDir := filepath.Join(s.configsPath, "mcp")
-	if err := os.MkdirAll(mcpDir, 0755); err != nil {
-		return "", err
-	}
-
-	configPath := filepath.Join(mcpDir, fmt.Sprintf("%s-mcp.json", agentID))
-
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return "", err
-	}
-
-	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return "", err
-	}
-
-	return configPath, nil
-}
 
 // SpawnAgent launches a team agent in WezTerm
 func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (int, error) {
-	// Generate NATS client ID using convention: agent-{configName}-{seq}
-	// Extract sequence from agentID (e.g., "team-coder001" -> 1)
-	var seq int
-	if _, err := fmt.Sscanf(agentID, "team-%*[a-z]%d", &seq); err != nil {
-		// Fallback: use counter
-		seq = s.GetNextSequence(config.Name)
-	}
-	natsClientID := fmt.Sprintf("agent-%s-%d", strings.ToLower(config.Name), seq)
-
-	// Build inline commands for agent setup and launch
-	mcpServerName := fmt.Sprintf("cliaimonitor-%s", agentID)
-
 	// Escape the initial prompt for shell
 	escapedPrompt := strings.ReplaceAll(initialPrompt, `"`, `\"`)
 	escapedPrompt = strings.ReplaceAll(escapedPrompt, `'`, `''`)
 
-	// Build command chain: set title, configure MCP, run Claude
-	// Using cmd.exe for simplicity and avoiding PowerShell overhead
+	// Build command: set title and run Claude directly
+	// Captain controls agents via WezTerm pane commands (send-text, get-text)
+	// No per-agent MCP needed - avoids context bloat from stale MCP entries
 	cmdChain := fmt.Sprintf(
-		`title %s && claude mcp remove %s 2>nul & claude mcp add --transport sse %s http://localhost:3000/mcp/sse --header "X-Agent-ID: %s" --header "X-Project-Path: %s" && claude --model %s --dangerously-skip-permissions "%s"`,
+		`title %s && claude --model %s --dangerously-skip-permissions "%s"`,
 		agentID,
-		mcpServerName,
-		mcpServerName,
-		agentID,
-		projectPath,
 		config.Model,
 		escapedPrompt,
 	)
@@ -294,15 +212,14 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 		log.Printf("[SPAWNER] Executing: wezterm.exe cli split-pane --pane-id %d --%s --cwd %q -- cmd.exe",
 			splitPaneID, splitDirection, projectPath)
 
-		// Set NATS_CLIENT_ID environment variable for the agent process
-		cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
-
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			// Fallback: Try spawn if split-pane fails
+			// Fallback: Try spawn if split-pane fails (still specify pane-id for context)
 			log.Printf("[SPAWNER] wezterm cli split-pane failed (output: %s): %v", string(output), err)
-			cmd = exec.Command("wezterm.exe", "cli", "spawn", "--cwd", projectPath, "--", "cmd.exe")
-			cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
+			cmd = exec.Command("wezterm.exe", "cli", "spawn",
+				"--pane-id", strconv.Itoa(splitPaneID),
+				"--cwd", projectPath,
+				"--", "cmd.exe")
 
 			output, err = cmd.CombinedOutput()
 			if err != nil {
@@ -319,15 +236,13 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 			// Add to grid layout tracking
 			s.addAgentToLayout(paneID)
 
-			// Step 2: Apply colors - get colors and generate banner
+			// Step 2: Apply background color
 			colors := GetAgentColors(config.Name)
-			banner := GenerateBanner(agentID, config.Name, string(config.Role))
 
 			// Small delay to let the cmd.exe prompt appear
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(300 * time.Millisecond)
 
-			// Step 2a: Clear screen and set background tint
-			// Send raw ANSI codes directly - WezTerm interprets them natively
+			// Clear screen and set background tint
 			clearCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
 			// Clear screen + set background color + move cursor home
 			clearSeq := fmt.Sprintf("\x1b[2J\x1b[H%s", colors.BgDark)
@@ -336,16 +251,7 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 				log.Printf("[SPAWNER] Warning: Failed to clear and set background: %v", err)
 			}
 
-			// Step 2b: Send the banner directly (raw text with ANSI codes)
-			// WezTerm will interpret the escape sequences
-			bannerCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
-			bannerCmd.Stdin = strings.NewReader(banner + "\n")
-			if err := bannerCmd.Run(); err != nil {
-				log.Printf("[SPAWNER] Warning: Failed to send banner: %v", err)
-			}
-
-			// Small delay after banner display
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 
 			// Step 3: Send command chain via send-text with --no-paste and \r\n to execute
 			sendCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
@@ -384,32 +290,12 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	// Agents register themselves via MCP when they connect.
 
 	// Register in DB with "pending" status (Phase 1 of two-phase registration)
-	// Agent will transition to "connected" when it calls register_agent via MCP
-	if s.memDB != nil {
-		agentControl := &memory.AgentControl{
-			AgentID:     agentID,
-			ConfigName:  config.Name,
-			Role:        string(config.Role),
-			ProjectPath: projectPath,
-			PID:         &pid,
-			Status:      "pending", // Two-phase: pending -> connected (via MCP)
-			Model:       config.Model,
-			Color:       config.Color,
-		}
-		if err := s.memDB.RegisterAgent(agentControl); err != nil {
-			log.Printf("Warning: Failed to register agent in DB: %v", err)
-		}
-		log.Printf("[SPAWNER] Agent %s registered with 'pending' status, awaiting MCP connection", agentID)
+	// Agent will transition to "connected" when it establishes MCP SSE connection
+	log.Printf("[SPAWNER] Agent %s spawned with 'pending' status, awaiting MCP connection", agentID)
 
-		// Only spawn PowerShell heartbeat if NATS is not available
-		// NATS handles heartbeats natively via pub/sub
-		if s.natsURL == "" {
-			if err := s.spawnHeartbeatScript(agentID); err != nil {
-				log.Printf("Warning: Failed to spawn heartbeat script: %v", err)
-			}
-		} else {
-			log.Printf("[AGENT] Skipping PowerShell heartbeat - using NATS for agent %s", agentID)
-		}
+	// Spawn PowerShell heartbeat script for agent monitoring
+	if err := s.spawnHeartbeatScript(agentID); err != nil {
+		log.Printf("Warning: Failed to spawn heartbeat script: %v", err)
 	}
 
 	return pid, nil
@@ -460,14 +346,9 @@ func (s *ProcessSpawner) StopAgent(agentID string) error {
 
 // StopAgentWithReason terminates an agent process with a specific reason
 func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) error {
-	// 1. Set shutdown flag in DB (heartbeat script will see this)
-	if s.memDB != nil {
-		if err := s.memDB.SetShutdownFlag(agentID, reason); err != nil {
-			log.Printf("Warning: Failed to set shutdown flag: %v", err)
-		}
-	}
+	log.Printf("[SPAWNER] Stopping agent %s with reason: %s", agentID, reason)
 
-	// 2. Kill heartbeat script from in-memory tracking
+	// 1. Kill heartbeat script from in-memory tracking
 	s.mu.Lock()
 	if pid, ok := s.heartbeatPIDs[agentID]; ok {
 		if err := instance.KillProcess(pid); err != nil {
@@ -477,19 +358,12 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 	}
 	s.mu.Unlock()
 
-	// 3. Also kill heartbeat from PID file (spawned by launcher script)
+	// 2. Also kill heartbeat from PID file (spawned by launcher script)
 	if err := s.KillHeartbeatFromPIDFile(agentID); err != nil {
 		log.Printf("Warning: Failed to kill heartbeat from PID file: %v", err)
 	}
 
-	// 4. Mark stopped in DB
-	if s.memDB != nil {
-		if err := s.memDB.MarkStopped(agentID, reason); err != nil {
-			log.Printf("Warning: Failed to mark agent stopped: %v", err)
-		}
-	}
-
-	// 5. Remove from running agents map
+	// 3. Remove from running agents map
 	s.mu.Lock()
 	delete(s.runningAgents, agentID)
 	s.mu.Unlock()
@@ -746,3 +620,4 @@ func (s *ProcessSpawner) StopAllAgents() []error {
 	}
 	return errors
 }
+

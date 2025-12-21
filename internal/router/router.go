@@ -200,21 +200,14 @@ func (r *SkillRouter) queryOperational(query string, limit int) (*QueryResult, e
 	var items []interface{}
 
 	// Check if asking about agents
+	// NOTE: Agent queries now handled via in-memory JSONStore instead of database
+	// This section is disabled as agent_control table is removed
 	if strings.Contains(query, "agent") {
-		agents, err := r.memDB.GetAllAgents()
-		if err != nil {
-			return nil, fmt.Errorf("agent query failed: %w", err)
-		}
-		for _, a := range agents {
-			items = append(items, map[string]interface{}{
-				"type":        "agent",
-				"id":          a.AgentID,
-				"status":      a.Status,
-				"config_name": a.ConfigName,
-				"task":        a.CurrentTask,
-				"last_seen":   a.HeartbeatAt,
-			})
-		}
+		// TODO: Query agents from JSONStore if needed
+		items = append(items, map[string]interface{}{
+			"type":    "note",
+			"message": "Agent queries now handled via in-memory store",
+		})
 	}
 
 	// Check if asking about tasks

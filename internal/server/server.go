@@ -53,7 +53,6 @@ type Server struct {
 	notifications     *notifications.Manager
 	captain           *captain.Captain
 	captainSupervisor *captain.CaptainSupervisor
-	cleanup           *CleanupService
 	basePath          string
 
 	// Task system
@@ -65,8 +64,6 @@ type Server struct {
 	eventStore   *events.SQLiteStore
 	notifyRouter *notifications.Router
 
-	// Removed NATS fields
-
 	// Instance metadata
 	port      int
 	startTime time.Time
@@ -76,10 +73,6 @@ type Server struct {
 
 	// Shutdown signaling - external code can listen to this
 	ShutdownChan chan struct{}
-
-	// Cleanup service context
-	cleanupCtx    context.Context
-	cleanupCancel context.CancelFunc
 }
 
 // loadNotificationConfig loads notification configuration from YAML file
@@ -133,8 +126,6 @@ func NewServer(
 	// Initialize Captain orchestrator
 	cap := captain.NewCaptain(basePath, spawner, memDB, agentConfigs)
 
-	// Removed NATS server initialization
-
 	s := &Server{
 		hub:            NewHub(),
 		store:          store,
@@ -153,8 +144,6 @@ func NewServer(
 		stopChan:       make(chan struct{}),
 		ShutdownChan:   make(chan struct{}),
 	}
-
-	// Removed NATS initialization code
 
 	// Seed default prompts from files if DB is empty
 	if s.memDB != nil {
@@ -212,8 +201,7 @@ func NewServer(
 		s.spawner.SetMemoryDB(s.memDB)
 	}
 
-	// Initialize connection status in store (SSE-based, no NATS)
-	s.store.SetNATSConnected(false) // NATS removed - using pure MCP
+	// Initialize connection status in store (SSE-based, pure MCP)
 	s.store.SetCaptainConnected(false) // Will be set true when Captain registers via MCP
 
 	// Initialize task system
@@ -311,10 +299,6 @@ func NewServer(
 
 	s.setupRoutes()
 	s.setupMCPCallbacks()
-
-	// Initialize cleanup service
-	s.cleanupCtx, s.cleanupCancel = context.WithCancel(context.Background())
-	s.cleanup = NewCleanupService(s.memDB, s.store, s.hub)
 
 	return s
 }
@@ -434,108 +418,6 @@ func (s *Server) setupRoutes() {
 // setupMCPCallbacks wires MCP tool handlers to services
 func (s *Server) setupMCPCallbacks() {
 	callbacks := mcp.ToolCallbacks{
-		OnRegisterAgent: func(agentID, role string, paneID int) (interface{}, error) {
-			// If Captain is registering with a pane ID, set it in the spawner
-			if agentID == "Captain" && paneID > 0 {
-				s.spawner.SetCaptainPaneID(paneID)
-				log.Printf("[MCP] Captain registered with pane ID %d - spawner updated", paneID)
-			}
-
-			// Check if agent exists in DB
-			var agentExists bool
-			if s.memDB != nil {
-				agent, err := s.memDB.GetAgent(agentID)
-				if err != nil {
-					log.Printf("[MCP] Warning: Could not check agent %s status: %v", agentID, err)
-				}
-				agentExists = (agent != nil)
-				if agentExists {
-					log.Printf("[MCP] Agent %s transitioning from '%s' to 'connected'", agentID, agent.Status)
-				}
-			}
-
-			// If agent doesn't exist, create it first (handles Captain and direct registrations)
-			if !agentExists && s.memDB != nil {
-				now := time.Now()
-				agentControl := &memory.AgentControl{
-					AgentID:     agentID,
-					Role:        role,
-					Status:      "connected",
-					HeartbeatAt: &now,
-				}
-				if err := s.memDB.RegisterAgent(agentControl); err != nil {
-					log.Printf("[MCP] ERROR: Failed to create agent %s: %v", agentID, err)
-					return nil, fmt.Errorf("registration failed: %w", err)
-				}
-				log.Printf("[MCP] Agent %s created and registered (connected)", agentID)
-			} else {
-				// Agent exists, use atomic update to transition to connected
-				if err := s.atomicAgentUpdate(agentID, "connected", ""); err != nil {
-					log.Printf("[MCP] ERROR: Failed to register agent %s: %v", agentID, err)
-					return nil, fmt.Errorf("registration failed: %w", err)
-				}
-				log.Printf("[MCP] Agent %s registered successfully (connected)", agentID)
-			}
-
-			// Update in-memory store
-			s.store.UpdateAgent(agentID, func(a *types.Agent) {
-				a.Status = types.StatusConnected
-				a.LastSeen = time.Now()
-			})
-
-			s.broadcastState()
-			return map[string]string{"status": "registered"}, nil
-		},
-
-		OnReportStatus: func(agentID, status, task string) (interface{}, error) {
-			// Use atomic update to keep stores in sync
-			if err := s.atomicAgentUpdate(agentID, status, task); err != nil {
-				log.Printf("[MCP] ERROR: Failed to update status for agent %s: %v", agentID, err)
-				// Don't fail the whole call, just log the error
-			}
-
-			// Update metrics idle tracking
-			if status == string(types.StatusIdle) {
-				s.metrics.SetAgentIdle(agentID)
-			} else {
-				s.metrics.SetAgentActive(agentID)
-			}
-
-			s.broadcastState()
-			return map[string]string{"status": "updated"}, nil
-		},
-
-		OnReportMetrics: func(agentID string, m *types.AgentMetrics) (interface{}, error) {
-			s.metrics.UpdateAgentMetrics(agentID, m)
-			s.store.UpdateMetrics(agentID, m)
-
-			// Persist to SQLite for historical tracking
-			// Determine agent type based on ID pattern
-			agentType := memory.AgentTypeSpawnedWindow
-			if strings.HasPrefix(agentID, "Captain") {
-				agentType = memory.AgentTypeCaptain
-			} else if strings.Contains(agentID, "sgt") || strings.Contains(agentID, "SGT") {
-				agentType = memory.AgentTypeSGT
-			}
-
-			if err := s.memDB.RecordMetricsWithType(
-				agentID,
-				m.Model,
-				agentType,
-				"",    // parent agent (SGTs don't have parents, workers do)
-				m.TokensUsed,
-				m.EstimatedCost,
-				m.TaskID,
-				nil, // assignment ID - could be tracked if needed
-			); err != nil {
-				fmt.Printf("[METRICS] Warning: failed to persist metrics to DB: %v\n", err)
-			}
-
-			s.checkAlerts()
-			s.broadcastState()
-			return map[string]string{"status": "recorded"}, nil
-		},
-
 		OnRequestHumanInput: func(req *types.HumanInputRequest) (interface{}, error) {
 			s.store.AddHumanRequest(req)
 			s.hub.BroadcastAlert(&types.Alert{
@@ -835,12 +717,6 @@ func (s *Server) setupMCPCallbacks() {
 			status := statusMap[signal]
 			if status == "" {
 				status = signal
-			}
-
-			// Update agent status in DB
-			if err := s.memDB.UpdateStatus(agentID, status, context); err != nil {
-				// Log but don't fail
-				fmt.Printf("[SIGNAL] Warning: failed to update agent status in DB: %v\n", err)
 			}
 
 			// Update dashboard state
@@ -1866,9 +1742,6 @@ func (s *Server) Start(addr string) error {
 	// Start background tasks
 	go s.backgroundTasks()
 
-	// Start auto-cleanup service
-	go s.cleanup.Start(s.cleanupCtx)
-
 	fmt.Printf("Dashboard ready at http://localhost%s\n", addr)
 	return s.httpServer.ListenAndServe()
 }
@@ -1876,13 +1749,6 @@ func (s *Server) Start(addr string) error {
 // Shutdown gracefully shuts down the server
 func (s *Server) Shutdown(ctx context.Context) error {
 	close(s.stopChan)
-
-	// Stop cleanup service
-	if s.cleanupCancel != nil {
-		s.cleanupCancel()
-	}
-
-	// Removed NATS-related shutdown code
 
 	// Shutdown WebSocket hub to close all channels properly
 	if s.hub != nil {
@@ -2015,33 +1881,15 @@ func (s *Server) logActivity(action, details string) {
 	})
 }
 
-// atomicAgentUpdate updates both JSONStore and SQLite DB atomically.
-// If DB update fails, it rolls back the JSONStore change to keep them in sync.
+// atomicAgentUpdate updates the JSONStore (in-memory state).
+// Note: Previously this also updated SQLite DB, but agent_control table has been removed.
 func (s *Server) atomicAgentUpdate(agentID, status, task string) error {
-	// Store the previous status in case we need to rollback
-	var previousStatus types.AgentStatus
-	state := s.store.GetState()
-	if agent, ok := state.Agents[agentID]; ok {
-		previousStatus = agent.Status
-	}
-
 	// Update JSONStore (in-memory)
 	s.store.UpdateAgent(agentID, func(a *types.Agent) {
 		a.Status = types.AgentStatus(status)
 		a.CurrentTask = task
 		a.LastSeen = time.Now()
 	})
-
-	// Update SQLite DB
-	if s.memDB != nil {
-		if err := s.memDB.UpdateStatus(agentID, status, task); err != nil {
-			// Rollback JSONStore on DB failure to maintain consistency
-			s.store.UpdateAgent(agentID, func(a *types.Agent) {
-				a.Status = previousStatus
-			})
-			return fmt.Errorf("DB update failed, rolled back: %w", err)
-		}
-	}
 
 	return nil
 }

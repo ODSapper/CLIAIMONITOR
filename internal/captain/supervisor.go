@@ -274,13 +274,16 @@ func (s *CaptainSupervisor) spawnCaptain() error {
 	// Initial prompt - register via MCP and check infrastructure
 	initialPrompt := fmt.Sprintf("You are Captain (Orchestrator). First, call mcp__cliaimonitor__register_agent with agent_id='Captain' and role='Orchestrator' to register with the dashboard. Then call mcp__cliaimonitor__get_all_context to restore your session state. Check your monitoring infrastructure: curl http://localhost:%d/api/state", s.serverPort)
 
-	// Build the command to run Claude
-	mcpServerName := "cliaimonitor-test"
+	// Create MCP config file for Captain (avoids polluting global MCP registry)
+	mcpConfigPath, err := s.createCaptainMCPConfig()
+	if err != nil {
+		return fmt.Errorf("failed to create MCP config: %w", err)
+	}
+
+	// Build the command to run Claude with MCP config file
 	claudeCmd := fmt.Sprintf(
-		`title Captain && claude mcp remove %s 2>nul & claude mcp add --transport sse %s http://localhost:%d/mcp/sse --header "X-Agent-ID: Captain" --header "X-Access-Level: admin" && claude --model claude-opus-4-5-20251101 --dangerously-skip-permissions "%s"`,
-		mcpServerName,
-		mcpServerName,
-		s.serverPort,
+		`title Captain && claude --mcp-config "%s" --model claude-opus-4-5-20251101 --dangerously-skip-permissions "%s"`,
+		mcpConfigPath,
 		initialPrompt,
 	)
 

@@ -3,50 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CLITCOMMANDER - team-coop</title>
+    <title>CLIAIMONITOR - Metrics Dashboard</title>
     <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-    <div id="notification-banner" class="notification-banner" style="display: none;">
-        <div class="notification-content">
-            <span class="notification-icon"></span>
-            <span id="notification-message" class="notification-message"></span>
-            <button id="notification-dismiss" class="notification-dismiss">&times;</button>
-        </div>
-    </div>
-
     <div id="app">
         <header class="header">
             <div class="header-left">
-                <h1>CLITCOMMANDER</h1>
-                <nav class="nav-tabs">
-                    <a href="/" class="nav-tab active">Dashboard</a>
-                    <a href="/metrics.html" class="nav-tab">Metrics</a>
-                    <a href="/leaderboard.html" class="nav-tab">Leaderboard</a>
-                </nav>
+                <h1>CLIAIMONITOR</h1>
+                <span class="subtitle">Agent Metrics Dashboard</span>
             </div>
             <div class="header-controls">
                 <div class="status-bar">
-                    <span class="status-indicator" id="captain-status">Captain: <span class="dot"></span> <span class="status-text">--</span></span>
+                    <span class="status-indicator">
+                        <span class="dot" id="ws-status-dot"></span>
+                        <span id="ws-status-text">Connecting...</span>
+                    </span>
                 </div>
-                <button id="mute-toggle" class="btn btn-icon" title="Toggle Sound">🔔</button>
             </div>
         </header>
 
         <!-- Summary Bar -->
         <section class="summary-bar">
-            <div class="summary-item">
-                <span class="summary-label">Active</span>
-                <span id="summary-active" class="summary-value">0</span>
-            </div>
-            <div class="summary-item">
-                <span class="summary-label">Pending</span>
-                <span id="summary-pending" class="summary-value">0</span>
-            </div>
-            <div class="summary-item">
-                <span class="summary-label">In Review</span>
-                <span id="summary-review" class="summary-value">0</span>
-            </div>
             <div class="summary-item">
                 <span class="summary-label">Tokens Today</span>
                 <span id="summary-tokens" class="summary-value">0</span>
@@ -55,86 +33,44 @@
                 <span class="summary-label">Est. Cost</span>
                 <span id="summary-cost" class="summary-value">$0.00</span>
             </div>
-        </section>
-
-        <!-- Agent Cards -->
-        <section class="agent-lanes">
-            <div id="captain-card" class="captain-card">
-                <div class="captain-card-header">
-                    <div class="captain-identity">
-                        <span class="captain-icon">🎖️</span>
-                        <span class="captain-name">Captain</span>
-                    </div>
-                    <div class="captain-status-indicator">
-                        <span class="dot" id="captain-card-dot"></span>
-                        <span class="status-text" id="captain-card-status">--</span>
-                    </div>
-                </div>
-                <div id="captain-messages" class="captain-messages">
-                    <div class="chat-empty">
-                        <span class="chat-empty-icon">🎖️</span>
-                        <span class="chat-empty-text">Captain online. Send a message to start.</span>
-                    </div>
-                </div>
-                <div class="captain-input-container">
-                    <input type="text" id="captain-input" class="captain-input" placeholder="Message Captain..." />
-                    <button id="captain-send-btn" class="btn btn-primary">Send</button>
-                </div>
-            </div>
-            <div id="agent-cards" class="agent-cards-grid">
-                <!-- Agent cards populated by JS -->
+            <div class="summary-item">
+                <span class="summary-label">Session Uptime</span>
+                <span id="summary-uptime" class="summary-value">--</span>
             </div>
         </section>
 
-        <!-- Pending Queue -->
-        <section class="panel pending-queue-panel">
-            <h2>Pending Queue <span id="pending-count" class="badge">0</span></h2>
-            <table class="task-table">
-                <thead>
-                    <tr>
-                        <th>Priority</th>
-                        <th>Title</th>
-                        <th>Repo</th>
-                        <th>Status</th>
-                        <th>Age</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="pending-queue-body">
-                    <!-- Tasks populated by JS -->
-                </tbody>
-            </table>
-        </section>
-
-        <!-- Bottom Row: Alerts, Metrics -->
-        <div class="bottom-row two-columns">
-            <section class="panel alerts-panel">
-                <h2>Alerts <span id="alert-count" class="badge">0</span></h2>
-                <div id="alerts-list" class="alerts-list"></div>
-            </section>
-
-            <section class="panel metrics-panel">
-                <h2>Team Metrics</h2>
-                <div class="metrics-grid">
-                    <div class="metric-card">
-                        <span class="metric-label">Tasks Completed</span>
-                        <span id="metric-tasks" class="metric-value">0</span>
-                    </div>
-                    <div class="metric-card">
-                        <span class="metric-label">Avg Tokens/Task</span>
-                        <span id="metric-tokens-per-task" class="metric-value">0</span>
-                    </div>
-                    <div class="metric-card">
-                        <span class="metric-label">Avg Time/Task</span>
-                        <span id="metric-time-per-task" class="metric-value">--</span>
-                    </div>
-                    <div class="metric-card">
-                        <span class="metric-label">Review Rejections</span>
-                        <span id="metric-rejections" class="metric-value">0</span>
-                    </div>
+        <!-- Main Content: Metrics by Model -->
+        <div class="metrics-layout">
+            <section class="panel">
+                <h2>Cost by Model</h2>
+                <div id="model-metrics" class="model-metrics-grid">
+                    <div class="empty-state">Loading metrics...</div>
                 </div>
             </section>
         </div>
+
+        <!-- Bottom: Session Metrics -->
+        <section class="panel metrics-panel">
+            <h2>Session Metrics</h2>
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <span class="metric-label">Total Tokens</span>
+                    <span id="metric-total-tokens" class="metric-value">0</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Total Cost</span>
+                    <span id="metric-total-cost" class="metric-value">$0.00</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Agents Spawned</span>
+                    <span id="metric-agents-spawned" class="metric-value">0</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-label">Tasks Completed</span>
+                    <span id="metric-tasks-completed" class="metric-value">0</span>
+                </div>
+            </div>
+        </section>
     </div>
 
     <script src="/app.js"></script>

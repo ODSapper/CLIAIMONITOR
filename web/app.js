@@ -1,31 +1,31 @@
-// CLIAIMONITOR Dashboard Application
+// CLIAIMONITOR Metrics Dashboard
+// Simplified metrics-only dashboard
 
 class Dashboard {
     constructor() {
         this.ws = null;
         this.state = null;
-        this.soundEnabled = true;
-        this.audioContext = null;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
-        this.currentView = 'dashboard';
-        this.tasks = [];
+        this.sessionStartTime = null;
 
         this.init();
     }
 
     init() {
-        this.bindEvents();
         this.connectWebSocket();
         this.loadInitialState();
-        this.loadProjects();
         this.loadSessionStats();
-        this.loadTasks();
-        this.initCaptainChat();
+        this.loadModelMetrics();
+
         // Update stats every 30 seconds
-        setInterval(() => this.loadSessionStats(), 30000);
-        // Update tasks every 10 seconds
-        setInterval(() => this.loadTasks(), 10000);
+        setInterval(() => {
+            this.loadSessionStats();
+            this.loadModelMetrics();
+        }, 30000);
+
+        // Update uptime every second
+        setInterval(() => this.updateUptime(), 1000);
     }
 
     // WebSocket Connection
@@ -36,19 +36,19 @@ class Dashboard {
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
-            console.log('WebSocket connected');
+            console.log('[DASHBOARD] WebSocket connected');
             this.updateConnectionStatus(true);
             this.reconnectAttempts = 0;
         };
 
         this.ws.onclose = () => {
-            console.log('WebSocket disconnected');
+            console.log('[DASHBOARD] WebSocket disconnected');
             this.updateConnectionStatus(false);
             this.scheduleReconnect();
         };
 
         this.ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
+            console.error('[DASHBOARD] WebSocket error:', error);
         };
 
         this.ws.onmessage = (event) => {
@@ -61,42 +61,21 @@ class Dashboard {
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-            console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+            console.log(`[DASHBOARD] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
             setTimeout(() => this.connectWebSocket(), delay);
         }
     }
 
-    updateCaptainStatus(connected, status) {
-        const el = document.getElementById('captain-status');
-        if (!el) {
-            console.warn('[DASHBOARD] Captain status element not found');
-            return;
-        }
-        const dot = el.querySelector('.dot');
-        const text = el.querySelector('.status-text');
+    updateConnectionStatus(connected) {
+        const dot = document.getElementById('ws-status-dot');
+        const text = document.getElementById('ws-status-text');
 
         if (dot) {
-            const newClass = connected ? 'dot connected' : 'dot disconnected';
-            dot.className = newClass;
-            console.log('[DASHBOARD] Captain status updated:', connected, '-> class:', newClass);
+            dot.className = connected ? 'dot connected' : 'dot disconnected';
         }
-
         if (text) {
-            text.textContent = status || '--';
+            text.textContent = connected ? 'Connected' : 'Disconnected';
         }
-    }
-
-    // WebSocket connection status (visual indicator could be added if needed)
-    updateConnectionStatus(connected) {
-        console.log('[DASHBOARD] WebSocket connection status:', connected);
-        // Currently just logs
-    }
-
-    updateAgentCount(count) {
-        const el = document.getElementById('agent-count');
-        if (!el) return;
-        const countEl = el.querySelector('.count');
-        if (countEl) countEl.textContent = count;
     }
 
     // Message Handling
@@ -105,68 +84,11 @@ class Dashboard {
             case 'state_update':
                 this.state = message.data;
                 this.render();
-                this.updateCaptainChatStatus();
                 break;
-            case 'alert':
-                this.handleAlert(message.data);
-                break;
-            case 'activity':
-                this.addActivityEntry(message.data);
-                break;
-            case 'escalation_forward':
-                this.handleEscalation(message.data);
-                break;
-            case 'captain_message':
-                this.handleCaptainMessage(message.data);
+            case 'metrics_update':
+                this.loadModelMetrics();
                 break;
         }
-    }
-
-    handleAlert(alert) {
-        if (alert.severity === 'critical') {
-            this.playAlertSound();
-        }
-        // Re-render to show new alert
-        if (this.state) {
-            this.state.alerts = this.state.alerts || [];
-            this.state.alerts.unshift(alert);
-            this.renderAlerts();
-        }
-    }
-
-    handleEscalation(escalation) {
-        // Add escalation to state
-        if (this.state) {
-            this.state.escalations = this.state.escalations || [];
-            this.state.escalations.unshift(escalation);
-            this.renderEscalations();
-        }
-        // Play alert sound for escalations
-        this.playAlertSound();
-    }
-
-    // Sound
-    playAlertSound() {
-        if (!this.soundEnabled) return;
-
-        if (!this.audioContext) {
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        }
-
-        const oscillator = this.audioContext.createOscillator();
-        const gainNode = this.audioContext.createGain();
-
-        oscillator.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
-
-        oscillator.frequency.value = 800;
-        oscillator.type = 'sine';
-
-        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.5);
-
-        oscillator.start(this.audioContext.currentTime);
-        oscillator.stop(this.audioContext.currentTime + 0.5);
     }
 
     // API Calls
@@ -174,26 +96,10 @@ class Dashboard {
         try {
             const response = await fetch('/api/state');
             this.state = await response.json();
-            console.log('[DASHBOARD] Initial state loaded:', {
-                captain_connected: this.state.captain_connected,
-                captain_status: this.state.captain_status
-            });
-            // Explicitly update status indicators after loading state
-            this.updateCaptainStatus(this.state.captain_connected || false, this.state.captain_status || '--');
+            console.log('[DASHBOARD] Initial state loaded');
             this.render();
         } catch (error) {
-            console.error('Failed to load state:', error);
-        }
-    }
-
-    async loadProjects() {
-        try {
-            const response = await fetch('/api/projects');
-            const data = await response.json();
-            this.projects = data.projects || [];
-            this.renderProjectsDropdown();
-        } catch (error) {
-            console.error('Failed to load projects:', error);
+            console.error('[DASHBOARD] Failed to load state:', error);
         }
     }
 
@@ -203,540 +109,91 @@ class Dashboard {
             const stats = await response.json();
             this.renderSessionStats(stats);
         } catch (error) {
-            console.error('Failed to load session stats:', error);
+            console.error('[DASHBOARD] Failed to load session stats:', error);
         }
     }
 
-    renderProjectsDropdown() {
-        const select = document.getElementById('project-select');
-        if (!select) return;
-        select.innerHTML = '<option value="">Select project...</option>' +
-            this.projects.map(p => `<option value="${this.escapeHtml(p.path)}" title="${this.escapeHtml(p.description)}">${this.escapeHtml(p.name)}${p.has_claude_md ? ' (CLAUDE.md)' : ''}</option>`).join('');
-    }
-
-    renderSessionStats(stats) {
-        // Calculate uptime
-        const startTime = new Date(stats.session_started_at);
-        const uptime = this.formatUptime(startTime);
-
-        const uptimeEl = document.getElementById('stat-uptime');
-        if (uptimeEl) uptimeEl.textContent = uptime;
-
-        // Display other stats (only if elements exist)
-        const agentsEl = document.getElementById('stat-agents-spawned');
-        if (agentsEl) agentsEl.textContent = stats.total_agents_spawned || 0;
-
-        const tokensEl = document.getElementById('stat-total-tokens');
-        if (tokensEl) tokensEl.textContent = this.formatNumber(stats.total_tokens_used || 0);
-
-        const costEl = document.getElementById('stat-total-cost');
-        if (costEl) costEl.textContent = '$' + (stats.total_estimated_cost || 0).toFixed(2);
-
-        const completedEl = document.getElementById('stat-completed-tasks');
-        if (completedEl) completedEl.textContent = stats.completed_tasks || 0;
-    }
-
-    async spawnAgent(configName, projectPath) {
+    async loadModelMetrics() {
         try {
-            const response = await fetch('/api/agents/spawn', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ config_name: configName, project_path: projectPath })
-            });
-            return await response.json();
+            const response = await fetch('/api/metrics/by-model');
+            const data = await response.json();
+            this.renderModelMetrics(data.metrics || []);
         } catch (error) {
-            console.error('Failed to spawn agent:', error);
+            console.error('[DASHBOARD] Failed to load model metrics:', error);
         }
-    }
-
-    async stopAgent(agentId) {
-        try {
-            await fetch(`/api/agents/${agentId}/stop`, { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to stop agent:', error);
-        }
-    }
-
-    async gracefulStopAgent(agentId) {
-        try {
-            await fetch(`/api/agents/${agentId}/graceful-stop`, { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to request graceful stop:', error);
-        }
-    }
-
-    async answerHumanInput(requestId, answer) {
-        try {
-            await fetch(`/api/human-input/${requestId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ answer })
-            });
-        } catch (error) {
-            console.error('Failed to submit answer:', error);
-        }
-    }
-
-    async acknowledgeAlert(alertId) {
-        try {
-            await fetch(`/api/alerts/${alertId}/ack`, { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to acknowledge alert:', error);
-        }
-    }
-
-    async clearAllAlerts() {
-        try {
-            await fetch('/api/alerts/clear', { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to clear alerts:', error);
-        }
-    }
-
-    async saveThresholds(thresholds) {
-        try {
-            await fetch('/api/thresholds', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(thresholds)
-            });
-        } catch (error) {
-            console.error('Failed to save thresholds:', error);
-        }
-    }
-
-    async resetMetrics() {
-        try {
-            await fetch('/api/metrics/reset', { method: 'POST' });
-        } catch (error) {
-            console.error('Failed to reset metrics:', error);
-        }
-    }
-
-
-    switchView(viewName) {
-        // Hide all views
-        document.querySelectorAll('.view').forEach(view => {
-            view.classList.remove('active');
-        });
-
-        // Show selected view
-        const view = document.getElementById(`${viewName}-view`);
-        if (view) {
-            view.classList.add('active');
-        }
-
-        // Update tab buttons
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.classList.remove('active');
-            if (btn.dataset.tab === viewName) {
-                btn.classList.add('active');
-            }
-        });
-
-        this.currentView = viewName;
-    }
-
-    // Event Binding
-    bindEvents() {
-        // Tab navigation
-        document.querySelectorAll('.tab-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                this.switchView(btn.dataset.tab);
-            });
-        });
-
-        // Mute toggle
-        const muteBtn = document.getElementById('mute-toggle');
-        if (muteBtn) {
-            muteBtn.addEventListener('click', () => {
-                this.soundEnabled = !this.soundEnabled;
-                muteBtn.textContent = this.soundEnabled ? '🔔' : '🔕';
-                muteBtn.classList.toggle('muted', !this.soundEnabled);
-            });
-        }
-
-        // Spawn agent (if spawn controls exist)
-        const spawnBtn = document.getElementById('spawn-btn');
-        if (spawnBtn) {
-            spawnBtn.addEventListener('click', () => {
-                const configName = document.getElementById('agent-type-select')?.value;
-                const projectPath = document.getElementById('project-select')?.value;
-                const count = parseInt(document.getElementById('agent-count-select')?.value) || 1;
-                if (configName && projectPath) {
-                    for (let i = 0; i < count; i++) {
-                        this.spawnAgent(configName, projectPath);
-                    }
-                }
-            });
-        }
-
-        // Agent type select
-        const agentTypeSelect = document.getElementById('agent-type-select');
-        if (agentTypeSelect) {
-            agentTypeSelect.addEventListener('change', () => {
-                this.updateSpawnButton();
-            });
-        }
-
-        // Project select
-        const projectSelect = document.getElementById('project-select');
-        if (projectSelect) {
-            projectSelect.addEventListener('change', () => {
-                this.updateSpawnButton();
-            });
-        }
-
-        // Save thresholds
-        const saveThresholdsBtn = document.getElementById('save-thresholds');
-        if (saveThresholdsBtn) {
-            saveThresholdsBtn.addEventListener('click', () => {
-                const thresholds = {
-                    failed_tests_max: parseInt(document.getElementById('threshold-failed-tests')?.value) || 0,
-                    idle_time_max_seconds: parseInt(document.getElementById('threshold-idle-time')?.value) || 0,
-                    token_usage_max: parseInt(document.getElementById('threshold-tokens')?.value) || 0,
-                    consecutive_rejects_max: parseInt(document.getElementById('threshold-rejects')?.value) || 0
-                };
-                this.saveThresholds(thresholds);
-            });
-        }
-
-        // Reset metrics
-        const resetMetricsBtn = document.getElementById('reset-metrics');
-        if (resetMetricsBtn) {
-            resetMetricsBtn.addEventListener('click', () => {
-                if (confirm('Reset all metrics history?')) {
-                    this.resetMetrics();
-                }
-            });
-        }
-
-        // Clear all alerts
-        const clearAlertsBtn = document.getElementById('clear-alerts-btn');
-        if (clearAlertsBtn) {
-            clearAlertsBtn.addEventListener('click', () => {
-                if (confirm('Clear all alerts?')) {
-                    this.clearAllAlerts();
-                }
-            });
-        }
-
-        // Activity filter
-        const activityFilter = document.getElementById('activity-filter');
-        if (activityFilter) {
-            activityFilter.addEventListener('change', (e) => {
-                this.renderActivityLog(e.target.value);
-            });
-        }
-
-        // Task creation is now via Captain Chat - modal removed
     }
 
     // Rendering
     render() {
         if (!this.state) return;
-
-        // Update status indicators
-        this.updateNATSStatus(this.state.nats_connected || false);
-        this.updateCaptainStatus(this.state.captain_connected || false, this.state.captain_status || '--');
-        const agentCount = Object.values(this.state.agents || {}).filter(a => a.id !== 'Supervisor').length;
-        this.updateAgentCount(agentCount);
-
-        // Update Captain card
-        this.renderCaptainCard();
-
-        this.renderAgents();
-        this.renderAlerts();
-        this.renderEscalations();
-        this.renderHumanInput();
-        this.renderThresholds();
-        this.renderActivityLog();
-        this.updateSpawnButton();
+        // Agent monitoring removed - focusing on Captain interaction and metrics only
     }
 
-    renderCaptainCard() {
-        const dot = document.getElementById('captain-card-dot');
-        const statusText = document.getElementById('captain-card-status');
+    renderModelMetrics(metrics) {
+        const container = document.getElementById('model-metrics');
+        if (!container) return;
 
-        if (dot && this.state) {
-            const connected = this.state.captain_connected || this.state.nats_connected;
-            dot.className = connected ? 'dot connected' : 'dot disconnected';
-        }
-
-        if (statusText && this.state) {
-            statusText.textContent = this.state.captain_status || 'idle';
-        }
-    }
-
-    renderAgents() {
-        const grid = document.getElementById('agents-grid');
-        if (!grid) return;
-        const agents = Object.values(this.state.agents || {}).filter(a => a.id !== 'Supervisor');
-
-        if (agents.length === 0) {
-            grid.innerHTML = '<div class="empty-state">No team agents running</div>';
+        if (!metrics || metrics.length === 0) {
+            container.innerHTML = '<div class="empty-state">No metrics yet</div>';
             return;
         }
 
-        grid.innerHTML = agents.map(agent => {
-            const metrics = this.state.metrics?.[agent.id] || {};
-            const hasTask = agent.current_task && agent.current_task.trim() !== '';
-
-            // Determine display status: if has task, show "working" not "disconnected"
-            let displayStatus = agent.status;
-            let statusClass = agent.status;
-            if (hasTask && agent.status === 'disconnected') {
-                displayStatus = 'working';
-                statusClass = 'working';
-            }
-
-            // NATS connection indicator
-            const natsConnected = agent.status === 'connected' || agent.status === 'working';
-            const natsIndicator = natsConnected ?
-                '<span class="nats-indicator connected" title="NATS Connected"></span>' :
-                '<span class="nats-indicator disconnected" title="NATS Disconnected"></span>';
-
+        container.innerHTML = metrics.map(m => {
+            const modelName = this.getShortModelName(m.model);
             return `
-                <div class="agent-card" style="--agent-color: ${agent.color}">
-                    <div class="agent-card-header">
-                        <div>
-                            <div class="agent-name">${this.escapeHtml(agent.id)}</div>
-                            <div class="agent-role">${this.escapeHtml(agent.role)}</div>
+                <div class="model-card">
+                    <div class="model-name">${this.escapeHtml(modelName)}</div>
+                    <div class="model-stats">
+                        <div class="model-stat">
+                            <span class="stat-label">Tokens</span>
+                            <span class="stat-value">${this.formatNumber(m.total_tokens || 0)}</span>
                         </div>
-                        <div class="agent-status-container">
-                            <span class="agent-status ${statusClass}">${displayStatus}</span>
-                            ${natsIndicator}
+                        <div class="model-stat">
+                            <span class="stat-label">Cost</span>
+                            <span class="stat-value">$${(m.total_cost || 0).toFixed(2)}</span>
                         </div>
-                    </div>
-                    ${hasTask ? `
-                    <div class="agent-current-task" title="${this.escapeHtml(agent.current_task)}">
-                        <span class="task-icon">📋</span>
-                        <span class="task-text">${this.escapeHtml(agent.current_task)}</span>
-                    </div>
-                    ` : `
-                    <div class="agent-current-task empty">
-                        <span class="task-text">Waiting for task...</span>
-                    </div>
-                    `}
-                    <div class="agent-metrics">
-                        <span title="Tokens used">🪙 ${metrics.tokens_used || 0}</span>
-                        <span title="Failed tests">❌ ${metrics.failed_tests || 0}</span>
-                    </div>
-                    <div class="agent-actions">
-                        ${agent.shutdown_requested ? `
-                            <span class="shutdown-countdown" data-started="${agent.shutdown_requested_at}">
-                                Stopping... <span class="countdown">${this.calculateCountdown(agent.shutdown_requested_at)}</span>
-                            </span>
-                            <button class="btn btn-danger" onclick="dashboard.stopAgent('${agent.id}')">Force Kill</button>
-                        ` : `
-                            <button class="btn btn-warning" onclick="dashboard.gracefulStopAgent('${agent.id}')" title="Request graceful shutdown">
-                                Stop
-                            </button>
-                            <button class="btn btn-danger btn-small" onclick="dashboard.stopAgent('${agent.id}')" title="Force kill immediately">
-                                Kill
-                            </button>
-                        `}
+                        <div class="model-stat">
+                            <span class="stat-label">Reports</span>
+                            <span class="stat-value">${m.report_count || 0}</span>
+                        </div>
                     </div>
                 </div>
             `;
         }).join('');
     }
 
-    renderAlerts() {
-        const list = document.getElementById('alerts-list');
-        if (!list) return;
-        const alerts = (this.state.alerts || []).filter(a => !a.acknowledged);
-
-        const alertCount = document.getElementById('alert-count');
-        if (alertCount) {
-            alertCount.textContent = alerts.length;
-            alertCount.setAttribute('data-count', alerts.length);
+    renderSessionStats(stats) {
+        // Store session start time for uptime calculation
+        if (stats.session_started_at) {
+            this.sessionStartTime = new Date(stats.session_started_at);
         }
 
-        if (alerts.length === 0) {
-            list.innerHTML = '<div class="empty-state">No active alerts</div>';
-            return;
-        }
+        // Update session metrics panel
+        const totalTokens = document.getElementById('metric-total-tokens');
+        const totalCost = document.getElementById('metric-total-cost');
+        const agentsSpawned = document.getElementById('metric-agents-spawned');
+        const tasksCompleted = document.getElementById('metric-tasks-completed');
 
-        list.innerHTML = alerts.map(alert => `
-            <div class="alert-item ${alert.severity}">
-                <div class="alert-content">
-                    <div class="alert-type">${this.escapeHtml(alert.type)}${alert.agent_id ? ` - ${alert.agent_id}` : ''}</div>
-                    <div class="alert-message">${this.escapeHtml(alert.message)}</div>
-                    <div class="alert-time">${this.formatTime(alert.created_at)}</div>
-                </div>
-                <div class="alert-actions">
-                    <button class="btn btn-icon" onclick="dashboard.acknowledgeAlert('${alert.id}')" title="Acknowledge">✓</button>
-                </div>
-            </div>
-        `).join('');
+        if (totalTokens) totalTokens.textContent = this.formatNumber(stats.total_tokens_used || 0);
+        if (totalCost) totalCost.textContent = '$' + (stats.total_estimated_cost || 0).toFixed(2);
+        if (agentsSpawned) agentsSpawned.textContent = stats.total_agents_spawned || 0;
+        if (tasksCompleted) tasksCompleted.textContent = stats.completed_tasks || 0;
+
+        // Update summary bar
+        const summaryTokens = document.getElementById('summary-tokens');
+        const summaryCost = document.getElementById('summary-cost');
+
+        if (summaryTokens) summaryTokens.textContent = this.formatNumber(stats.total_tokens_used || 0);
+        if (summaryCost) summaryCost.textContent = '$' + (stats.total_estimated_cost || 0).toFixed(2);
     }
 
-    renderHumanInput() {
-        const list = document.getElementById('human-input-list');
-        if (!list) return;
-        const requests = Object.values(this.state.human_requests || {}).filter(r => !r.answered);
 
-        const humanInputCount = document.getElementById('human-input-count');
-        if (humanInputCount) {
-            humanInputCount.textContent = requests.length;
-            humanInputCount.setAttribute('data-count', requests.length);
-        }
+    updateUptime() {
+        if (!this.sessionStartTime) return;
 
-        if (requests.length === 0) {
-            list.innerHTML = '<div class="empty-state">No pending requests</div>';
-            return;
-        }
-
-        list.innerHTML = requests.map(req => `
-            <div class="human-input-item ${Date.now() - new Date(req.created_at).getTime() > 300000 ? 'urgent' : ''}">
-                <div class="human-input-header">
-                    <span class="human-input-agent">${this.escapeHtml(req.agent_id)}</span>
-                    <span class="human-input-time">${this.formatTime(req.created_at)}</span>
-                </div>
-                <div class="human-input-question">${this.escapeHtml(req.question)}</div>
-                ${req.context ? `<div class="human-input-context">${this.escapeHtml(req.context)}</div>` : ''}
-                <div class="human-input-response">
-                    <input type="text" id="answer-${req.id}" placeholder="Type your answer..." onkeypress="if(event.key==='Enter')dashboard.submitAnswer('${req.id}')">
-                    <button class="btn btn-primary" onclick="dashboard.submitAnswer('${req.id}')">Send</button>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    submitAnswer(requestId) {
-        const input = document.getElementById(`answer-${requestId}`);
-        if (input && input.value.trim()) {
-            this.answerHumanInput(requestId, input.value.trim());
-        }
-    }
-
-    renderEscalations() {
-        const list = document.getElementById('escalations-list');
-        if (!list) return;
-        const escalations = this.state.escalations || [];
-        const pending = escalations.filter(e => !e.responded);
-
-        const escalationCount = document.getElementById('escalation-count');
-        if (escalationCount) {
-            escalationCount.textContent = pending.length;
-            escalationCount.setAttribute('data-count', pending.length);
-        }
-
-        if (pending.length === 0) {
-            list.innerHTML = '<div class="empty-state">No pending escalations</div>';
-            return;
-        }
-
-        list.innerHTML = pending.map(esc => `
-            <div class="escalation-card">
-                <div class="escalation-header">
-                    <span class="escalation-agent">${this.escapeHtml(esc.agent_id)}</span>
-                    <span class="escalation-time">${this.formatTime(esc.timestamp)}</span>
-                </div>
-                <div class="escalation-question">${this.escapeHtml(esc.question)}</div>
-                ${esc.captain_context ? `<div class="escalation-context">Captain: ${this.escapeHtml(esc.captain_context)}</div>` : ''}
-                ${esc.captain_recommends ? `<div class="escalation-context">Recommends: ${this.escapeHtml(esc.captain_recommends)}</div>` : ''}
-                <div class="escalation-response">
-                    <input type="text" id="escalation-response-${esc.id}" placeholder="Type your response..." onkeypress="if(event.key==='Enter')dashboard.submitEscalationResponse('${esc.id}')">
-                    <button class="btn btn-primary" onclick="dashboard.submitEscalationResponse('${esc.id}')">Send</button>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    submitEscalationResponse(escalationId) {
-        const input = document.getElementById(`escalation-response-${escalationId}`);
-        if (input && input.value.trim()) {
-            const response = input.value.trim();
-            this.sendEscalationResponse(escalationId, response);
-        }
-    }
-
-    async sendEscalationResponse(escalationId, response) {
-        try {
-            await fetch(`/api/escalation/${escalationId}/respond`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ response })
-            });
-            // Remove from UI on success
-            if (this.state && this.state.escalations) {
-                const index = this.state.escalations.findIndex(e => e.id === escalationId);
-                if (index !== -1) {
-                    this.state.escalations[index].responded = true;
-                    this.renderEscalations();
-                }
-            }
-        } catch (error) {
-            console.error('Failed to submit escalation response:', error);
-        }
-    }
-
-    renderThresholds() {
-        const t = this.state.thresholds || {};
-        const failedTestsEl = document.getElementById('threshold-failed-tests');
-        if (failedTestsEl) failedTestsEl.value = t.failed_tests_max || 5;
-        const idleTimeEl = document.getElementById('threshold-idle-time');
-        if (idleTimeEl) idleTimeEl.value = t.idle_time_max_seconds || 600;
-        const tokensEl = document.getElementById('threshold-tokens');
-        if (tokensEl) tokensEl.value = t.token_usage_max || 100000;
-        const rejectsEl = document.getElementById('threshold-rejects');
-        if (rejectsEl) rejectsEl.value = t.consecutive_rejects_max || 3;
-    }
-
-    renderActivityLog(filterAgent = '') {
-        const log = document.getElementById('activity-log');
-        if (!log) return;
-        let activities = this.state.activity_log || [];
-
-        // Update filter options
-        const filter = document.getElementById('activity-filter');
-        if (filter) {
-            const agents = [...new Set(activities.map(a => a.agent_id))];
-            const currentValue = filter.value;
-            filter.innerHTML = '<option value="">All Agents</option>' +
-                agents.map(a => `<option value="${a}" ${a === currentValue ? 'selected' : ''}>${a}</option>`).join('');
-        }
-
-        // Apply filter
-        if (filterAgent) {
-            activities = activities.filter(a => a.agent_id === filterAgent);
-        }
-
-        // Show latest 100
-        activities = activities.slice(-100).reverse();
-
-        if (activities.length === 0) {
-            log.innerHTML = '<div class="empty-state">No activity</div>';
-            return;
-        }
-
-        log.innerHTML = activities.map(entry => `
-            <div class="activity-entry">
-                <span class="activity-time">${this.formatTime(entry.timestamp)}</span>
-                <span class="activity-agent">${this.escapeHtml(entry.agent_id)}</span>
-                <span class="activity-action">${this.escapeHtml(entry.action)}</span>
-                <span class="activity-details">${this.escapeHtml(entry.details || '')}</span>
-            </div>
-        `).join('');
-    }
-
-    addActivityEntry(activity) {
-        if (!this.state) return;
-        this.state.activity_log = this.state.activity_log || [];
-        this.state.activity_log.push(activity);
-        const filter = document.getElementById('activity-filter');
-        this.renderActivityLog(filter ? filter.value : '');
-    }
-
-    updateSpawnButton() {
-        const btn = document.getElementById('spawn-btn');
-        const agentSelect = document.getElementById('agent-type-select');
-        const projectSelect = document.getElementById('project-select');
-        if (btn && agentSelect && projectSelect) {
-            btn.disabled = !agentSelect.value || !projectSelect.value;
-        }
+        const uptime = this.formatUptime(this.sessionStartTime);
+        const summaryUptime = document.getElementById('summary-uptime');
+        if (summaryUptime) summaryUptime.textContent = uptime;
     }
 
     // Utilities
@@ -747,37 +204,15 @@ class Dashboard {
         return div.innerHTML;
     }
 
-    formatTime(timestamp) {
-        if (!timestamp) return '';
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString('en-US', { hour12: false });
+    formatNumber(num) {
+        if (num >= 1000000) {
+            return (num / 1000000).toFixed(1) + 'M';
+        } else if (num >= 1000) {
+            return (num / 1000).toFixed(1) + 'K';
+        }
+        return num.toLocaleString();
     }
 
-    formatRelativeTime(timestamp) {
-        if (!timestamp) return 'never';
-        const date = new Date(timestamp);
-        const now = new Date();
-        const diffMs = now - date;
-        const diffSec = Math.floor(diffMs / 1000);
-        const diffMin = Math.floor(diffSec / 60);
-        const diffHour = Math.floor(diffMin / 60);
-
-        if (diffSec < 10) return 'just now';
-        if (diffSec < 60) return `${diffSec}s ago`;
-        if (diffMin < 60) return `${diffMin}m ago`;
-        if (diffHour < 24) return `${diffHour}h ago`;
-        return date.toLocaleDateString();
-    }
-
-    calculateCountdown(shutdownRequestedAt) {
-        if (!shutdownRequestedAt) return '60s';
-        const requestedTime = new Date(shutdownRequestedAt);
-        const now = new Date();
-        const elapsedMs = now - requestedTime;
-        const remainingMs = Math.max(0, 60000 - elapsedMs);
-        const remainingSec = Math.ceil(remainingMs / 1000);
-        return `${remainingSec}s`;
-    }
 
     formatUptime(startTime) {
         const now = new Date();
@@ -801,388 +236,17 @@ class Dashboard {
         }
     }
 
-    formatNumber(num) {
-        if (num >= 1000000) {
-            return (num / 1000000).toFixed(1) + 'M';
-        } else if (num >= 1000) {
-            return (num / 1000).toFixed(1) + 'K';
-        }
-        return num.toString();
+
+    getShortModelName(model) {
+        if (!model) return 'Unknown';
+        // Shorten long model names
+        if (model.includes('opus')) return 'Opus';
+        if (model.includes('sonnet')) return 'Sonnet';
+        if (model.includes('haiku')) return 'Haiku';
+        // Remove common prefixes
+        return model.replace('claude-', '').replace('-20241022', '').replace('-20250514', '');
     }
-
-    // Agent-centric dashboard functions
-
-    // Render agent cards
-    renderAgentCards() {
-        const container = document.getElementById('agent-cards');
-        if (!container) return;
-
-        if (!this.state || !this.state.agents) {
-            container.innerHTML = '<p class="empty-state">No agents connected</p>';
-            return;
-        }
-
-        const agents = Object.values(this.state.agents);
-        if (agents.length === 0) {
-            container.innerHTML = '<p class="empty-state">No agents connected</p>';
-            return;
-        }
-
-        container.innerHTML = agents.map(agent => {
-            const agentTasks = this.getAgentTasks(agent.id);
-            const currentTask = agentTasks.find(t => t.status === 'in_progress');
-            const queuedTasks = agentTasks.filter(t => t.status === 'assigned');
-
-            return `
-                <div class="agent-card ${agent.status}" style="border-color: ${agent.color}">
-                    <div class="agent-header">
-                        <span class="agent-status-dot" style="background: ${this.getStatusColor(agent.status)}"></span>
-                        <span class="agent-name">${this.escapeHtml(agent.config_name || agent.id)}</span>
-                        <span class="agent-role">${this.escapeHtml(agent.role || '')}</span>
-                    </div>
-                    <div class="agent-current-task">
-                        ${currentTask ? `
-                            <div class="current-task">
-                                <span class="task-indicator">▶</span>
-                                <span class="task-id">${this.escapeHtml(currentTask.id)}</span>
-                                <span class="task-title">${this.escapeHtml(currentTask.title)}</span>
-                                <span class="task-time">${this.formatDuration(currentTask.started_at)}</span>
-                            </div>
-                        ` : `<span class="idle-state">idle</span>`}
-                    </div>
-                    <div class="agent-queue">
-                        ${queuedTasks.slice(0, 3).map(t => `
-                            <div class="queued-task">
-                                <span class="queue-indicator">◦</span>
-                                <span class="task-id">${this.escapeHtml(t.id)}</span>
-                            </div>
-                        `).join('')}
-                        ${queuedTasks.length > 3 ? `<span class="more-tasks">+${queuedTasks.length - 3} more</span>` : ''}
-                    </div>
-                </div>
-            `;
-        }).join('');
-    }
-
-    getAgentTasks(agentId) {
-        if (!this.tasks) return [];
-        return this.tasks.filter(t => t.assigned_to === agentId);
-    }
-
-    getStatusColor(status) {
-        const colors = {
-            'working': '#00cc66',      // green
-            'scanning': '#00cc66',     // green
-            'connected': '#00cc66',    // green
-            'idle': '#ffcc00',         // yellow
-            'blocked': '#ff9900',      // orange
-            'error': '#cc3333',        // red
-            'stopped': '#cc3333',      // red
-            'disconnected': '#666666'  // gray
-        };
-        return colors[status] || '#666666';
-    }
-
-    formatDuration(startTime) {
-        if (!startTime) return '';
-        const start = new Date(startTime);
-        const now = new Date();
-        const diff = Math.floor((now - start) / 1000);
-
-        if (diff < 60) return `${diff}s`;
-        if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-        return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`;
-    }
-
-    // Load and render tasks
-    async loadTasks() {
-        try {
-            const response = await fetch('/api/tasks');
-            const data = await response.json();
-            this.tasks = data.tasks || [];
-            this.renderPendingQueue();
-            this.renderAgentCards();
-            this.updateSummary();
-        } catch (error) {
-            console.error('Failed to load tasks:', error);
-        }
-    }
-
-    renderPendingQueue() {
-        const tbody = document.getElementById('pending-queue-body');
-        if (!tbody) return;
-
-        const pending = (this.tasks || []).filter(t => t.status === 'pending');
-
-        const pendingCount = document.getElementById('pending-count');
-        if (pendingCount) pendingCount.textContent = pending.length;
-
-        if (pending.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No pending tasks</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = pending.map(task => `
-            <tr>
-                <td><span class="priority-badge p${task.priority}">P${task.priority}</span></td>
-                <td>${this.escapeHtml(task.title)}</td>
-                <td>${this.escapeHtml(task.repo || 'local')}</td>
-                <td>${task.status}</td>
-                <td>${this.formatAge(task.created_at)}</td>
-                <td>
-                    <button class="btn btn-small" onclick="dashboard.assignTask('${task.id}')">Assign</button>
-                </td>
-            </tr>
-        `).join('');
-    }
-
-    formatAge(timestamp) {
-        const created = new Date(timestamp);
-        const now = new Date();
-        const diff = Math.floor((now - created) / 1000);
-
-        if (diff < 60) return 'just now';
-        if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-        if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-        return `${Math.floor(diff / 86400)}d ago`;
-    }
-
-    updateSummary() {
-        const tasks = this.tasks || [];
-        const agents = this.state?.agents ? Object.values(this.state.agents) : [];
-
-        const summaryActive = document.getElementById('summary-active');
-        const summaryPending = document.getElementById('summary-pending');
-        const summaryReview = document.getElementById('summary-review');
-        const summaryTokens = document.getElementById('summary-tokens');
-        const summaryCost = document.getElementById('summary-cost');
-
-        if (summaryActive) summaryActive.textContent = agents.filter(a => a.status === 'working').length;
-        if (summaryPending) summaryPending.textContent = tasks.filter(t => t.status === 'pending').length;
-        if (summaryReview) summaryReview.textContent = tasks.filter(t => t.status === 'review').length;
-
-        // Token/cost from session stats
-        const stats = this.state?.session_stats || {};
-        if (summaryTokens) summaryTokens.textContent = this.formatNumberWithCommas(stats.total_tokens_used || 0);
-        if (summaryCost) summaryCost.textContent = `$${(stats.total_estimated_cost || 0).toFixed(2)}`;
-    }
-
-    formatNumberWithCommas(n) {
-        return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    }
-
-    // Task creation now handled via Captain Chat (sendCaptainMessage)
-
-    // Captain Chat functionality
-    initCaptainChat() {
-        const sendBtn = document.getElementById('captain-send-btn');
-        const input = document.getElementById('captain-input');
-
-        if (sendBtn) {
-            sendBtn.addEventListener('click', () => this.sendCaptainMessage());
-            console.log('[DASHBOARD] Captain send button bound');
-        }
-
-        if (input) {
-            input.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    this.sendCaptainMessage();
-                }
-            });
-        }
-
-        // Update Captain status display
-        this.updateCaptainChatStatus();
-    }
-
-    updateCaptainChatStatus() {
-        // Update Captain card status
-        this.renderCaptainCard();
-
-        // Note: captain-msg-status element was removed from bottom-row panel
-        // All Captain status now shown in the Captain card
-    }
-
-    async sendCaptainMessage() {
-        const input = document.getElementById('captain-input');
-        if (!input) return;
-
-        const message = input.value.trim();
-        if (!message) return;
-
-        console.log('[DASHBOARD] Sending message to Captain:', message);
-
-        // Add to chat display immediately
-        this.addCaptainMessage('human', message);
-        input.value = '';
-
-        // Send via API
-        try {
-            const response = await fetch('/api/captain/command', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    type: 'message',
-                    payload: {
-                        text: message,
-                        from: 'human',
-                        timestamp: new Date().toISOString()
-                    }
-                })
-            });
-
-            if (!response.ok) {
-                // If the command endpoint doesn't support 'message' type,
-                // submit as a task instead
-                console.log('[DASHBOARD] Command failed, trying task endpoint...');
-                await fetch('/api/captain/task', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        title: message.slice(0, 100),
-                        description: message
-                    })
-                });
-            }
-        } catch (error) {
-            console.error('[DASHBOARD] Failed to send message to Captain:', error);
-            this.addCaptainMessage('captain', 'Error: Failed to send message');
-        }
-    }
-
-    addCaptainMessage(from, text) {
-        const container = document.getElementById('captain-messages');
-        if (!container) return;
-
-        // Remove empty state if present
-        const emptyState = container.querySelector('.chat-empty');
-        if (emptyState) {
-            emptyState.remove();
-        }
-
-        const div = document.createElement('div');
-        div.className = `captain-message ${from}`;
-        div.innerHTML = `
-            <span class="msg-sender">${from === 'human' ? 'You' : 'Captain'}</span>
-            <span class="msg-text">${this.escapeHtml(text)}</span>
-        `;
-        container.appendChild(div);
-        container.scrollTop = container.scrollHeight;
-
-        console.log('[DASHBOARD] Captain chat message added:', from, text.slice(0, 50) + '...');
-    }
-
-    // Handle incoming Captain messages via WebSocket
-    handleCaptainMessage(data) {
-        if (data.text) {
-            this.addCaptainMessage('captain', data.text);
-        }
-    }
-
 }
 
-// Initialize
+// Initialize dashboard
 const dashboard = new Dashboard();
-
-// Task modal removed - Captain Chat used instead
-
-// ============================================================
-// Notification Banner Controller
-// ============================================================
-class NotificationBanner {
-    constructor() {
-        this.banner = document.getElementById('notification-banner');
-        this.message = document.getElementById('notification-message');
-        this.dismissBtn = document.getElementById('notification-dismiss');
-        this.currentTimeout = null;
-
-        this.initEventListeners();
-        console.log('[NOTIFICATION] Banner controller initialized');
-    }
-
-    initEventListeners() {
-        // Dismiss button click handler
-        this.dismissBtn.addEventListener('click', () => {
-            this.hide();
-        });
-
-        // Listen for notification events
-        window.addEventListener('supervisor-needs-input', (event) => {
-            const msg = event.detail?.message || 'Supervisor needs your input';
-            this.show(msg, 'supervisor', false);
-        });
-
-        window.addEventListener('notification', (event) => {
-            const { message: msg, type = 'info', autoHide = true } = event.detail || {};
-            if (msg) {
-                this.show(msg, type, autoHide);
-            }
-        });
-    }
-
-    show(text, type = 'info', autoHide = false) {
-        // Clear any existing timeout
-        if (this.currentTimeout) {
-            clearTimeout(this.currentTimeout);
-            this.currentTimeout = null;
-        }
-
-        // Set message
-        this.message.textContent = text;
-
-        // Set type (info, warning, error, supervisor)
-        this.banner.className = 'notification-banner ' + type;
-
-        // Show banner
-        this.banner.style.display = 'block';
-        document.body.classList.add('notification-active');
-
-        // Auto-hide after 10 seconds for non-supervisor alerts
-        if (autoHide && type !== 'supervisor') {
-            this.currentTimeout = setTimeout(() => {
-                this.hide();
-            }, 10000);
-        }
-
-        console.log('[NOTIFICATION] Banner shown:', text, 'Type:', type);
-    }
-
-    hide() {
-        this.banner.style.display = 'none';
-        document.body.classList.remove('notification-active');
-
-        if (this.currentTimeout) {
-            clearTimeout(this.currentTimeout);
-            this.currentTimeout = null;
-        }
-
-        console.log('[NOTIFICATION] Banner hidden');
-    }
-
-    // Public API
-    showInfo(message, autoHide = true) {
-        this.show(message, 'info', autoHide);
-    }
-
-    showWarning(message, autoHide = true) {
-        this.show(message, 'warning', autoHide);
-    }
-
-    showError(message, autoHide = true) {
-        this.show(message, 'error', autoHide);
-    }
-
-    showSupervisorAlert(message) {
-        this.show(message, 'supervisor', false);
-    }
-
-    clear() {
-        this.hide();
-    }
-}
-
-// Initialize notification banner
-const notificationBanner = new NotificationBanner();
-
-// Export to global scope for easy access
-window.notificationBanner = notificationBanner;

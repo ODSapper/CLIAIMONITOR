@@ -14,9 +14,6 @@ import (
 
 // ToolCallbacks interface for tool handlers to call back into services
 type ToolCallbacks struct {
-	OnRegisterAgent          func(agentID, role string, paneID int) (interface{}, error)
-	OnReportStatus           func(agentID, status, task string) (interface{}, error)
-	OnReportMetrics          func(agentID string, metrics *types.AgentMetrics) (interface{}, error)
 	OnRequestHumanInput      func(req *types.HumanInputRequest) (interface{}, error)
 	OnRequestStopApproval    func(req *types.StopApprovalRequest) (interface{}, error)
 	OnGetStopRequestByID     func(id string) *types.StopApprovalRequest
@@ -92,71 +89,6 @@ type ToolCallbacks struct {
 // RegisterDefaultTools registers all standard MCP tools
 // This is called during server setup with callbacks to other services
 func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
-	// register_agent - Agent identifies itself
-	s.RegisterTool(ToolDefinition{
-		Name:        "register_agent",
-		Description: "Register this agent with the dashboard",
-		Parameters: map[string]ParameterDef{
-			"agent_id": {Type: "string", Description: "The agent's unique ID", Required: true},
-			"role":     {Type: "string", Description: "The agent's role", Required: true},
-			"pane_id":  {Type: "number", Description: "WezTerm pane ID (from WEZTERM_PANE env var)", Required: false},
-		},
-		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			role, _ := params["role"].(string)
-			paneID := 0
-			if p, ok := params["pane_id"].(float64); ok {
-				paneID = int(p)
-			}
-			return callbacks.OnRegisterAgent(agentID, role, paneID)
-		},
-	})
-
-	// report_status - Agent updates its status
-	s.RegisterTool(ToolDefinition{
-		Name:        "report_status",
-		Description: "Report current agent status and activity",
-		Parameters: map[string]ParameterDef{
-			"status":       {Type: "string", Description: "Status: connected, working, idle, blocked", Required: true},
-			"current_task": {Type: "string", Description: "What the agent is currently doing", Required: false},
-		},
-		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			status, _ := params["status"].(string)
-			task, _ := params["current_task"].(string)
-			return callbacks.OnReportStatus(agentID, status, task)
-		},
-	})
-
-	// report_metrics - Agent reports its metrics
-	s.RegisterTool(ToolDefinition{
-		Name:        "report_metrics",
-		Description: "Report agent metrics (tokens, tests, etc.)",
-		Parameters: map[string]ParameterDef{
-			"tokens_used":         {Type: "number", Description: "Total tokens used", Required: false},
-			"estimated_cost":      {Type: "number", Description: "Estimated cost in USD", Required: false},
-			"failed_tests":        {Type: "number", Description: "Number of failed tests", Required: false},
-			"consecutive_rejects": {Type: "number", Description: "Consecutive rejected submissions", Required: false},
-		},
-		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			metrics := &types.AgentMetrics{
-				AgentID:     agentID,
-				LastUpdated: time.Now(),
-			}
-			if v, ok := params["tokens_used"].(float64); ok {
-				metrics.TokensUsed = int64(v)
-			}
-			if v, ok := params["estimated_cost"].(float64); ok {
-				metrics.EstimatedCost = v
-			}
-			if v, ok := params["failed_tests"].(float64); ok {
-				metrics.FailedTests = int(v)
-			}
-			if v, ok := params["consecutive_rejects"].(float64); ok {
-				metrics.ConsecutiveRejects = int(v)
-			}
-			return callbacks.OnReportMetrics(agentID, metrics)
-		},
-	})
-
 	// request_human_input - Agent needs human answer
 	s.RegisterTool(ToolDefinition{
 		Name:        "request_human_input",

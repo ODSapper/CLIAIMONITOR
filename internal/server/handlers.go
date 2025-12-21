@@ -197,13 +197,13 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		projectPath = s.basePath
 	}
 
-	// Build initial prompt - agent should register via MCP and start working
+	// Build initial prompt - agent should use MCP tools and start working
 	// Use the MCP server name that was configured for this agent
 	mcpServerName := fmt.Sprintf("cliaimonitor-%s", agentID)
 	mcpInstructions := fmt.Sprintf(
 		"You are agent '%s' with role '%s'. You have an MCP server '%s' connected. "+
-			"Use the register_agent tool (from that server) with agent_id='%s' and role='%s' to register. ",
-		agentID, agentConfig.Role, mcpServerName, agentID, agentConfig.Role)
+			"Use the available MCP tools to communicate and coordinate. ",
+		agentID, agentConfig.Role, mcpServerName)
 
 	initialPrompt := ""
 	if req.Task != "" {
@@ -211,7 +211,7 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("TASK: %s. Work autonomously. Do NOT ask clarifying questions.", req.Task)
 	} else {
 		initialPrompt = mcpInstructions +
-			"Then report_status with status='idle' and wait for instructions via wait_for_events tool."
+			"Use wait_for_events tool to wait for instructions."
 	}
 
 	// Spawn agent with initial prompt
@@ -237,11 +237,8 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 
 	s.store.AddAgent(agent)
 
-	// Initialize agent status in database
-	// This gives the agent time to start and register via MCP
-	if s.memDB != nil {
-		s.memDB.UpdateStatus(agentID, "starting", "")
-	}
+	// Agent will register itself via MCP when it connects
+	log.Printf("[SPAWN] Agent %s created, awaiting MCP registration", agentID)
 
 	s.broadcastState()
 
@@ -433,9 +430,6 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// NATS removed - using pure MCP
-	natsConnected := false
-
 	// Check memory database health
 	memoryHealth := map[string]interface{}{
 		"connected": false,
@@ -470,7 +464,6 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 			"total":  len(state.Alerts),
 			"active": activeAlerts,
 		},
-		"nats_connected":    natsConnected,
 		"captain_connected": state.CaptainConnected,
 		"memory_db":         memoryHealth,
 	}
@@ -588,13 +581,18 @@ func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, state.SessionStats)
 }
 
-// handleGetAgentsFromDB returns agent data from the database
+// handleGetAgentsFromDB returns agent data from the in-memory store
 func (s *Server) handleGetAgentsFromDB(w http.ResponseWriter, r *http.Request) {
-	agents, err := s.memDB.GetAllAgents()
-	if err != nil {
-		s.respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get agents: %v", err))
-		return
+	// NOTE: Agent control database layer has been removed
+	// Return agents from in-memory JSONStore instead
+	state := s.store.GetState()
+
+	// Convert state.Agents map to slice for consistent API response
+	agents := make([]interface{}, 0, len(state.Agents))
+	for _, agent := range state.Agents {
+		agents = append(agents, agent)
 	}
+
 	s.respondJSON(w, map[string]interface{}{
 		"agents": agents,
 	})
@@ -654,7 +652,6 @@ func formatAgentNumber(n int) string {
 // Escalation & Captain Control Handlers
 
 // handleSubmitEscalationResponse handles POST /api/escalation/{id}/respond
-// Publishes human response to NATS subject escalation.response.{id}
 func (s *Server) handleSubmitEscalationResponse(w http.ResponseWriter, r *http.Request) {
 	// Limit request size to prevent DoS
 	limitRequestSize(r, MaxPayloadSize)
@@ -955,9 +952,6 @@ func (s *Server) handleGetMetricsByAgent(w http.ResponseWriter, r *http.Request)
 
 // handleCaptainHealth returns Captain health status
 func (s *Server) handleCaptainHealth(w http.ResponseWriter, r *http.Request) {
-	// NATS removed - using pure MCP
-	natsConnected := false
-
 	// Check memory database health
 	memoryConnected := false
 	memorySchemaVersion := 0
@@ -969,7 +963,6 @@ func (s *Server) handleCaptainHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"nats_connected":        natsConnected,
 		"captain_connected":     s.store.GetState().CaptainConnected,
 		"status":                s.store.GetState().CaptainStatus,
 		"memory_db_connected":   memoryConnected,

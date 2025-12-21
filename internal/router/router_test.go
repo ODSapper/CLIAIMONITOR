@@ -151,17 +151,9 @@ func TestRouteQueryOperational(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Seed an agent
-	db.RegisterAgent(&memory.AgentControl{
-		AgentID:    "test-agent-001",
-		ConfigName: "developer",
-		Role:       "Development",
-		Status:     "working",
-	})
-
 	router := NewSkillRouter(db)
 
-	// Test operational routing
+	// Test operational routing (agent queries now handled via in-memory store)
 	result, err := router.RouteQuery("what agents are running", 10)
 	if err != nil {
 		t.Fatalf("RouteQuery failed: %v", err)
@@ -173,22 +165,11 @@ func TestRouteQueryOperational(t *testing.T) {
 	if result.Source != "operational.db" {
 		t.Errorf("Expected operational.db source, got %s", result.Source)
 	}
-	if result.Count == 0 {
-		t.Error("Expected at least one agent")
-	}
 }
 
 func TestAgentCommsHeartbeat(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
-
-	// Register agent first
-	db.RegisterAgent(&memory.AgentControl{
-		AgentID:    "test-agent-001",
-		ConfigName: "developer",
-		Role:       "Development",
-		Status:     "starting",
-	})
 
 	comms := NewAgentComms(db)
 
@@ -218,18 +199,13 @@ func TestAgentCommsShutdown(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// Register agent first
-	db.RegisterAgent(&memory.AgentControl{
-		AgentID:    "test-agent-001",
-		ConfigName: "developer",
-		Role:       "Development",
-		Status:     "working",
-	})
-
 	comms := NewAgentComms(db)
 
-	// Set shutdown flag
-	db.SetShutdownFlag("test-agent-001", "test shutdown")
+	// Register shutdown channel first
+	comms.RegisterShutdownChannel("test-agent-001")
+
+	// Trigger shutdown
+	comms.TriggerShutdown("test-agent-001")
 
 	// Check shutdown
 	check, err := comms.CheckShutdown("test-agent-001")

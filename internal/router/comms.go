@@ -46,16 +46,8 @@ type HeartbeatResponse struct {
 
 // ProcessHeartbeat handles an agent heartbeat and returns instructions
 func (c *AgentComms) ProcessHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse, error) {
-	// Update agent status
-	if err := c.memDB.UpdateStatus(req.AgentID, req.Status, req.CurrentTask); err != nil {
-		// Log but don't fail
-	}
-
-	// Check if agent should shut down
-	shouldStop, stopReason, err := c.memDB.CheckShutdownFlag(req.AgentID)
-	if err != nil {
-		log.Printf("[COMMS] Warning: Failed to check shutdown flag for agent %s: %v", req.AgentID, err)
-	}
+	// NOTE: Agent status is now tracked in-memory only via JSONStore
+	// Shutdown signals are handled via channels, not database flags
 
 	// NOTE: Message queue not yet implemented in MemoryDB
 	// HasMessages always returns false until message queue storage is added
@@ -66,8 +58,8 @@ func (c *AgentComms) ProcessHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse
 	return &HeartbeatResponse{
 		OK:           true,
 		Timestamp:    time.Now(),
-		ShouldStop:   shouldStop,
-		StopReason:   stopReason,
+		ShouldStop:   false,
+		StopReason:   "",
 		HasMessages:  hasMessages,
 		MessageCount: messageCount,
 	}, nil
@@ -83,7 +75,10 @@ type StatusUpdate struct {
 
 // UpdateStatus updates an agent's status
 func (c *AgentComms) UpdateStatus(update *StatusUpdate) error {
-	return c.memDB.UpdateStatus(update.AgentID, update.Status, update.CurrentTask)
+	// NOTE: Agent status is now tracked in-memory only via JSONStore
+	// This method is kept for API compatibility but does nothing
+	log.Printf("[COMMS] Status update for agent %s: %s - %s", update.AgentID, update.Status, update.CurrentTask)
+	return nil
 }
 
 // SignalRequest represents a signal from one agent to another
@@ -103,29 +98,20 @@ type SignalResponse struct {
 
 // SendSignal sends a signal to another agent
 func (c *AgentComms) SendSignal(req *SignalRequest) (*SignalResponse, error) {
+	// NOTE: Agent signals are now handled via channels, not database flags
+	// This method is kept for API compatibility but uses the channel mechanism
 	switch req.Signal {
 	case "stop":
-		// Set shutdown flag for target agent
 		if req.ToAgentID != "" {
-			reason := "Stop signal from " + req.FromAgentID
-			if ctx, ok := req.Context["reason"].(string); ok {
-				reason = ctx
-			}
-			if err := c.memDB.SetShutdownFlag(req.ToAgentID, reason); err != nil {
-				return nil, err
-			}
+			c.TriggerShutdown(req.ToAgentID)
 		}
 	case "pause", "resume":
-		// Update agent status
+		// Log the signal, actual state tracking is in JSONStore
 		status := "paused"
 		if req.Signal == "resume" {
 			status = "working"
 		}
-		if req.ToAgentID != "" {
-			if err := c.memDB.UpdateStatus(req.ToAgentID, status, ""); err != nil {
-				return nil, err
-			}
-		}
+		log.Printf("[COMMS] Signal %s -> agent %s: %s", req.Signal, req.ToAgentID, status)
 	}
 
 	return &SignalResponse{
@@ -155,13 +141,25 @@ type ShutdownCheck struct {
 
 // CheckShutdown checks if an agent should shut down
 func (c *AgentComms) CheckShutdown(agentID string) (*ShutdownCheck, error) {
-	shouldStop, reason, err := c.memDB.CheckShutdownFlag(agentID)
-	if err != nil {
-		return nil, err
+	// NOTE: Shutdown signals are now handled via channels, not database flags
+	// Check if shutdown channel exists and is closed
+	c.shutdownMu.RLock()
+	ch, exists := c.shutdowns[agentID]
+	c.shutdownMu.RUnlock()
+
+	shouldStop := false
+	if exists {
+		select {
+		case <-ch:
+			shouldStop = true
+		default:
+			shouldStop = false
+		}
 	}
+
 	return &ShutdownCheck{
 		ShouldStop: shouldStop,
-		Reason:     reason,
+		Reason:     "shutdown signal received",
 	}, nil
 }
 

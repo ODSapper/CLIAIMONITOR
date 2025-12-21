@@ -225,7 +225,6 @@ type DashboardState struct {
 	LastHumanCheckin time.Time                       `json:"last_human_checkin"`
 	AgentCounters    map[string]int                  `json:"agent_counters"`
 	SessionStats     SessionStats                    `json:"session_stats"`
-	NATSConnected    bool                            `json:"nats_connected"`
 	CaptainConnected bool                            `json:"captain_connected"`
 	CaptainStatus    string                          `json:"captain_status"` // idle, busy, error
 	CaptainMessages  []*CaptainMessage               `json:"captain_messages"`

@@ -7,7 +7,7 @@ import (
 	"log"
 	"os"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type Document struct {
@@ -19,7 +19,7 @@ type Document struct {
 func main() {
 	dbPath := "C:\\Users\\Admin\\Documents\\VS Projects\\CLIAIMONITOR\\data\\memory.db"
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		log.Fatal(err)
 	}

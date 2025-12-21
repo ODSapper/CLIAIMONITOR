@@ -71,8 +71,7 @@ type Store interface {
 	// Cleanup
 	CleanupStaleAgents() int
 
-	// NATS and Captain state
-	SetNATSConnected(connected bool)
+	// Captain state
 	SetCaptainConnected(connected bool)
 	SetCaptainStatus(status string)
 }
@@ -555,14 +554,6 @@ func (s *JSONStore) CleanupStaleAgents() int {
 	}
 
 	return removedCount
-}
-
-// SetNATSConnected updates NATS connection status
-func (s *JSONStore) SetNATSConnected(connected bool) {
-	s.mu.Lock()
-	s.state.NATSConnected = connected
-	s.mu.Unlock()
-	s.scheduleSave()
 }
 
 // SetCaptainConnected updates Captain connection status

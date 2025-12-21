@@ -262,13 +262,6 @@ func (m *SQLiteMemoryDB) Health() (*HealthStatus, error) {
 		return status, fmt.Errorf("failed to get schema version: %w", err)
 	}
 
-	// Get agent count
-	err = m.db.QueryRow("SELECT COUNT(*) FROM agent_control").Scan(&status.AgentCount)
-	if err != nil {
-		// Table may not exist yet, not fatal
-		status.AgentCount = 0
-	}
-
 	// Get task count
 	err = m.db.QueryRow("SELECT COUNT(*) FROM workflow_tasks").Scan(&status.TaskCount)
 	if err != nil {

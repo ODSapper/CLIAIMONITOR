@@ -5,10 +5,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/CLIAIMONITOR/internal/memory"
-	"github.com/CLIAIMONITOR/internal/types"
 )
 
 // newTestDB creates a real in-memory SQLite database for testing
@@ -58,18 +56,6 @@ func TestNewSpawner(t *testing.T) {
 
 	if spawner.agentPanes == nil {
 		t.Error("agentPanes map not initialized")
-	}
-}
-
-// TestSetNATSURL tests setting and getting NATS URL
-func TestSetNATSURL(t *testing.T) {
-	spawner := NewSpawner(t.TempDir(), "http://localhost:3000/mcp/sse", nil)
-
-	natsURL := "nats://localhost:4222"
-	spawner.SetNATSURL(natsURL)
-
-	if spawner.GetNATSURL() != natsURL {
-		t.Errorf("Expected NATS URL %s, got %s", natsURL, spawner.GetNATSURL())
 	}
 }
 
@@ -233,41 +219,9 @@ func TestGetAgentByPID(t *testing.T) {
 	}
 }
 
-// TestCreateMCPConfig tests MCP configuration file creation
+// TestCreateMCPConfig is disabled - createMCPConfig method was removed
 func TestCreateMCPConfig(t *testing.T) {
-	basePath := t.TempDir()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", nil)
-	spawner.SetNATSURL("nats://localhost:4222")
-
-	// Create necessary directories
-	os.MkdirAll(filepath.Join(basePath, "configs", "mcp"), 0755)
-
-	configPath, err := spawner.createMCPConfig("test-agent-001", "/test/project", types.AccessStrict)
-	if err != nil {
-		t.Fatalf("createMCPConfig failed: %v", err)
-	}
-
-	// Verify file exists
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		t.Fatalf("Config file not created at %s", configPath)
-	}
-
-	// Read and verify content
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("Failed to read config file: %v", err)
-	}
-
-	content := string(data)
-	if !contains(content, "test-agent-001") {
-		t.Error("Config should contain agent ID")
-	}
-	if !contains(content, "nats://localhost:4222") {
-		t.Error("Config should contain NATS URL")
-	}
-	if !contains(content, "/test/project") {
-		t.Error("Config should contain project path")
-	}
+	t.Skip("createMCPConfig method has been removed")
 }
 
 // TestCleanupAgentPIDFile tests PID file cleanup
@@ -381,25 +335,11 @@ func TestCleanupAgentFiles(t *testing.T) {
 	}
 }
 
-// TestStopAgentWithReason tests agent stopping with DB updates
+// TestStopAgentWithReason tests agent stopping
 func TestStopAgentWithReason(t *testing.T) {
 	basePath := t.TempDir()
 	db := newTestDB(t)
 	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", db)
-
-	// Register a real agent in the database
-	now := time.Now()
-	err := db.RegisterAgent(&memory.AgentControl{
-		AgentID:     "test-agent-001",
-		Status:      "running",
-		Role:        "engineer",
-		ProjectPath: basePath,
-		SpawnedAt:   now,
-		HeartbeatAt: &now,
-	})
-	if err != nil {
-		t.Fatalf("Failed to register agent: %v", err)
-	}
 
 	// Add to running agents
 	spawner.mu.Lock()
@@ -407,27 +347,9 @@ func TestStopAgentWithReason(t *testing.T) {
 	spawner.mu.Unlock()
 
 	// Stop it
-	err = spawner.StopAgentWithReason("test-agent-001", "test stop")
+	err := spawner.StopAgentWithReason("test-agent-001", "test stop")
 	if err != nil {
 		t.Errorf("StopAgentWithReason failed: %v", err)
-	}
-
-	// Verify shutdown flag was set by checking the database
-	hasFlag, reason, err := db.CheckShutdownFlag("test-agent-001")
-	if err != nil {
-		t.Fatalf("Failed to check shutdown flag: %v", err)
-	}
-	if !hasFlag || reason != "test stop" {
-		t.Errorf("Expected shutdown flag 'test stop', got hasFlag=%v, reason='%s'", hasFlag, reason)
-	}
-
-	// Verify agent status was updated to stopped
-	agent, err := db.GetAgent("test-agent-001")
-	if err != nil {
-		t.Fatalf("Failed to get agent: %v", err)
-	}
-	if agent != nil && agent.Status != "stopped" {
-		t.Errorf("Expected status 'stopped', got '%s'", agent.Status)
 	}
 
 	// Verify removed from running agents
@@ -442,33 +364,20 @@ func TestStopAgent(t *testing.T) {
 	db := newTestDB(t)
 	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", db)
 
-	// Register a real agent in the database
-	now := time.Now()
-	err := db.RegisterAgent(&memory.AgentControl{
-		AgentID:     "test-agent-001",
-		Status:      "running",
-		Role:        "engineer",
-		ProjectPath: basePath,
-		SpawnedAt:   now,
-		HeartbeatAt: &now,
-	})
-	if err != nil {
-		t.Fatalf("Failed to register agent: %v", err)
-	}
+	// Add to running agents
+	spawner.mu.Lock()
+	spawner.runningAgents["test-agent-001"] = 99999 // Fake PID
+	spawner.mu.Unlock()
 
 	// Stop it using backward compatible method
-	err = spawner.StopAgent("test-agent-001")
+	err := spawner.StopAgent("test-agent-001")
 	if err != nil {
 		t.Errorf("StopAgent failed: %v", err)
 	}
 
-	// Should have used "manual stop" as reason
-	hasFlag, reason, err := db.CheckShutdownFlag("test-agent-001")
-	if err != nil {
-		t.Fatalf("Failed to check shutdown flag: %v", err)
-	}
-	if !hasFlag || reason != "manual stop" {
-		t.Errorf("Expected reason 'manual stop', got '%s'", reason)
+	// Verify removed from running agents
+	if _, ok := spawner.GetRunningAgents()["test-agent-001"]; ok {
+		t.Error("Agent should be removed from running agents")
 	}
 }
 
@@ -603,21 +512,9 @@ func TestStopAllAgents(t *testing.T) {
 	db := newTestDB(t)
 	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", db)
 
-	// Add multiple agents to DB and spawner
+	// Add multiple agents to spawner
 	agentIDs := []string{"agent-001", "agent-002", "agent-003"}
 	for _, id := range agentIDs {
-		now := time.Now()
-		err := db.RegisterAgent(&memory.AgentControl{
-			AgentID:     id,
-			Status:      "running",
-			Role:        "engineer",
-			ProjectPath: basePath,
-			SpawnedAt:   now,
-			HeartbeatAt: &now,
-		})
-		if err != nil {
-			t.Fatalf("Failed to register agent %s: %v", id, err)
-		}
 		spawner.mu.Lock()
 		spawner.runningAgents[id] = 12345
 		spawner.mu.Unlock()
@@ -632,17 +529,6 @@ func TestStopAllAgents(t *testing.T) {
 	// Verify all are gone from running agents
 	if len(spawner.GetRunningAgents()) > 0 {
 		t.Error("All agents should be removed from running agents")
-	}
-
-	// Verify all agents are marked stopped in DB
-	for _, id := range agentIDs {
-		agent, err := db.GetAgent(id)
-		if err != nil {
-			t.Fatalf("Failed to get agent %s: %v", id, err)
-		}
-		if agent != nil && agent.Status != "stopped" {
-			t.Errorf("Agent %s should be stopped, got status '%s'", id, agent.Status)
-		}
 	}
 }
 
