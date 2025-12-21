@@ -361,22 +361,20 @@ func (d *StandardDispatcher) generateAgentID(config types.AgentConfig) string {
 }
 
 func (d *StandardDispatcher) buildInitialPrompt(rec *AgentRecommendation, agentID string, role types.AgentRole) string {
-	// Build prompt with agent identity and registration
+	// Build prompt with agent identity and task
 	prompt := fmt.Sprintf(
-		"You are agent '%s' with role '%s'. Call mcp__cliaimonitor__register_agent with agent_id='%s' and role='%s' to register. ",
-		agentID, role, agentID, role)
-
-	prompt += fmt.Sprintf("TASK: %s. ", rec.Task)
+		"You are agent '%s' with role '%s'. TASK: %s. ",
+		agentID, role, rec.Task)
 
 	if rec.Rationale != "" {
-		prompt += fmt.Sprintf("Rationale: %s. ", rec.Rationale)
+		prompt += fmt.Sprintf("%s ", rec.Rationale)
 	}
 
 	if len(rec.FindingIDs) > 0 {
 		prompt += fmt.Sprintf("Addresses findings: %v. ", rec.FindingIDs)
 	}
 
-	prompt += "Work autonomously. Use MCP tools to report progress."
+	prompt += "Work autonomously with focus on QUALITY over speed. When complete, call signal_captain(signal='completed', work_completed='summary of what you did')."
 
 	return prompt
 }
