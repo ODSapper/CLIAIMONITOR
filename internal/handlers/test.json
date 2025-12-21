@@ -22,7 +22,7 @@
       "reason": "task_complete",
       "context": "Test context",
       "work_completed": "Test work",
-      "created_at": "2025-12-20T13:35:06.6867404-06:00",
+      "created_at": "2025-12-20T19:25:12.9821387-06:00",
       "reviewed": true,
       "approved": true,
       "response": "Approved",
@@ -54,7 +54,7 @@
     "total_tokens_used": 0,
     "total_estimated_cost": 0,
     "session_started_at": "2025-12-08T20:15:32.8036254-06:00",
-    "completed_tasks": 13
+    "completed_tasks": 14
   },
   "nats_connected": false,
   "captain_connected": false,
