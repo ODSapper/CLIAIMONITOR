@@ -39,20 +39,28 @@ type ProcessSpawner struct {
 	agentCounters  map[string]int // agentType -> sequence counter
 	memDB          memory.MemoryDB
 	heartbeatPIDs  map[string]int // agentID -> heartbeat script PID
+
+	// Layout management: Captain full-width at top, agents in rows of 3 below
+	captainPaneID   int     // Pane ID of Captain (top, full width)
+	agentRows       [][]int // Rows of agent pane IDs, max 3 per row
+	maxAgentsPerRow int     // Maximum agents per row (default 3)
 }
 
 // NewSpawner creates a new process spawner
 func NewSpawner(basePath string, mcpServerURL string, memDB memory.MemoryDB) *ProcessSpawner {
 	return &ProcessSpawner{
-		basePath:      basePath,
-		mcpServerURL:  mcpServerURL,
-		scriptsPath:   filepath.Join(basePath, "scripts"),
-		configsPath:   filepath.Join(basePath, "configs"),
-		runningAgents: make(map[string]int),
-		agentPanes:    make(map[string]int),
-		agentCounters: make(map[string]int),
-		memDB:         memDB,
-		heartbeatPIDs: make(map[string]int),
+		basePath:        basePath,
+		mcpServerURL:    mcpServerURL,
+		scriptsPath:     filepath.Join(basePath, "scripts"),
+		configsPath:     filepath.Join(basePath, "configs"),
+		runningAgents:   make(map[string]int),
+		agentPanes:      make(map[string]int),
+		agentCounters:   make(map[string]int),
+		memDB:           memDB,
+		heartbeatPIDs:   make(map[string]int),
+		captainPaneID:   0,              // Captain pane (usually pane 0)
+		agentRows:       make([][]int, 0),
+		maxAgentsPerRow: 3,              // 3 agents per row
 	}
 }
 
@@ -69,6 +77,71 @@ func (s *ProcessSpawner) GetNATSURL() string {
 // SetMemoryDB sets the memory database for the spawner
 func (s *ProcessSpawner) SetMemoryDB(db memory.MemoryDB) {
 	s.memDB = db
+}
+
+// SetCaptainPaneID sets the pane ID where Captain is running (top, full-width)
+func (s *ProcessSpawner) SetCaptainPaneID(paneID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.captainPaneID = paneID
+	log.Printf("[SPAWNER] Captain pane set to %d", paneID)
+}
+
+// GetCaptainPaneID returns the Captain's pane ID
+func (s *ProcessSpawner) GetCaptainPaneID() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.captainPaneID
+}
+
+// getNextPaneSplit determines where to split for the next agent
+// Returns: (paneIDToSplit, direction) where direction is "bottom" or "right"
+func (s *ProcessSpawner) getNextPaneSplit() (int, string) {
+	// If no agent rows yet, split Captain pane downward
+	if len(s.agentRows) == 0 {
+		return s.captainPaneID, "bottom"
+	}
+
+	// Get the last row
+	lastRow := s.agentRows[len(s.agentRows)-1]
+
+	// If last row is full (3 agents), start new row by splitting leftmost pane of last row
+	if len(lastRow) >= s.maxAgentsPerRow {
+		return lastRow[0], "bottom"
+	}
+
+	// Otherwise, split the rightmost pane in the current row to the right
+	return lastRow[len(lastRow)-1], "right"
+}
+
+// addAgentToLayout adds a new agent pane ID to the layout tracking
+func (s *ProcessSpawner) addAgentToLayout(paneID int) {
+	// If no rows or last row is full, create new row
+	if len(s.agentRows) == 0 || len(s.agentRows[len(s.agentRows)-1]) >= s.maxAgentsPerRow {
+		s.agentRows = append(s.agentRows, []int{paneID})
+	} else {
+		// Add to last row
+		s.agentRows[len(s.agentRows)-1] = append(s.agentRows[len(s.agentRows)-1], paneID)
+	}
+	log.Printf("[SPAWNER] Layout updated: %d rows, current row has %d agents",
+		len(s.agentRows), len(s.agentRows[len(s.agentRows)-1]))
+}
+
+// removeAgentFromLayout removes an agent pane from layout tracking
+func (s *ProcessSpawner) removeAgentFromLayout(paneID int) {
+	for i, row := range s.agentRows {
+		for j, pid := range row {
+			if pid == paneID {
+				// Remove this pane from the row
+				s.agentRows[i] = append(row[:j], row[j+1:]...)
+				// If row is now empty, remove the row
+				if len(s.agentRows[i]) == 0 {
+					s.agentRows = append(s.agentRows[:i], s.agentRows[i+1:]...)
+				}
+				return
+			}
+		}
+	}
 }
 
 // GenerateAgentID creates a team-compatible agent ID in format: team-{type}{seq}
@@ -205,16 +278,25 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	var paneID int
 
 	if _, err := exec.LookPath("wezterm.exe"); err == nil {
-		// Step 1: Split pane with cmd.exe (spawns in current window, not new window)
-		// Using --right to split horizontally; command chaining via /k doesn't work reliably
-		cmd = exec.Command("wezterm.exe", "cli", "split-pane", "--right", "--cwd", projectPath, "--", "cmd.exe")
+		// Determine where to split based on grid layout:
+		// - Captain is full-width at top
+		// - Agents spawn in rows of 3 below Captain
+		splitPaneID, splitDirection := s.getNextPaneSplit()
+		log.Printf("[SPAWNER] Grid layout: splitting pane %d to the %s", splitPaneID, splitDirection)
+
+		// Step 1: Split pane with cmd.exe using grid layout
+		cmd = exec.Command("wezterm.exe", "cli", "split-pane",
+			"--pane-id", strconv.Itoa(splitPaneID),
+			"--"+splitDirection,
+			"--cwd", projectPath,
+			"--", "cmd.exe")
 
 		// Set NATS_CLIENT_ID environment variable for the agent process
 		cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
 
 		output, err := cmd.Output()
 		if err != nil {
-			// Fallback: Try spawn --new-window if split-pane fails
+			// Fallback: Try spawn if split-pane fails
 			log.Printf("[SPAWNER] wezterm cli split-pane failed, trying spawn: %v", err)
 			cmd = exec.Command("wezterm.exe", "cli", "spawn", "--cwd", projectPath, "--", "cmd.exe")
 			cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
@@ -230,6 +312,9 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 		if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
 			paneID = parsedID
 			log.Printf("[SPAWNER] Agent %s spawned in pane %d", agentID, paneID)
+
+			// Add to grid layout tracking
+			s.addAgentToLayout(paneID)
 
 			// Step 2: Send command chain via send-text with --no-paste and \r\n to execute
 			// Small delay to let the cmd.exe prompt appear
@@ -390,6 +475,7 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 			// Successfully killed by pane ID, remove from tracking
 			s.mu.Lock()
 			delete(s.agentPanes, agentID)
+			s.removeAgentFromLayout(paneID) // Remove from grid layout
 			s.mu.Unlock()
 			log.Printf("[SPAWNER] Successfully killed agent %s via pane ID", agentID)
 			// Still continue with other cleanup methods as fallback
