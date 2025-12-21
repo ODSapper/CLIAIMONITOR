@@ -396,6 +396,10 @@ func (s *Server) setupRoutes() {
 	// Captain health endpoint
 	api.HandleFunc("/captain/health", s.handleCaptainHealth).Methods("GET")
 
+	// Captain pane ID (for WezTerm spawning)
+	api.HandleFunc("/captain/pane", s.handleSetCaptainPaneID).Methods("POST")
+	api.HandleFunc("/captain/pane", s.handleGetCaptainPaneID).Methods("GET")
+
 	// Captain context endpoints (for session persistence)
 	api.HandleFunc("/captain/context", s.handleGetCaptainContext).Methods("GET")
 	api.HandleFunc("/captain/context", s.handleSetCaptainContext).Methods("POST")

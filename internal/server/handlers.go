@@ -1056,3 +1056,43 @@ func (s *Server) handleGetDefectCategories(w http.ResponseWriter, r *http.Reques
 		"count":      len(categories),
 	})
 }
+
+// handleSetCaptainPaneID handles POST /api/captain/pane
+// Sets the Captain's WezTerm pane ID so agent spawning works correctly
+func (s *Server) handleSetCaptainPaneID(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PaneID int `json:"pane_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if s.spawner == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Spawner not available")
+		return
+	}
+
+	s.spawner.SetCaptainPaneID(req.PaneID)
+	log.Printf("[SERVER] Captain pane ID set to %d", req.PaneID)
+
+	s.respondJSON(w, map[string]interface{}{
+		"success": true,
+		"pane_id": req.PaneID,
+		"message": "Captain pane ID set successfully",
+	})
+}
+
+// handleGetCaptainPaneID handles GET /api/captain/pane
+// Returns the current Captain pane ID
+func (s *Server) handleGetCaptainPaneID(w http.ResponseWriter, r *http.Request) {
+	if s.spawner == nil {
+		s.respondError(w, http.StatusServiceUnavailable, "Spawner not available")
+		return
+	}
+
+	paneID := s.spawner.GetCaptainPaneID()
+	s.respondJSON(w, map[string]interface{}{
+		"pane_id": paneID,
+	})
+}

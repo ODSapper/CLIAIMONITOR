@@ -291,19 +291,22 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 			"--cwd", projectPath,
 			"--", "cmd.exe")
 
+		log.Printf("[SPAWNER] Executing: wezterm.exe cli split-pane --pane-id %d --%s --cwd %q -- cmd.exe",
+			splitPaneID, splitDirection, projectPath)
+
 		// Set NATS_CLIENT_ID environment variable for the agent process
 		cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
 
-		output, err := cmd.Output()
+		output, err := cmd.CombinedOutput()
 		if err != nil {
 			// Fallback: Try spawn if split-pane fails
-			log.Printf("[SPAWNER] wezterm cli split-pane failed, trying spawn: %v", err)
+			log.Printf("[SPAWNER] wezterm cli split-pane failed (output: %s): %v", string(output), err)
 			cmd = exec.Command("wezterm.exe", "cli", "spawn", "--cwd", projectPath, "--", "cmd.exe")
 			cmd.Env = append(os.Environ(), fmt.Sprintf("NATS_CLIENT_ID=%s", natsClientID))
 
-			output, err = cmd.Output()
+			output, err = cmd.CombinedOutput()
 			if err != nil {
-				return 0, fmt.Errorf("failed to spawn agent pane in WezTerm: %w", err)
+				return 0, fmt.Errorf("failed to spawn agent pane in WezTerm (output: %s): %w", string(output), err)
 			}
 		}
 
@@ -319,36 +322,30 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 			// Step 2: Apply colors - get colors and generate banner
 			colors := GetAgentColors(config.Name)
 			banner := GenerateBanner(agentID, config.Name, string(config.Role))
-			bgTint := colors.BgDark
 
 			// Small delay to let the cmd.exe prompt appear
 			time.Sleep(500 * time.Millisecond)
 
-			// Step 2a: Send background tint to set pane background color
-			// This uses cmd.exe's ability to output ANSI sequences via echo
-			// WezTerm fully supports 24-bit ANSI color codes
-			tintCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
-			// Use echo with ANSI codes - cmd.exe passes through to terminal
-			tintCommand := fmt.Sprintf("echo %s\r\n", bgTint)
-			tintCmd.Stdin = strings.NewReader(tintCommand)
-			if err := tintCmd.Run(); err != nil {
-				log.Printf("[SPAWNER] Warning: Failed to send background tint: %v", err)
+			// Step 2a: Clear screen and set background tint
+			// Send raw ANSI codes directly - WezTerm interprets them natively
+			clearCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
+			// Clear screen + set background color + move cursor home
+			clearSeq := fmt.Sprintf("\x1b[2J\x1b[H%s", colors.BgDark)
+			clearCmd.Stdin = strings.NewReader(clearSeq)
+			if err := clearCmd.Run(); err != nil {
+				log.Printf("[SPAWNER] Warning: Failed to clear and set background: %v", err)
 			}
 
-			// Step 2b: Send the banner
-			// Split banner into lines and send each separately for proper display
-			for _, line := range strings.Split(banner, "\n") {
-				if line != "" {
-					bannerCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
-					bannerCmd.Stdin = strings.NewReader(fmt.Sprintf("echo %s\r\n", line))
-					if err := bannerCmd.Run(); err != nil {
-						log.Printf("[SPAWNER] Warning: Failed to send banner line: %v", err)
-					}
-				}
+			// Step 2b: Send the banner directly (raw text with ANSI codes)
+			// WezTerm will interpret the escape sequences
+			bannerCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
+			bannerCmd.Stdin = strings.NewReader(banner + "\n")
+			if err := bannerCmd.Run(); err != nil {
+				log.Printf("[SPAWNER] Warning: Failed to send banner: %v", err)
 			}
 
 			// Small delay after banner display
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 
 			// Step 3: Send command chain via send-text with --no-paste and \r\n to execute
 			sendCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
