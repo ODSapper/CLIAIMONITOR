@@ -569,7 +569,15 @@ sqlite3 data/memory.db "SELECT title, status FROM workflow_tasks WHERE status='p
 - mcp__cliaimonitor__wezterm_list_panes - List all terminal panes
 - mcp__cliaimonitor__wezterm_get_text - READ agent screen output (critical for monitoring!)
 - mcp__cliaimonitor__wezterm_send_text - Send commands to agent panes
-- mcp__cliaimonitor__wezterm_close_pane - Close agent pane when work complete
+- mcp__cliaimonitor__wezterm_close_pane - Close single agent pane when work complete
+- mcp__cliaimonitor__wezterm_close_panes - Close MULTIPLE panes safely (use this for bulk close!)
+
+**CRITICAL - WezTerm Operations:**
+NEVER use Bash to call 'wezterm cli' commands directly!
+Calling 'wezterm cli kill-pane' via Bash for multiple panes WILL FREEZE WEZTERM.
+ALWAYS use the MCP tools above - they have rate limiting (200ms delay) to prevent freezes.
+- Single pane: wezterm_close_pane(pane_id)
+- Multiple panes: wezterm_close_panes(pane_ids=[2, 3, 4])
 
 **Agent Lifecycle:**
 - mcp__cliaimonitor__signal_captain - Agents call this when done: signal_captain(signal="completed", work_completed="...")
@@ -591,7 +599,7 @@ sqlite3 data/memory.db "SELECT title, status FROM workflow_tasks WHERE status='p
 1. Spawn agents via API with clear tasks
 2. Monitor progress by reading screens: wezterm_get_text(pane_id)
 3. When agent signals completion: READ their screen to verify quality
-4. If quality good: wezterm_close_pane(pane_id)
+4. If quality good: wezterm_close_pane(pane_id) or wezterm_close_panes([ids]) for multiple
 5. If quality bad: wezterm_send_text to request fixes
 
 ## Quality Verification Protocol

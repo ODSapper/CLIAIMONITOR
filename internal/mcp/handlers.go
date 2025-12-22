@@ -1549,6 +1549,81 @@ func registerWezTermTools(s *Server) {
 		},
 	})
 
+	// wezterm_close_panes - Close multiple panes with rate limiting
+	// CRITICAL: Use this instead of calling wezterm cli via Bash to avoid freezing WezTerm
+	s.RegisterTool(ToolDefinition{
+		Name:        "wezterm_close_panes",
+		Description: "Close multiple panes by their IDs with proper rate limiting (200ms delay between each). ALWAYS use this instead of calling 'wezterm cli kill-pane' via Bash to prevent WezTerm from freezing.",
+		Parameters: map[string]ParameterDef{
+			"pane_ids": {
+				Type:        "array",
+				Description: "Array of pane IDs to close (e.g., [2, 3, 4])",
+				Required:    true,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			paneIDsRaw, ok := params["pane_ids"].([]interface{})
+			if !ok || len(paneIDsRaw) == 0 {
+				return map[string]interface{}{"error": "pane_ids array is required"}, nil
+			}
+
+			// Parse pane IDs
+			var paneIDs []int
+			for _, idRaw := range paneIDsRaw {
+				var paneID int
+				switch v := idRaw.(type) {
+				case float64:
+					paneID = int(v)
+				case string:
+					var err error
+					paneID, err = strconv.Atoi(v)
+					if err != nil {
+						return map[string]interface{}{
+							"success": false,
+							"error":   fmt.Sprintf("invalid pane_id: %v", idRaw),
+						}, nil
+					}
+				default:
+					return map[string]interface{}{
+						"success": false,
+						"error":   fmt.Sprintf("invalid pane_id type: %T", idRaw),
+					}, nil
+				}
+				paneIDs = append(paneIDs, paneID)
+			}
+
+			// Use centralized WezTerm ops with rate limiting
+			errors := wezterm.Get().KillPanes(paneIDs)
+
+			// Build result with per-pane status
+			results := make([]map[string]interface{}, len(paneIDs))
+			successCount := 0
+			for i, paneID := range paneIDs {
+				if i < len(errors) && errors[i] != nil {
+					results[i] = map[string]interface{}{
+						"pane_id": paneID,
+						"success": false,
+						"error":   errors[i].Error(),
+					}
+				} else {
+					results[i] = map[string]interface{}{
+						"pane_id": paneID,
+						"success": true,
+					}
+					successCount++
+				}
+			}
+
+			return map[string]interface{}{
+				"success":       successCount == len(paneIDs),
+				"total":         len(paneIDs),
+				"closed":        successCount,
+				"failed":        len(paneIDs) - successCount,
+				"results":       results,
+			}, nil
+		},
+	})
+
 	// wezterm_focus_pane - Focus/activate a specific pane
 	// Uses centralized WezTerm ops for thread safety
 	s.RegisterTool(ToolDefinition{
