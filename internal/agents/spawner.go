@@ -16,6 +16,7 @@ import (
 	"github.com/CLIAIMONITOR/internal/instance"
 	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/types"
+	"github.com/CLIAIMONITOR/internal/wezterm"
 )
 
 // Spawner manages agent process lifecycle
@@ -30,7 +31,8 @@ type Spawner interface {
 // ProcessSpawner implements Spawner using WezTerm
 type ProcessSpawner struct {
 	mu             sync.RWMutex
-	basePath       string // CLIAIMONITOR directory
+	spawnMu        sync.Mutex // Serializes agent spawning to prevent race conditions
+	basePath       string     // CLIAIMONITOR directory
 	mcpServerURL   string
 	scriptsPath    string
 	configsPath    string
@@ -218,6 +220,11 @@ func (s *ProcessSpawner) SetAgentPaneID(agentID string, paneID int) {
 
 // SpawnAgent launches a team agent in WezTerm
 func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (int, error) {
+	// Serialize spawns to prevent race conditions when determining spawn target
+	// This ensures only one agent spawns at a time, preventing multiple windows
+	s.spawnMu.Lock()
+	defer s.spawnMu.Unlock()
+
 	// Escape the initial prompt for shell
 	escapedPrompt := strings.ReplaceAll(initialPrompt, `"`, `\"`)
 	escapedPrompt = strings.ReplaceAll(escapedPrompt, `'`, `''`)
@@ -400,13 +407,12 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 		if err := s.KillByPaneID(paneID); err != nil {
 			log.Printf("[SPAWNER] Warning: Failed to kill agent %s by pane ID %d: %v", agentID, paneID, err)
 		} else {
-			// Successfully killed by pane ID, remove from tracking
-			s.mu.Lock()
-			delete(s.agentPanes, agentID)
-			s.mu.Unlock()
 			log.Printf("[SPAWNER] Successfully killed agent %s via pane ID %d", agentID, paneID)
-			// Still continue with other cleanup methods as fallback
 		}
+		// Always remove pane ID from tracking (pane is either closed or already gone)
+		s.mu.Lock()
+		delete(s.agentPanes, agentID)
+		s.mu.Unlock()
 	}
 
 	// 7. Try to kill the agent process using PID file (fallback method)
@@ -447,14 +453,9 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 }
 
 // KillByPaneID kills a WezTerm pane by its pane ID
+// Uses centralized WezTerm ops for rate limiting and timeout handling
 func (s *ProcessSpawner) KillByPaneID(paneID int) error {
-	cmd := exec.Command("wezterm.exe", "cli", "kill-pane", "--pane-id", fmt.Sprintf("%d", paneID))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to kill pane %d: %w (output: %s)", paneID, err, string(output))
-	}
-	log.Printf("[SPAWNER] Successfully killed pane %d", paneID)
-	return nil
+	return wezterm.Get().KillPane(paneID)
 }
 
 // KillChildClaude kills any claude.exe processes that are children of the given parent PID

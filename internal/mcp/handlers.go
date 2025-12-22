@@ -1,14 +1,15 @@
 package mcp
 
 import (
-	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/CLIAIMONITOR/internal/events"
 	"github.com/CLIAIMONITOR/internal/types"
+	"github.com/CLIAIMONITOR/internal/wezterm"
 	"github.com/google/uuid"
 )
 
@@ -1431,26 +1432,17 @@ func registerWezTermTools(s *Server) {
 	})
 
 	// wezterm_list_panes - List all panes in WezTerm
+	// Uses centralized WezTerm ops for thread safety
 	s.RegisterTool(ToolDefinition{
 		Name:        "wezterm_list_panes",
 		Description: "List all panes in WezTerm with their IDs, titles, and working directories.",
 		Parameters:  map[string]ParameterDef{},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			cmd := exec.Command("wezterm.exe", "cli", "list", "--format", "json")
-			output, err := cmd.CombinedOutput()
+			panes, err := wezterm.Get().ListPanes()
 			if err != nil {
 				return map[string]interface{}{
 					"success": false,
-					"error":   fmt.Sprintf("failed to list panes: %v, output: %s", err, string(output)),
-				}, nil
-			}
-
-			// Parse JSON output
-			var panes []map[string]interface{}
-			if err := json.Unmarshal(output, &panes); err != nil {
-				return map[string]interface{}{
-					"success": false,
-					"error":   fmt.Sprintf("failed to parse pane list: %v", err),
+					"error":   err.Error(),
 				}, nil
 			}
 
@@ -1463,6 +1455,7 @@ func registerWezTermTools(s *Server) {
 	})
 
 	// wezterm_send_text - Send text/command to a specific pane
+	// Uses centralized WezTerm ops for thread safety
 	s.RegisterTool(ToolDefinition{
 		Name:        "wezterm_send_text",
 		Description: "Send text or a command to a specific pane. Useful for programmatically controlling terminals.",
@@ -1484,41 +1477,42 @@ func registerWezTermTools(s *Server) {
 			},
 		},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			paneID, _ := params["pane_id"].(string)
+			paneIDStr, _ := params["pane_id"].(string)
 			text, _ := params["text"].(string)
 			execute, _ := params["execute"].(bool)
 
-			if paneID == "" || text == "" {
+			if paneIDStr == "" || text == "" {
 				return map[string]interface{}{"error": "pane_id and text are required"}, nil
 			}
 
-			// Append CR+LF if execute is true
-			if execute {
-				text = text + "\r\n"
-			}
-
-			// Use --no-paste for direct text input and pass via stdin for special char handling
-			cmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneID, "--no-paste")
-			cmd.Stdin = strings.NewReader(text)
-			output, err := cmd.CombinedOutput()
+			paneID, err := strconv.Atoi(paneIDStr)
 			if err != nil {
 				return map[string]interface{}{
 					"success": false,
-					"error":   fmt.Sprintf("failed to send text: %v, output: %s", err, string(output)),
+					"error":   fmt.Sprintf("invalid pane_id: %s", paneIDStr),
+				}, nil
+			}
+
+			// Use centralized WezTerm ops
+			if err := wezterm.Get().SendText(paneID, text, execute); err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   err.Error(),
 				}, nil
 			}
 
 			return map[string]interface{}{
-				"success": true,
+				"success":  true,
 				"executed": execute,
 			}, nil
 		},
 	})
 
 	// wezterm_close_pane - Close a specific pane
+	// Uses centralized WezTerm ops for rate limiting and timeout handling
 	s.RegisterTool(ToolDefinition{
 		Name:        "wezterm_close_pane",
-		Description: "Close a specific pane by its ID.",
+		Description: "Close a specific pane by its ID. Uses rate limiting to prevent lockups when closing multiple panes.",
 		Parameters: map[string]ParameterDef{
 			"pane_id": {
 				Type:        "string",
@@ -1527,18 +1521,25 @@ func registerWezTermTools(s *Server) {
 			},
 		},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			paneID, _ := params["pane_id"].(string)
+			paneIDStr, _ := params["pane_id"].(string)
 
-			if paneID == "" {
+			if paneIDStr == "" {
 				return map[string]interface{}{"error": "pane_id is required"}, nil
 			}
 
-			cmd := exec.Command("wezterm.exe", "cli", "kill-pane", "--pane-id", paneID)
-			output, err := cmd.CombinedOutput()
+			paneID, err := strconv.Atoi(paneIDStr)
 			if err != nil {
 				return map[string]interface{}{
 					"success": false,
-					"error":   fmt.Sprintf("failed to close pane: %v, output: %s", err, string(output)),
+					"error":   fmt.Sprintf("invalid pane_id: %s", paneIDStr),
+				}, nil
+			}
+
+			// Use centralized WezTerm ops with rate limiting and timeout
+			if err := wezterm.Get().KillPane(paneID); err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   err.Error(),
 				}, nil
 			}
 
@@ -1549,6 +1550,7 @@ func registerWezTermTools(s *Server) {
 	})
 
 	// wezterm_focus_pane - Focus/activate a specific pane
+	// Uses centralized WezTerm ops for thread safety
 	s.RegisterTool(ToolDefinition{
 		Name:        "wezterm_focus_pane",
 		Description: "Focus or activate a specific pane by its ID, bringing it to the foreground.",
@@ -1560,18 +1562,24 @@ func registerWezTermTools(s *Server) {
 			},
 		},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			paneID, _ := params["pane_id"].(string)
+			paneIDStr, _ := params["pane_id"].(string)
 
-			if paneID == "" {
+			if paneIDStr == "" {
 				return map[string]interface{}{"error": "pane_id is required"}, nil
 			}
 
-			cmd := exec.Command("wezterm.exe", "cli", "activate-pane", "--pane-id", paneID)
-			output, err := cmd.CombinedOutput()
+			paneID, err := strconv.Atoi(paneIDStr)
 			if err != nil {
 				return map[string]interface{}{
 					"success": false,
-					"error":   fmt.Sprintf("failed to focus pane: %v, output: %s", err, string(output)),
+					"error":   fmt.Sprintf("invalid pane_id: %s", paneIDStr),
+				}, nil
+			}
+
+			if err := wezterm.Get().FocusPane(paneID); err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   err.Error(),
 				}, nil
 			}
 
@@ -1582,6 +1590,7 @@ func registerWezTermTools(s *Server) {
 	})
 
 	// wezterm_get_text - Read text content from a pane
+	// Uses centralized WezTerm ops for thread safety
 	s.RegisterTool(ToolDefinition{
 		Name:        "wezterm_get_text",
 		Description: "Read the text content of a WezTerm pane. Useful for seeing what's displayed in agent terminals.",
@@ -1603,39 +1612,43 @@ func registerWezTermTools(s *Server) {
 			},
 		},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			paneID, _ := params["pane_id"].(string)
+			paneIDStr, _ := params["pane_id"].(string)
 
-			if paneID == "" {
+			if paneIDStr == "" {
 				return map[string]interface{}{"error": "pane_id is required"}, nil
 			}
 
-			args := []string{"cli", "get-text", "--pane-id", paneID}
-
-			// Add optional line range
-			if startLine, ok := params["start_line"].(float64); ok {
-				args = append(args, "--start-line", fmt.Sprintf("%d", int(startLine)))
-			} else {
-				// Default to last 50 lines of scrollback
-				args = append(args, "--start-line", "-50")
-			}
-
-			if endLine, ok := params["end_line"].(float64); ok {
-				args = append(args, "--end-line", fmt.Sprintf("%d", int(endLine)))
-			}
-
-			cmd := exec.Command("wezterm.exe", args...)
-			output, err := cmd.CombinedOutput()
+			paneID, err := strconv.Atoi(paneIDStr)
 			if err != nil {
 				return map[string]interface{}{
 					"success": false,
-					"error":   fmt.Sprintf("failed to get pane text: %v, output: %s", err, string(output)),
+					"error":   fmt.Sprintf("invalid pane_id: %s", paneIDStr),
+				}, nil
+			}
+
+			// Parse optional line range
+			startLine := -50 // Default
+			if sl, ok := params["start_line"].(float64); ok {
+				startLine = int(sl)
+			}
+
+			endLine := 0 // 0 means bottom of screen
+			if el, ok := params["end_line"].(float64); ok {
+				endLine = int(el)
+			}
+
+			text, err := wezterm.Get().GetPaneText(paneID, startLine, endLine)
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   err.Error(),
 				}, nil
 			}
 
 			return map[string]interface{}{
 				"success": true,
-				"text":    string(output),
-				"pane_id": paneID,
+				"text":    text,
+				"pane_id": paneIDStr,
 			}, nil
 		},
 	})
