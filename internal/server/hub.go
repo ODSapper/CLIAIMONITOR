@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 
@@ -30,35 +31,36 @@ type Hub struct {
 	unregister chan *Client
 	broadcast  chan []byte
 	shutdown   chan struct{} // Shutdown signal channel
+	ctx        context.Context
+	cancel     context.CancelFunc
 }
 
 // NewHub creates a new WebSocket hub
 func NewHub() *Hub {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		broadcast:  make(chan []byte, WebSocketBufferSize),
 		shutdown:   make(chan struct{}),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 }
 
 // Run starts the hub's main loop
 func (h *Hub) Run() {
+	defer h.cleanup()
+
 	for {
 		select {
+		case <-h.ctx.Done():
+			// Context cancelled: clean shutdown
+			return
+
 		case <-h.shutdown:
-			// Shutdown: close all client channels and cleanup
-			h.mu.Lock()
-			for client := range h.clients {
-				close(client.send)
-				delete(h.clients, client)
-			}
-			h.mu.Unlock()
-			// Close hub channels to prevent goroutine leaks
-			close(h.register)
-			close(h.unregister)
-			close(h.broadcast)
+			// Legacy shutdown signal: clean shutdown
 			return
 
 		case client := <-h.register:
@@ -87,6 +89,23 @@ func (h *Hub) Run() {
 			h.mu.Unlock()
 		}
 	}
+}
+
+// cleanup performs cleanup operations when the hub is shutting down
+func (h *Hub) cleanup() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Close all client channels
+	for client := range h.clients {
+		close(client.send)
+		delete(h.clients, client)
+	}
+
+	// Close hub channels to prevent goroutine leaks
+	close(h.register)
+	close(h.unregister)
+	close(h.broadcast)
 }
 
 // Register adds a client
@@ -165,7 +184,13 @@ func (h *Hub) ClientCount() int {
 
 // Shutdown gracefully shuts down the hub and closes all channels
 func (h *Hub) Shutdown() {
-	close(h.shutdown)
+	h.cancel() // Cancel context to signal all goroutines
+	select {
+	case <-h.shutdown:
+		// Already closed
+	default:
+		close(h.shutdown)
+	}
 }
 
 // readPump reads messages from the WebSocket
@@ -176,11 +201,17 @@ func (c *Client) readPump() {
 	}()
 
 	for {
-		_, _, err := c.conn.ReadMessage()
-		if err != nil {
-			break
+		select {
+		case <-c.hub.ctx.Done():
+			// Hub is shutting down
+			return
+		default:
+			_, _, err := c.conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			// We don't process incoming messages from browser currently
 		}
-		// We don't process incoming messages from browser currently
 	}
 }
 
@@ -190,6 +221,11 @@ func (c *Client) writePump() {
 
 	for {
 		select {
+		case <-c.hub.ctx.Done():
+			// Hub is shutting down, close connection gracefully
+			c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+			return
+
 		case message, ok := <-c.send:
 			if !ok {
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})

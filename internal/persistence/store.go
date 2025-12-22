@@ -147,13 +147,19 @@ func (s *JSONStore) Load() (*types.DashboardState, error) {
 func (s *JSONStore) Save() error {
 	s.mu.RLock()
 	data, err := json.MarshalIndent(s.state, "", "  ")
+	if err != nil {
+		s.mu.RUnlock()
+		return err
+	}
 	s.mu.RUnlock()
 
-	if err != nil {
+	// Write to temp file first, then rename atomically
+	tempPath := s.filepath + ".tmp"
+	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return err
 	}
 
-	return os.WriteFile(s.filepath, data, 0644)
+	return os.Rename(tempPath, s.filepath)
 }
 
 // scheduleSave debounces save operations
@@ -225,15 +231,14 @@ func (s *JSONStore) GetAgent(agentID string) *types.Agent {
 // RequestAgentShutdown marks an agent for graceful shutdown
 func (s *JSONStore) RequestAgentShutdown(agentID string, requestTime time.Time) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if agent, ok := s.state.Agents[agentID]; ok {
 		agent.ShutdownRequested = true
 		agent.ShutdownRequestedAt = &requestTime
 		agent.Status = types.StatusStopping
 		s.state.Agents[agentID] = agent
-		s.scheduleSave()
 	}
+	s.mu.Unlock()
+	s.scheduleSave()
 }
 
 // UpdateMetrics updates agent metrics
@@ -291,10 +296,9 @@ func (s *JSONStore) TakeMetricsSnapshot() {
 // GetNextAgentNumber returns next number for agent naming
 func (s *JSONStore) GetNextAgentNumber(configName string) int {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	s.state.AgentCounters[configName]++
 	num := s.state.AgentCounters[configName]
+	s.mu.Unlock()
 	s.scheduleSave()
 	return num
 }
@@ -521,8 +525,6 @@ func (s *JSONStore) GetThresholds() types.AlertThresholds {
 // CleanupStaleAgents removes disconnected agents where process is not running
 func (s *JSONStore) CleanupStaleAgents() int {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	removedCount := 0
 	for agentID, agent := range s.state.Agents {
 		// Only consider disconnected agents
@@ -548,6 +550,7 @@ func (s *JSONStore) CleanupStaleAgents() int {
 			}
 		}
 	}
+	s.mu.Unlock()
 
 	if removedCount > 0 {
 		s.scheduleSave()

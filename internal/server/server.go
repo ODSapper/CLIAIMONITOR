@@ -380,10 +380,6 @@ func (s *Server) setupRoutes() {
 	// Captain health endpoint
 	api.HandleFunc("/captain/health", s.handleCaptainHealth).Methods("GET")
 
-	// Captain pane ID (for WezTerm spawning)
-	api.HandleFunc("/captain/pane", s.handleSetCaptainPaneID).Methods("POST")
-	api.HandleFunc("/captain/pane", s.handleGetCaptainPaneID).Methods("GET")
-
 	// Captain context endpoints (for session persistence)
 	api.HandleFunc("/captain/context", s.handleGetCaptainContext).Methods("GET")
 	api.HandleFunc("/captain/context", s.handleSetCaptainContext).Methods("POST")
@@ -477,60 +473,6 @@ func (s *Server) setupMCPCallbacks() {
 
 		OnGetAgentList: func() (interface{}, error) {
 			return s.store.GetState().Agents, nil
-		},
-
-		OnRequestStopApproval: func(req *types.StopApprovalRequest) (interface{}, error) {
-			s.store.AddStopRequest(req)
-			// Alert supervisor about pending stop request
-			s.hub.BroadcastAlert(&types.Alert{
-				ID:        req.ID,
-				Type:      "stop_approval_needed",
-				AgentID:   req.AgentID,
-				Message:   fmt.Sprintf("Agent %s wants to stop: %s", req.AgentID, req.Reason),
-				Severity:  "warning",
-				CreatedAt: time.Now(),
-			})
-			s.broadcastState()
-			return map[string]string{"request_id": req.ID, "status": "pending_approval"}, nil
-		},
-
-		OnGetStopRequestByID: func(id string) *types.StopApprovalRequest {
-			return s.store.GetStopRequestByID(id)
-		},
-
-		OnGetPendingStopRequests: func() (interface{}, error) {
-			return s.store.GetPendingStopRequests(), nil
-		},
-
-		OnRespondStopRequest: func(id string, approved bool, response string) (interface{}, error) {
-			// Get the request first to find the agent ID
-			req := s.store.GetStopRequestByID(id)
-			if req == nil {
-				return nil, fmt.Errorf("stop request not found: %s", id)
-			}
-
-			s.store.RespondStopRequest(id, approved, response, "supervisor")
-			s.broadcastState()
-
-			// Publish event to the requesting agent via event bus
-			if s.eventBus != nil {
-				event := events.NewEvent(
-					events.EventStopApproval,
-					"supervisor",
-					req.AgentID,
-					events.PriorityHigh,
-					map[string]interface{}{
-						"request_id":  id,
-						"approved":    approved,
-						"response":    response,
-						"reviewed_by": "supervisor",
-					},
-				)
-				s.eventBus.Publish(event)
-				log.Printf("[SERVER] Published stop_approval event to %s: approved=%v", req.AgentID, approved)
-			}
-
-			return map[string]string{"status": "responded", "approved": fmt.Sprintf("%v", approved)}, nil
 		},
 
 		OnGetMyTasks: func(agentID, status string) (interface{}, error) {
@@ -702,66 +644,6 @@ func (s *Server) setupMCPCallbacks() {
 			s.broadcastState()
 			return map[string]interface{}{
 				"status": "recorded",
-			}, nil
-		},
-
-		OnSignalCaptain: func(agentID, signal, context string) (interface{}, error) {
-			// Map signal to agent status
-			statusMap := map[string]string{
-				"stopped":       "stopped",
-				"blocked":       "blocked",
-				"completed":     "completed",
-				"error":         "error",
-				"need_guidance": "waiting",
-			}
-			status := statusMap[signal]
-			if status == "" {
-				status = signal
-			}
-
-			// Update dashboard state
-			s.store.UpdateAgent(agentID, func(a *types.Agent) {
-				a.Status = types.AgentStatus(status)
-				a.CurrentTask = context
-				a.LastSeen = time.Now()
-			})
-
-			// Create alert for Captain
-			s.store.AddAlert(&types.Alert{
-				ID:        fmt.Sprintf("signal-%d", time.Now().UnixNano()),
-				Type:      "agent_signal",
-				AgentID:   agentID,
-				Message:   fmt.Sprintf("Agent %s signaled: %s - %s", agentID, signal, context),
-				Severity:  "info",
-				CreatedAt: time.Now(),
-			})
-
-			s.hub.BroadcastAlert(&types.Alert{
-				ID:        fmt.Sprintf("signal-%d", time.Now().UnixNano()),
-				Type:      "agent_signal",
-				AgentID:   agentID,
-				Message:   fmt.Sprintf("Agent %s: %s", agentID, signal),
-				Severity:  "info",
-				CreatedAt: time.Now(),
-			})
-
-			// Publish to event bus so Captain's wait_for_events receives it
-			if s.eventBus != nil {
-				event := &events.Event{
-					Type:      events.EventType("agent_signal"),
-					Source:    agentID,
-					Target:    "Captain",
-					Payload:   map[string]interface{}{"signal": signal, "context": context},
-					CreatedAt: time.Now(),
-				}
-				s.eventBus.Publish(event)
-				log.Printf("[SERVER] Published agent_signal event: agent=%s, signal=%s, target=Captain", agentID, signal)
-			}
-
-			s.broadcastState()
-			return map[string]interface{}{
-				"status": "acknowledged",
-				"signal": signal,
 			}, nil
 		},
 
@@ -1655,33 +1537,16 @@ func (s *Server) setupMCPCallbacks() {
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
 
-	// Set connection callbacks
+	// Set connection callbacks - no-ops since agents use POST-only tool calls
+	// SSE connections are just for keepalive/ping, not meaningful for status tracking
 	s.mcp.SetConnectionCallbacks(
 		func(agentID string) {
-			if err := s.atomicAgentUpdate(agentID, "connected", ""); err != nil {
-				log.Printf("[MCP] ERROR: Failed to mark agent %s as connected: %v", agentID, err)
-			}
-			log.Printf("[MCP] Agent %s SSE connected", agentID)
-			s.broadcastState()
+			// No-op: SSE connect events are not meaningful
+			// Agent status is tracked via wezterm pane existence
 		},
 		func(agentID string) {
-			log.Printf("[MCP] Agent %s SSE disconnected", agentID)
-
-			// Record the disconnect time but don't change status yet
-			s.store.UpdateAgent(agentID, func(a *types.Agent) {
-				// Keep current status - don't assume anything
-				// Just update LastSeen so verification can check timing
-				a.LastSeen = time.Now()
-			})
-
-			// Schedule verification in 30 seconds
-			// This gives the agent time to reconnect if it's just between calls
-			go func() {
-				time.Sleep(30 * time.Second)
-				s.verifyAgentStatus(agentID)
-			}()
-
-			s.broadcastState()
+			// No-op: SSE disconnect events are not meaningful
+			// Agent status is tracked via wezterm pane existence
 		},
 	)
 

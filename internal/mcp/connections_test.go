@@ -261,3 +261,86 @@ func TestSSEConnectionClose(t *testing.T) {
 	// Close again should not panic
 	conn.Close()
 }
+
+func TestSSEConnectionLifecycle(t *testing.T) {
+	conn := &SSEConnection{
+		AgentID: "Agent1",
+		Done:    make(chan struct{}),
+		state:   StateConnecting,
+	}
+
+	// Should start as connecting
+	if conn.IsClosed() {
+		t.Error("new connection should not be closed")
+	}
+
+	// Activate the connection
+	conn.SetActive()
+	conn.mu.Lock()
+	if conn.state != StateActive {
+		t.Errorf("state should be Active, got %v", conn.state)
+	}
+	conn.mu.Unlock()
+
+	// Close the connection
+	conn.Close()
+	if !conn.IsClosed() {
+		t.Error("closed connection should report as closed")
+	}
+
+	// Verify state transitions
+	conn.mu.Lock()
+	if conn.state != StateClosed {
+		t.Errorf("state should be Closed, got %v", conn.state)
+	}
+	conn.mu.Unlock()
+}
+
+func TestConnectionManagerShutdown(t *testing.T) {
+	m := NewConnectionManager()
+
+	// Add some connections
+	conn1 := &SSEConnection{AgentID: "Agent1", Done: make(chan struct{}), state: StateConnecting}
+	conn2 := &SSEConnection{AgentID: "Agent2", Done: make(chan struct{}), state: StateConnecting}
+
+	m.Add("Agent1", conn1)
+	m.Add("Agent2", conn2)
+
+	if len(m.GetConnectedAgentIDs()) != 2 {
+		t.Errorf("expected 2 connections before shutdown")
+	}
+
+	// Shutdown the manager
+	m.Shutdown()
+
+	// Verify all connections are closed
+	if !conn1.IsClosed() {
+		t.Error("conn1 should be closed after shutdown")
+	}
+	if !conn2.IsClosed() {
+		t.Error("conn2 should be closed after shutdown")
+	}
+
+	// Verify connections map is empty
+	if len(m.GetConnectedAgentIDs()) != 0 {
+		t.Errorf("expected 0 connections after shutdown, got %d", len(m.GetConnectedAgentIDs()))
+	}
+
+	// Second shutdown should not panic
+	m.Shutdown()
+}
+
+func TestConnectionManagerCleanupGoroutine(t *testing.T) {
+	m := NewConnectionManager()
+
+	// Verify cleanup goroutine is running by checking shutdown works
+	m.Shutdown()
+
+	// Verify shutdown channel is closed
+	select {
+	case <-m.shutdownChan:
+		// Expected
+	default:
+		t.Error("shutdown channel should be closed")
+	}
+}

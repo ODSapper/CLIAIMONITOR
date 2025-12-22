@@ -11,6 +11,16 @@ import (
 	"github.com/google/uuid"
 )
 
+// ConnectionState represents the lifecycle state of a connection
+type ConnectionState int
+
+const (
+	StateConnecting ConnectionState = iota
+	StateActive
+	StateClosing
+	StateClosed
+)
+
 // SSEConnection represents a connected agent
 type SSEConnection struct {
 	AgentID   string
@@ -20,7 +30,9 @@ type SSEConnection struct {
 	Done      chan struct{}
 	CreatedAt time.Time
 	LastPing  time.Time
+	state     ConnectionState
 	mu        sync.Mutex
+	closeOnce sync.Once // Ensure Close is idempotent
 }
 
 // NewSSEConnection creates a new SSE connection
@@ -38,6 +50,7 @@ func NewSSEConnection(agentID string, w http.ResponseWriter) (*SSEConnection, er
 		Done:      make(chan struct{}),
 		CreatedAt: time.Now(),
 		LastPing:  time.Now(),
+		state:     StateConnecting,
 	}, nil
 }
 
@@ -93,13 +106,34 @@ func (c *SSEConnection) SendNotification(method string, params interface{}) erro
 	return c.Send("message", notification)
 }
 
-// Close closes the connection
+// Close closes the connection safely (idempotent)
 func (c *SSEConnection) Close() {
-	select {
-	case <-c.Done:
-		// Already closed
-	default:
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.state = StateClosing
+		c.mu.Unlock()
+
 		close(c.Done)
+
+		c.mu.Lock()
+		c.state = StateClosed
+		c.mu.Unlock()
+	})
+}
+
+// IsClosed returns true if the connection is closed or closing
+func (c *SSEConnection) IsClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state == StateClosing || c.state == StateClosed
+}
+
+// SetActive marks the connection as active
+func (c *SSEConnection) SetActive() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state == StateConnecting {
+		c.state = StateActive
 	}
 }
 
@@ -110,14 +144,76 @@ type ConnectionManager struct {
 	sessions     map[string]*SSEConnection
 	onConnect    func(agentID string)
 	onDisconnect func(agentID string)
+	shutdownChan chan struct{}
+	shutdownOnce sync.Once
 }
 
 // NewConnectionManager creates a new connection manager
 func NewConnectionManager() *ConnectionManager {
-	return &ConnectionManager{
-		connections: make(map[string]*SSEConnection),
-		sessions:    make(map[string]*SSEConnection),
+	cm := &ConnectionManager{
+		connections:  make(map[string]*SSEConnection),
+		sessions:     make(map[string]*SSEConnection),
+		shutdownChan: make(chan struct{}),
 	}
+
+	// Start background cleanup goroutine
+	go cm.cleanupStaleConnections()
+
+	return cm
+}
+
+// cleanupStaleConnections periodically checks for and removes stale connections
+func (m *ConnectionManager) cleanupStaleConnections() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.shutdownChan:
+			return
+		case <-ticker.C:
+			m.mu.Lock()
+			now := time.Now()
+			var staleAgents []string
+
+			// Find connections with no activity for 5 minutes
+			for agentID, conn := range m.connections {
+				conn.mu.Lock()
+				lastPing := conn.LastPing
+				isClosed := conn.state == StateClosing || conn.state == StateClosed
+				conn.mu.Unlock()
+
+				if isClosed || now.Sub(lastPing) > 5*time.Minute {
+					staleAgents = append(staleAgents, agentID)
+				}
+			}
+			m.mu.Unlock()
+
+			// Remove stale connections
+			for _, agentID := range staleAgents {
+				m.Remove(agentID)
+			}
+		}
+	}
+}
+
+// Shutdown stops the connection manager and cleans up all connections
+func (m *ConnectionManager) Shutdown() {
+	m.shutdownOnce.Do(func() {
+		close(m.shutdownChan)
+
+		// Close all active connections
+		m.mu.Lock()
+		for agentID := range m.connections {
+			if conn, ok := m.connections[agentID]; ok {
+				delete(m.sessions, conn.SessionID)
+				conn.Close()
+			}
+		}
+		m.connections = make(map[string]*SSEConnection)
+		m.sessions = make(map[string]*SSEConnection)
+		m.mu.Unlock()
+	})
 }
 
 // SetCallbacks sets connection event callbacks

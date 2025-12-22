@@ -383,3 +383,102 @@ func TestConcurrentAccess(t *testing.T) {
 	<-done
 	<-done
 }
+
+func TestConcurrentSaveOperations(t *testing.T) {
+	tmpDir := t.TempDir()
+	storePath := filepath.Join(tmpDir, "state.json")
+	store := NewJSONStore(storePath)
+	store.Load()
+
+	const goroutines = 10
+	const iterations = 50
+	done := make(chan bool, goroutines)
+
+	// Multiple goroutines performing various operations concurrently
+	for g := 0; g < goroutines; g++ {
+		gID := g
+		go func() {
+			for i := 0; i < iterations; i++ {
+				agentID := filepath.Join("Agent", string(rune('A'+gID)))
+
+				// Mix of operations
+				store.AddAgent(&types.Agent{
+					ID:     agentID,
+					Status: types.StatusWorking,
+				})
+				store.UpdateMetrics(agentID, &types.AgentMetrics{
+					TokensUsed: int64(i * 100),
+				})
+				store.GetAgent(agentID)
+				store.GetMetrics(agentID)
+				store.GetNextAgentNumber("TestConfig")
+
+				if i%10 == 0 {
+					store.Save()
+				}
+			}
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+
+	// Final save and verify no corruption
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save() after concurrent operations failed: %v", err)
+	}
+
+	// Load in new instance to verify persistence
+	store2 := NewJSONStore(storePath)
+	if _, err := store2.Load(); err != nil {
+		t.Fatalf("Load() after concurrent operations failed: %v", err)
+	}
+}
+
+func TestConcurrentRequestShutdown(t *testing.T) {
+	store := NewJSONStore(filepath.Join(t.TempDir(), "state.json"))
+	store.Load()
+
+	// Add multiple agents
+	for i := 0; i < 10; i++ {
+		agentID := filepath.Join("Agent", string(rune('A'+i)))
+		store.AddAgent(&types.Agent{
+			ID:     agentID,
+			Status: types.StatusWorking,
+		})
+	}
+
+	done := make(chan bool, 10)
+
+	// Concurrent shutdown requests
+	for i := 0; i < 10; i++ {
+		gID := i
+		go func() {
+			agentID := filepath.Join("Agent", string(rune('A'+gID)))
+			for j := 0; j < 20; j++ {
+				store.RequestAgentShutdown(agentID, time.Now())
+				store.GetAgent(agentID)
+			}
+			done <- true
+		}()
+	}
+
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	// Verify all agents are in stopping state
+	for i := 0; i < 10; i++ {
+		agentID := filepath.Join("Agent", string(rune('A'+i)))
+		agent := store.GetAgent(agentID)
+		if agent == nil {
+			t.Fatalf("Agent %s should exist", agentID)
+		}
+		if agent.Status != types.StatusStopping {
+			t.Errorf("Agent %s status = %v, want %v", agentID, agent.Status, types.StatusStopping)
+		}
+	}
+}

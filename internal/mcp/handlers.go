@@ -14,25 +14,20 @@ import (
 
 // ToolCallbacks interface for tool handlers to call back into services
 type ToolCallbacks struct {
-	OnRequestHumanInput      func(req *types.HumanInputRequest) (interface{}, error)
-	OnRequestStopApproval    func(req *types.StopApprovalRequest) (interface{}, error)
-	OnGetStopRequestByID     func(id string) *types.StopApprovalRequest
-	OnLogActivity            func(activity *types.ActivityLog) (interface{}, error)
-	OnGetAgentMetrics        func() (interface{}, error)
-	OnGetPendingQuestions    func() (interface{}, error)
-	OnGetPendingStopRequests func() (interface{}, error)
-	OnRespondStopRequest     func(id string, approved bool, response string) (interface{}, error)
-	OnEscalateAlert          func(alert *types.Alert) (interface{}, error)
-	OnSubmitJudgment         func(judgment *types.SupervisorJudgment) (interface{}, error)
-	OnGetAgentList           func() (interface{}, error)
-	OnGetMyTasks             func(agentID, status string) (interface{}, error)
-	OnClaimTask              func(agentID, taskID string) (interface{}, error)
-	OnUpdateTaskProgress     func(agentID, taskID, status, note string) (interface{}, error)
-	OnCompleteTask           func(agentID, taskID, summary string) (interface{}, error)
-	OnSubmitReconReport      func(agentID string, report map[string]interface{}) (interface{}, error)
-	OnRequestGuidance        func(agentID string, guidance map[string]interface{}) (interface{}, error)
-	OnReportProgress         func(agentID string, progress map[string]interface{}) (interface{}, error)
-	OnSignalCaptain          func(agentID, signal, context string) (interface{}, error)
+	OnRequestHumanInput   func(req *types.HumanInputRequest) (interface{}, error)
+	OnLogActivity         func(activity *types.ActivityLog) (interface{}, error)
+	OnGetAgentMetrics     func() (interface{}, error)
+	OnGetPendingQuestions func() (interface{}, error)
+	OnEscalateAlert       func(alert *types.Alert) (interface{}, error)
+	OnSubmitJudgment      func(judgment *types.SupervisorJudgment) (interface{}, error)
+	OnGetAgentList        func() (interface{}, error)
+	OnGetMyTasks          func(agentID, status string) (interface{}, error)
+	OnClaimTask           func(agentID, taskID string) (interface{}, error)
+	OnUpdateTaskProgress  func(agentID, taskID, status, note string) (interface{}, error)
+	OnCompleteTask        func(agentID, taskID, summary string) (interface{}, error)
+	OnSubmitReconReport   func(agentID string, report map[string]interface{}) (interface{}, error)
+	OnRequestGuidance     func(agentID string, guidance map[string]interface{}) (interface{}, error)
+	OnReportProgress      func(agentID string, progress map[string]interface{}) (interface{}, error)
 
 	// Learning memory callbacks
 	OnStoreKnowledge    func(agentID string, knowledge map[string]interface{}) (interface{}, error)
@@ -133,98 +128,6 @@ func RegisterDefaultTools(s *Server, callbacks ToolCallbacks) {
 				Timestamp: time.Now(),
 			}
 			return callbacks.OnLogActivity(activity)
-		},
-	})
-
-	// request_stop_approval - Agent requests permission to stop
-	// Returns immediately with request_id. Agent should use wait_for_events to receive the response.
-	s.RegisterTool(ToolDefinition{
-		Name:        "request_stop_approval",
-		Description: "Request approval from supervisor before stopping work. MUST be called before stopping for ANY reason. This will WAIT for approval and return the supervisor's response with any new task assignment.",
-		Parameters: map[string]ParameterDef{
-			"reason":         {Type: "string", Description: "Why stopping: task_complete, blocked, error, needs_input, other", Required: true},
-			"context":        {Type: "string", Description: "Details about why you want to stop", Required: true},
-			"work_completed": {Type: "string", Description: "Summary of what you accomplished", Required: true},
-		},
-		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			reason, _ := params["reason"].(string)
-			context, _ := params["context"].(string)
-			workCompleted, _ := params["work_completed"].(string)
-
-			req := &types.StopApprovalRequest{
-				ID:            uuid.New().String(),
-				AgentID:       agentID,
-				Reason:        reason,
-				Context:       context,
-				WorkCompleted: workCompleted,
-				CreatedAt:     time.Now(),
-				Reviewed:      false,
-			}
-
-			// Submit the request
-			_, err := callbacks.OnRequestStopApproval(req)
-			if err != nil {
-				return nil, err
-			}
-
-			// Return immediately with request ID
-			// Agent should call wait_for_events with event_types=["stop_approval"] to receive the response
-			return map[string]interface{}{
-				"status":     "pending",
-				"request_id": req.ID,
-				"message":    "Stop approval request submitted. Call wait_for_events with event_types=[\"stop_approval\"] to receive the supervisor's response.",
-			}, nil
-		},
-	})
-
-	// signal_captain - Agent signals Captain for attention
-	s.RegisterTool(ToolDefinition{
-		Name:        "signal_captain",
-		Description: "Signal Captain that you need attention. Use when stopping, blocked, completed, or encountering errors.",
-		Parameters: map[string]ParameterDef{
-			"signal": {
-				Type:        "string",
-				Description: "Signal type: stopped, blocked, completed, error, need_guidance",
-				Required:    true,
-			},
-			"context": {
-				Type:        "string",
-				Description: "Brief explanation of why you're signaling",
-				Required:    true,
-			},
-			"work_completed": {
-				Type:        "string",
-				Description: "Summary of work completed (for stopped/completed signals)",
-				Required:    false,
-			},
-		},
-		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			signal, _ := params["signal"].(string)
-			context, _ := params["context"].(string)
-			workCompleted, _ := params["work_completed"].(string)
-
-			// Validate signal type
-			validSignals := map[string]bool{
-				"stopped":       true,
-				"blocked":       true,
-				"completed":     true,
-				"error":         true,
-				"need_guidance": true,
-			}
-			if !validSignals[signal] {
-				return map[string]interface{}{
-					"status":  "error",
-					"message": "Invalid signal. Use: stopped, blocked, completed, error, need_guidance",
-				}, nil
-			}
-
-			// Include work summary in context if provided
-			fullContext := context
-			if workCompleted != "" {
-				fullContext = context + "\n\nWork completed:\n" + workCompleted
-			}
-
-			return callbacks.OnSignalCaptain(agentID, signal, fullContext)
 		},
 	})
 
@@ -387,33 +290,6 @@ func registerSupervisorTools(s *Server, callbacks ToolCallbacks) {
 		Parameters:  map[string]ParameterDef{},
 		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
 			return callbacks.OnGetAgentList()
-		},
-	})
-
-	// get_pending_stop_requests - Supervisor checks stop approval queue
-	s.RegisterTool(ToolDefinition{
-		Name:        "get_pending_stop_requests",
-		Description: "Get pending stop approval requests from agents (supervisor only)",
-		Parameters:  map[string]ParameterDef{},
-		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			return callbacks.OnGetPendingStopRequests()
-		},
-	})
-
-	// respond_stop_request - Supervisor approves or denies stop request
-	s.RegisterTool(ToolDefinition{
-		Name:        "respond_stop_request",
-		Description: "Approve or deny an agent's stop request (supervisor only)",
-		Parameters: map[string]ParameterDef{
-			"request_id": {Type: "string", Description: "The stop request ID", Required: true},
-			"approved":   {Type: "boolean", Description: "Whether to approve the stop", Required: true},
-			"response":   {Type: "string", Description: "Message to the agent (instructions if denied)", Required: true},
-		},
-		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
-			requestID, _ := params["request_id"].(string)
-			approved, _ := params["approved"].(bool)
-			response, _ := params["response"].(string)
-			return callbacks.OnRespondStopRequest(requestID, approved, response)
 		},
 	})
 }

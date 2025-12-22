@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -180,6 +183,40 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate ConfigName
+	if req.ConfigName == "" {
+		s.respondError(w, http.StatusBadRequest, "ConfigName is required")
+		return
+	}
+
+	// Validate ConfigName length (prevent arbitrarily long inputs)
+	if len(req.ConfigName) > 50 {
+		s.respondError(w, http.StatusBadRequest, "ConfigName too long (max 50 characters)")
+		return
+	}
+
+	// Validate ProjectPath (optional, but if provided, validate it)
+	if req.ProjectPath != "" {
+		cleanPath := filepath.Clean(req.ProjectPath)
+		// Reject path traversal attempts in relative paths
+		if !filepath.IsAbs(cleanPath) && strings.Contains(cleanPath, "..") {
+			s.respondError(w, http.StatusBadRequest, "Invalid project path: path traversal not allowed")
+			return
+		}
+		// Verify the path exists and is a directory
+		info, err := os.Stat(cleanPath)
+		if err != nil || !info.IsDir() {
+			s.respondError(w, http.StatusBadRequest, "Invalid project path: directory does not exist")
+			return
+		}
+	}
+
+	// Validate Task length (if provided)
+	if len(req.Task) > 5000 {
+		s.respondError(w, http.StatusBadRequest, "Task description too long (max 5000 characters)")
+		return
+	}
+
 	// Find agent config
 	agentConfig := s.getAgentConfig(req.ConfigName)
 	if agentConfig == nil {
@@ -250,6 +287,12 @@ func (s *Server) handleStopAgent(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	agentID := vars["id"]
 
+	// Validate agent ID
+	if !isValidAgentID(agentID) {
+		s.respondError(w, http.StatusBadRequest, "Invalid agent ID")
+		return
+	}
+
 	if err := s.spawner.StopAgent(agentID); err != nil {
 		// Still remove from store even if process kill fails
 	}
@@ -269,6 +312,12 @@ func (s *Server) handleGracefulStopAgent(w http.ResponseWriter, r *http.Request)
 	vars := mux.Vars(r)
 	agentID := vars["id"]
 
+	// Validate agent ID
+	if !isValidAgentID(agentID) {
+		s.respondError(w, http.StatusBadRequest, "Invalid agent ID")
+		return
+	}
+
 	// Mark agent for shutdown
 	now := time.Now()
 	s.store.RequestAgentShutdown(agentID, now)
@@ -276,17 +325,24 @@ func (s *Server) handleGracefulStopAgent(w http.ResponseWriter, r *http.Request)
 
 	// Start a goroutine to force-kill after timeout
 	go func() {
-		time.Sleep(GracefulStopTimeout)
+		timer := time.NewTimer(GracefulStopTimeout)
+		defer timer.Stop()
 
-		// Check if agent is still running
-		state := s.store.GetState()
-		if agent, ok := state.Agents[agentID]; ok && agent.ShutdownRequested {
-			// Agent didn't stop gracefully, force kill
-			s.spawner.StopAgent(agentID)
-			s.spawner.CleanupAgentFiles(agentID)
-			s.store.RemoveAgent(agentID)
-			s.metrics.RemoveAgent(agentID)
-			s.broadcastState()
+		select {
+		case <-s.stopChan:
+			// Server shutting down, skip force-kill
+			return
+		case <-timer.C:
+			// Timeout reached, check if agent is still running
+			state := s.store.GetState()
+			if agent, ok := state.Agents[agentID]; ok && agent.ShutdownRequested {
+				// Agent didn't stop gracefully, force kill
+				s.spawner.StopAgent(agentID)
+				s.spawner.CleanupAgentFiles(agentID)
+				s.store.RemoveAgent(agentID)
+				s.metrics.RemoveAgent(agentID)
+				s.broadcastState()
+			}
 		}
 	}()
 
@@ -304,6 +360,12 @@ func (s *Server) handleAnswerHumanInput(w http.ResponseWriter, r *http.Request) 
 	vars := mux.Vars(r)
 	requestID := vars["id"]
 
+	// Validate requestID (prevent potential NoSQL/SQL/path injection)
+	if requestID == "" || len(requestID) > 100 {
+		s.respondError(w, http.StatusBadRequest, "Invalid request ID")
+		return
+	}
+
 	var req struct {
 		Answer string `json:"answer"`
 	}
@@ -319,6 +381,12 @@ func (s *Server) handleAnswerHumanInput(w http.ResponseWriter, r *http.Request) 
 	}
 	if len(req.Answer) > 10000 {
 		s.respondError(w, http.StatusBadRequest, "Answer exceeds maximum length of 10000 characters")
+		return
+	}
+
+	// Optional: Basic sanitization or content validation
+	if hasUnsafeContent(req.Answer) {
+		s.respondError(w, http.StatusBadRequest, "Answer contains unsafe content")
 		return
 	}
 
@@ -487,12 +555,20 @@ func (s *Server) handleShutdown(w http.ResponseWriter, r *http.Request) {
 
 	// Signal shutdown via channel (allows main.go to do proper cleanup)
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
 		select {
-		case <-s.ShutdownChan:
-			// Already closed
-		default:
-			close(s.ShutdownChan)
+		case <-ctx.Done():
+			select {
+			case <-s.ShutdownChan:
+				// Already closed
+			default:
+				close(s.ShutdownChan)
+			}
+		case <-s.stopChan:
+			// Server already shutting down
+			return
 		}
 	}()
 }
@@ -641,12 +717,48 @@ func (s *Server) respondJSON(w http.ResponseWriter, data interface{}) {
 
 func (s *Server) respondError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Error-Type", "validation")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+
+	// Log error for server-side tracking (optional)
+	log.Printf("[HTTP_ERROR] Status %d: %s", status, message)
+
+	// More detailed error response
+	errorResp := map[string]interface{}{
+		"error":      message,
+		"error_code": fmt.Sprintf("ERR_%d", status),
+		"timestamp":  time.Now().UTC().Format(time.RFC3339),
+	}
+	json.NewEncoder(w).Encode(errorResp)
 }
 
 func formatAgentNumber(n int) string {
 	return fmt.Sprintf("%03d", n)
+}
+
+// hasUnsafeContent performs basic sanitization check
+func hasUnsafeContent(s string) bool {
+	// Check for potential script tags or HTML injection
+	unsafePatterns := []string{"<script", "javascript:", "onerror", "onload", "eval("}
+
+	lowerStr := strings.ToLower(s)
+	for _, pattern := range unsafePatterns {
+		if strings.Contains(lowerStr, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidAgentID validates an agent ID format
+func isValidAgentID(id string) bool {
+	// Example validation: must be non-empty, shorter than 100 chars
+	// Optionally can add more specific regex validation based on your ID format
+	return id != "" && len(id) <= 100 &&
+		// Optional: strict validation for team-{type}{seq:03d} format
+		// Uncomment and modify as needed for your specific format
+		// regexp.MustCompile(`^team-[a-z]+\d{3}$`).MatchString(id)
+		true
 }
 
 // Escalation & Captain Control Handlers
@@ -659,6 +771,12 @@ func (s *Server) handleSubmitEscalationResponse(w http.ResponseWriter, r *http.R
 	vars := mux.Vars(r)
 	escalationID := vars["id"]
 
+	// Validate escalation ID
+	if escalationID == "" || len(escalationID) > 100 {
+		s.respondError(w, http.StatusBadRequest, "Invalid escalation ID")
+		return
+	}
+
 	var req struct {
 		Response string `json:"response"`
 	}
@@ -670,6 +788,18 @@ func (s *Server) handleSubmitEscalationResponse(w http.ResponseWriter, r *http.R
 	// Validate response
 	if req.Response == "" {
 		s.respondError(w, http.StatusBadRequest, "Response cannot be empty")
+		return
+	}
+
+	// Validate response length
+	if len(req.Response) > 5000 {
+		s.respondError(w, http.StatusBadRequest, "Response is too long (max 5000 characters)")
+		return
+	}
+
+	// Optional: Content safety check
+	if hasUnsafeContent(req.Response) {
+		s.respondError(w, http.StatusBadRequest, "Response contains unsafe content")
 		return
 	}
 
@@ -1040,42 +1170,31 @@ func (s *Server) handleGetDefectCategories(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// handleSetCaptainPaneID handles POST /api/captain/pane
-// Sets the Captain's WezTerm pane ID so agent spawning works correctly
-func (s *Server) handleSetCaptainPaneID(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		PaneID int `json:"pane_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.respondError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
+// handleDebugWezterm handles GET /api/debug/wezterm
+// Tests wezterm cli from server's context
+func (s *Server) handleDebugWezterm(w http.ResponseWriter, r *http.Request) {
+	result := map[string]interface{}{}
 
-	if s.spawner == nil {
-		s.respondError(w, http.StatusServiceUnavailable, "Spawner not available")
-		return
+	// Check if wezterm.exe is in PATH
+	weztermPath, lookErr := exec.LookPath("wezterm.exe")
+	result["wezterm_path"] = weztermPath
+	result["lookup_error"] = ""
+	if lookErr != nil {
+		result["lookup_error"] = lookErr.Error()
 	}
 
-	s.spawner.SetCaptainPaneID(req.PaneID)
-	log.Printf("[SERVER] Captain pane ID set to %d", req.PaneID)
-
-	s.respondJSON(w, map[string]interface{}{
-		"success": true,
-		"pane_id": req.PaneID,
-		"message": "Captain pane ID set successfully",
-	})
-}
-
-// handleGetCaptainPaneID handles GET /api/captain/pane
-// Returns the current Captain pane ID
-func (s *Server) handleGetCaptainPaneID(w http.ResponseWriter, r *http.Request) {
-	if s.spawner == nil {
-		s.respondError(w, http.StatusServiceUnavailable, "Spawner not available")
-		return
+	// Try to list panes
+	cmd := exec.Command("wezterm.exe", "cli", "list")
+	output, err := cmd.CombinedOutput()
+	result["list_output"] = string(output)
+	result["list_error"] = ""
+	if err != nil {
+		result["list_error"] = err.Error()
 	}
 
-	paneID := s.spawner.GetCaptainPaneID()
-	s.respondJSON(w, map[string]interface{}{
-		"pane_id": paneID,
-	})
+	// Check environment
+	result["wezterm_socket"] = os.Getenv("WEZTERM_UNIX_SOCKET")
+	result["wezterm_pane"] = os.Getenv("WEZTERM_PANE")
+
+	s.respondJSON(w, result)
 }

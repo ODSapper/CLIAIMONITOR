@@ -160,7 +160,8 @@ func main() {
 	fmt.Printf("  State loaded from %s\n", *statePath)
 
 	// Initialize components
-	mcpServerURL := fmt.Sprintf("http://%s:%d/mcp/sse", *mcpHost, *port)
+	// Use new Streamable HTTP transport endpoint (/mcp) instead of legacy SSE (/mcp/sse)
+	mcpServerURL := fmt.Sprintf("http://%s:%d/mcp", *mcpHost, *port)
 	spawner := agents.NewSpawner(basePath, mcpServerURL, memoryDB)
 	mcpServer := mcp.NewServer()
 	metricsCollector := metrics.NewCollector()
@@ -255,12 +256,6 @@ func main() {
 	captainSupervisor := captain.NewCaptainSupervisor(captain.SupervisorConfig{
 		BasePath:   basePath,
 		ServerPort: *port,
-	})
-
-	// Wire pane ID callback - when Captain's pane is created, tell the spawner
-	captainSupervisor.SetPaneIDCallback(func(paneID int) {
-		spawner.SetCaptainPaneID(paneID)
-		fmt.Printf("  Captain pane ID %d registered with spawner\n", paneID)
 	})
 
 	// Wire supervisor to server for API endpoints

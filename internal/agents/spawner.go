@@ -1,11 +1,13 @@
 package agents
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,29 +38,24 @@ type ProcessSpawner struct {
 	agentPanes     map[string]int // agentID -> WezTerm pane ID
 	agentCounters  map[string]int // agentType -> sequence counter
 	memDB          memory.MemoryDB
-	heartbeatPIDs  map[string]int // agentID -> heartbeat script PID
 
-	// Layout management: Captain full-width at top, agents in rows of 3 below
-	captainPaneID   int     // Pane ID of Captain (top, full width)
-	agentRows       [][]int // Rows of agent pane IDs, max 3 per row
-	maxAgentsPerRow int     // Maximum agents per row (default 3)
+	// Agent window: All agents spawn in a dedicated window (separate from Captain)
+	// Each tab in that window holds up to 9 agents in a 3x3 grid
+	agentWindowID int // Window ID for agents (-1 = not created yet)
 }
 
 // NewSpawner creates a new process spawner
 func NewSpawner(basePath string, mcpServerURL string, memDB memory.MemoryDB) *ProcessSpawner {
 	return &ProcessSpawner{
-		basePath:        basePath,
-		mcpServerURL:    mcpServerURL,
-		scriptsPath:     filepath.Join(basePath, "scripts"),
-		configsPath:     filepath.Join(basePath, "configs"),
-		runningAgents:   make(map[string]int),
-		agentPanes:      make(map[string]int),
-		agentCounters:   make(map[string]int),
-		memDB:           memDB,
-		heartbeatPIDs:   make(map[string]int),
-		captainPaneID:   0,              // Captain pane (usually pane 0)
-		agentRows:       make([][]int, 0),
-		maxAgentsPerRow: 3,              // 3 agents per row
+		basePath:      basePath,
+		mcpServerURL:  mcpServerURL,
+		scriptsPath:   filepath.Join(basePath, "scripts"),
+		configsPath:   filepath.Join(basePath, "configs"),
+		runningAgents: make(map[string]int),
+		agentPanes:    make(map[string]int),
+		agentCounters: make(map[string]int),
+		memDB:         memDB,
+		agentWindowID: -1, // No agent window yet
 	}
 }
 
@@ -67,68 +64,112 @@ func (s *ProcessSpawner) SetMemoryDB(db memory.MemoryDB) {
 	s.memDB = db
 }
 
-// SetCaptainPaneID sets the pane ID where Captain is running (top, full-width)
-func (s *ProcessSpawner) SetCaptainPaneID(paneID int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.captainPaneID = paneID
-	log.Printf("[SPAWNER] Captain pane set to %d", paneID)
+// PaneInfo holds WezTerm pane information for dynamic grid layout
+type PaneInfo struct {
+	PaneID   int `json:"pane_id"`
+	WindowID int `json:"window_id"`
+	TabID    int `json:"tab_id"`
+	TopRow   int `json:"top_row"`
+	LeftCol  int `json:"left_col"`
 }
 
-// GetCaptainPaneID returns the Captain's pane ID
-func (s *ProcessSpawner) GetCaptainPaneID() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.captainPaneID
-}
-
-// getNextPaneSplit determines where to split for the next agent
-// Returns: (paneIDToSplit, direction) where direction is "bottom" or "right"
-func (s *ProcessSpawner) getNextPaneSplit() (int, string) {
-	// If no agent rows yet, split Captain pane downward
-	if len(s.agentRows) == 0 {
-		return s.captainPaneID, "bottom"
+// getAgentWindowPanes queries WezTerm for all panes, grouped by tab in agent window
+func (s *ProcessSpawner) getAgentWindowPanes() (map[int][]PaneInfo, error) {
+	if s.agentWindowID < 0 {
+		return nil, nil
 	}
 
-	// Get the last row
-	lastRow := s.agentRows[len(s.agentRows)-1]
-
-	// If last row is full (3 agents), start new row by splitting leftmost pane of last row
-	if len(lastRow) >= s.maxAgentsPerRow {
-		return lastRow[0], "bottom"
+	cmd := exec.Command("wezterm.exe", "cli", "list", "--format", "json")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list panes: %w", err)
 	}
 
-	// Otherwise, split the rightmost pane in the current row to the right
-	return lastRow[len(lastRow)-1], "right"
-}
-
-// addAgentToLayout adds a new agent pane ID to the layout tracking
-func (s *ProcessSpawner) addAgentToLayout(paneID int) {
-	// If no rows or last row is full, create new row
-	if len(s.agentRows) == 0 || len(s.agentRows[len(s.agentRows)-1]) >= s.maxAgentsPerRow {
-		s.agentRows = append(s.agentRows, []int{paneID})
-	} else {
-		// Add to last row
-		s.agentRows[len(s.agentRows)-1] = append(s.agentRows[len(s.agentRows)-1], paneID)
+	var panes []PaneInfo
+	if err := json.Unmarshal(output, &panes); err != nil {
+		return nil, fmt.Errorf("failed to parse panes: %w", err)
 	}
-	log.Printf("[SPAWNER] Layout updated: %d rows, current row has %d agents",
-		len(s.agentRows), len(s.agentRows[len(s.agentRows)-1]))
+
+	// Group by tab_id, filtered to agent window only
+	tabPanes := make(map[int][]PaneInfo)
+	for _, p := range panes {
+		if p.WindowID == s.agentWindowID {
+			tabPanes[p.TabID] = append(tabPanes[p.TabID], p)
+		}
+	}
+	return tabPanes, nil
 }
 
-// removeAgentFromLayout removes an agent pane from layout tracking
-func (s *ProcessSpawner) removeAgentFromLayout(paneID int) {
-	for i, row := range s.agentRows {
-		for j, pid := range row {
-			if pid == paneID {
-				// Remove this pane from the row
-				s.agentRows[i] = append(row[:j], row[j+1:]...)
-				// If row is now empty, remove the row
-				if len(s.agentRows[i]) == 0 {
-					s.agentRows = append(s.agentRows[:i], s.agentRows[i+1:]...)
-				}
-				return
+// getSpawnTarget determines where to spawn the next agent dynamically
+// Returns: (needsNewWindow, needsNewTab, splitFromPaneID, splitDirection)
+func (s *ProcessSpawner) getSpawnTarget() (needsNewWindow, needsNewTab bool, splitFromPaneID int, splitDirection string) {
+	// No agent window yet - create one
+	if s.agentWindowID < 0 {
+		return true, false, 0, ""
+	}
+
+	// Query current panes
+	tabPanes, err := s.getAgentWindowPanes()
+	if err != nil {
+		log.Printf("[SPAWNER] Error querying panes: %v, creating new window", err)
+		return true, false, 0, ""
+	}
+
+	// Find a tab with room (< 9 panes)
+	var targetTab int = -1
+	var panes []PaneInfo
+	for tid, ps := range tabPanes {
+		if len(ps) < 9 {
+			targetTab = tid
+			panes = ps
+			break
+		}
+	}
+
+	// All tabs full - need new tab
+	if targetTab < 0 {
+		for _, ps := range tabPanes {
+			if len(ps) > 0 {
+				return false, true, ps[0].PaneID, ""
 			}
 		}
+		return true, false, 0, "" // No panes at all, new window
+	}
+
+	count := len(panes)
+	if count == 0 {
+		return false, true, 0, ""
+	}
+
+	// Sort panes by grid position (top_row, left_col)
+	sort.Slice(panes, func(i, j int) bool {
+		if panes[i].TopRow != panes[j].TopRow {
+			return panes[i].TopRow < panes[j].TopRow
+		}
+		return panes[i].LeftCol < panes[j].LeftCol
+	})
+
+	// Determine split target based on current count
+	// Grid: [0][1][2] / [3][4][5] / [6][7][8]
+	switch count {
+	case 1:
+		return false, false, panes[0].PaneID, "right"
+	case 2:
+		return false, false, panes[1].PaneID, "right"
+	case 3:
+		return false, false, panes[0].PaneID, "bottom"
+	case 4:
+		return false, false, panes[3].PaneID, "right"
+	case 5:
+		return false, false, panes[4].PaneID, "right"
+	case 6:
+		return false, false, panes[3].PaneID, "bottom"
+	case 7:
+		return false, false, panes[6].PaneID, "right"
+	case 8:
+		return false, false, panes[7].PaneID, "right"
+	default:
+		return false, true, panes[0].PaneID, ""
 	}
 }
 
@@ -194,61 +235,100 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	// WezTerm only - no fallbacks to other terminals
 	var cmd *exec.Cmd
 	var paneID int
+	var paneIDStr string
 
 	if _, err := exec.LookPath("wezterm.exe"); err == nil {
-		// Determine where to split based on grid layout:
-		// - Captain is full-width at top
-		// - Agents spawn in rows of 3 below Captain
-		splitPaneID, splitDirection := s.getNextPaneSplit()
-		log.Printf("[SPAWNER] Grid layout: splitting pane %d to the %s", splitPaneID, splitDirection)
+		// Dynamic grid layout: query current state and determine spawn target
+		needsNewWindow, needsNewTab, splitFromPaneID, splitDirection := s.getSpawnTarget()
 
-		// Step 1: Split pane with cmd.exe using grid layout
-		cmd = exec.Command("wezterm.exe", "cli", "split-pane",
-			"--pane-id", strconv.Itoa(splitPaneID),
-			"--"+splitDirection,
-			"--cwd", projectPath,
-			"--", "cmd.exe")
+		var output []byte
+		var spawnErr error
 
-		log.Printf("[SPAWNER] Executing: wezterm.exe cli split-pane --pane-id %d --%s --cwd %q -- cmd.exe",
-			splitPaneID, splitDirection, projectPath)
-
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			// Fallback: Try spawn if split-pane fails (still specify pane-id for context)
-			log.Printf("[SPAWNER] wezterm cli split-pane failed (output: %s): %v", string(output), err)
+		if needsNewWindow {
+			// Create new agent window
+			log.Printf("[SPAWNER] Creating new agent window")
 			cmd = exec.Command("wezterm.exe", "cli", "spawn",
-				"--pane-id", strconv.Itoa(splitPaneID),
+				"--new-window",
 				"--cwd", projectPath,
 				"--", "cmd.exe")
 
-			output, err = cmd.CombinedOutput()
-			if err != nil {
-				return 0, fmt.Errorf("failed to spawn agent pane in WezTerm (output: %s): %w", string(output), err)
+			output, spawnErr = cmd.CombinedOutput()
+			if spawnErr != nil {
+				return 0, fmt.Errorf("failed to spawn agent window (output: %s): %w", string(output), spawnErr)
+			}
+
+			// Parse pane ID and extract window ID
+			paneIDStr = strings.TrimSpace(string(output))
+			if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
+				paneID = parsedID
+				// Query to get window ID for this pane
+				listCmd := exec.Command("wezterm.exe", "cli", "list", "--format", "json")
+				if listOut, listErr := listCmd.Output(); listErr == nil {
+					var panes []PaneInfo
+					if json.Unmarshal(listOut, &panes) == nil {
+						for _, p := range panes {
+							if p.PaneID == paneID {
+								s.agentWindowID = p.WindowID
+								log.Printf("[SPAWNER] Agent window created: window_id=%d, first pane=%d", s.agentWindowID, paneID)
+								break
+							}
+						}
+					}
+				}
+			}
+		} else if needsNewTab {
+			// Create new tab in agent window
+			log.Printf("[SPAWNER] Creating new tab in agent window (pane %d)", splitFromPaneID)
+			cmd = exec.Command("wezterm.exe", "cli", "spawn",
+				"--pane-id", strconv.Itoa(splitFromPaneID),
+				"--cwd", projectPath,
+				"--", "cmd.exe")
+
+			output, spawnErr = cmd.CombinedOutput()
+			if spawnErr != nil {
+				return 0, fmt.Errorf("failed to spawn new tab (output: %s): %w", string(output), spawnErr)
+			}
+		} else {
+			// Split existing pane in current tab
+			log.Printf("[SPAWNER] Splitting pane %d to the %s", splitFromPaneID, splitDirection)
+			cmd = exec.Command("wezterm.exe", "cli", "split-pane",
+				"--pane-id", strconv.Itoa(splitFromPaneID),
+				"--"+splitDirection,
+				"--cwd", projectPath,
+				"--", "cmd.exe")
+
+			output, spawnErr = cmd.CombinedOutput()
+			if spawnErr != nil {
+				return 0, fmt.Errorf("failed to split pane %d (output: %s): %w", splitFromPaneID, string(output), spawnErr)
 			}
 		}
 
-		// Parse pane ID from output (works for both split-pane and spawn)
-		paneIDStr := strings.TrimSpace(string(output))
-		if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
-			paneID = parsedID
+		// Parse pane ID from output (for new tab and split cases)
+		if paneID == 0 {
+			paneIDStr = strings.TrimSpace(string(output))
+			if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
+				paneID = parsedID
+			}
+		}
+
+		if paneID > 0 {
 			log.Printf("[SPAWNER] Agent %s spawned in pane %d", agentID, paneID)
 
-			// Add to grid layout tracking
-			s.addAgentToLayout(paneID)
-
-			// Step 2: Apply background color
+			// Apply background color
 			colors := GetAgentColors(config.Name)
 
 			// Small delay to let the cmd.exe prompt appear
 			time.Sleep(300 * time.Millisecond)
 
-			// Clear screen and set background tint
+			// Clear screen and set background tint using OSC 11
 			clearCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
-			// Clear screen + set background color + move cursor home
-			clearSeq := fmt.Sprintf("\x1b[2J\x1b[H%s", colors.BgDark)
+			// OSC 11 sets terminal default background: ESC ] 11 ; rgb:RR/GG/BB BEL
+			// Using BEL (\x07) as terminator for better compatibility
+			// Also clear screen and move cursor home
+			clearSeq := fmt.Sprintf("\x1b]11;%s\x07\x1b[2J\x1b[H", colors.BgRGB)
 			clearCmd.Stdin = strings.NewReader(clearSeq)
 			if err := clearCmd.Run(); err != nil {
-				log.Printf("[SPAWNER] Warning: Failed to clear and set background: %v", err)
+				log.Printf("[SPAWNER] Warning: Failed to clear and set background for pane %d: %v", paneID, err)
 			}
 
 			time.Sleep(100 * time.Millisecond)
@@ -257,9 +337,9 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 			sendCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
 			sendCmd.Stdin = strings.NewReader(cmdChain + "\r\n")
 			if sendErr := sendCmd.Run(); sendErr != nil {
-				log.Printf("[SPAWNER] Warning: Failed to send command to pane %d: %v", paneID, sendErr)
+				log.Printf("[SPAWNER] Warning: Failed to send command to pane %d for agent %s: %v", paneID, agentID, sendErr)
 			} else {
-				log.Printf("[SPAWNER] Command chain sent to pane %d", paneID)
+				log.Printf("[SPAWNER] Command chain sent to pane %d for agent %s", paneID, agentID)
 			}
 		} else {
 			log.Printf("[SPAWNER] Warning: Could not parse pane ID from output: %s", paneIDStr)
@@ -276,8 +356,12 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	log.Printf("[SPAWNER] Agent %s launched in WezTerm (PID: %d, Pane: %d)", agentID, pid, paneID)
 
 	// Don't wait - let it run independently
-	if cmd.Process != nil {
-		go cmd.Wait()
+	if cmd != nil && cmd.Process != nil {
+		go func() {
+			if waitErr := cmd.Wait(); waitErr != nil {
+				log.Printf("[SPAWNER] Agent %s process exited with error: %v", agentID, waitErr)
+			}
+		}()
 	}
 
 	// Store the pane ID for later use (cleanup, etc.)
@@ -293,50 +377,7 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	// Agent will transition to "connected" when it establishes MCP SSE connection
 	log.Printf("[SPAWNER] Agent %s spawned with 'pending' status, awaiting MCP connection", agentID)
 
-	// Spawn PowerShell heartbeat script for agent monitoring
-	if err := s.spawnHeartbeatScript(agentID); err != nil {
-		log.Printf("Warning: Failed to spawn heartbeat script: %v", err)
-	}
-
 	return pid, nil
-}
-
-// spawnHeartbeatScript spawns the heartbeat monitor script for an agent
-func (s *ProcessSpawner) spawnHeartbeatScript(agentID string) error {
-	scriptPath := filepath.Join(s.basePath, "scripts", "agent-heartbeat.ps1")
-	dbPath := filepath.Join(s.basePath, "data", "memory.db")
-
-	cmd := exec.Command("powershell.exe",
-		"-ExecutionPolicy", "Bypass",
-		"-WindowStyle", "Hidden",
-		"-File", scriptPath,
-		"-AgentID", agentID,
-		"-DBPath", dbPath,
-		"-IntervalSeconds", "30")
-
-	cmd.Dir = s.basePath
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start heartbeat script: %w", err)
-	}
-
-	// Track the heartbeat PID for cleanup
-	s.trackHeartbeatPID(agentID, cmd.Process.Pid)
-
-	// Let it run independently
-	go cmd.Wait()
-
-	return nil
-}
-
-// trackHeartbeatPID tracks the heartbeat script PID for an agent
-func (s *ProcessSpawner) trackHeartbeatPID(agentID string, pid int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.heartbeatPIDs == nil {
-		s.heartbeatPIDs = make(map[string]int)
-	}
-	s.heartbeatPIDs[agentID] = pid
 }
 
 // StopAgent terminates an agent process (backward compatible - no reason)
@@ -348,22 +389,7 @@ func (s *ProcessSpawner) StopAgent(agentID string) error {
 func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) error {
 	log.Printf("[SPAWNER] Stopping agent %s with reason: %s", agentID, reason)
 
-	// 1. Kill heartbeat script from in-memory tracking
-	s.mu.Lock()
-	if pid, ok := s.heartbeatPIDs[agentID]; ok {
-		if err := instance.KillProcess(pid); err != nil {
-			log.Printf("Warning: Failed to kill heartbeat script: %v", err)
-		}
-		delete(s.heartbeatPIDs, agentID)
-	}
-	s.mu.Unlock()
-
-	// 2. Also kill heartbeat from PID file (spawned by launcher script)
-	if err := s.KillHeartbeatFromPIDFile(agentID); err != nil {
-		log.Printf("Warning: Failed to kill heartbeat from PID file: %v", err)
-	}
-
-	// 3. Remove from running agents map
+	// 1. Remove from running agents map
 	s.mu.Lock()
 	delete(s.runningAgents, agentID)
 	s.mu.Unlock()
@@ -372,14 +398,13 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 	if paneID, ok := s.GetAgentPaneID(agentID); ok && paneID > 0 {
 		log.Printf("[SPAWNER] Killing agent %s via pane ID %d", agentID, paneID)
 		if err := s.KillByPaneID(paneID); err != nil {
-			log.Printf("Warning: Failed to kill by pane ID: %v", err)
+			log.Printf("[SPAWNER] Warning: Failed to kill agent %s by pane ID %d: %v", agentID, paneID, err)
 		} else {
 			// Successfully killed by pane ID, remove from tracking
 			s.mu.Lock()
 			delete(s.agentPanes, agentID)
-			s.removeAgentFromLayout(paneID) // Remove from grid layout
 			s.mu.Unlock()
-			log.Printf("[SPAWNER] Successfully killed agent %s via pane ID", agentID)
+			log.Printf("[SPAWNER] Successfully killed agent %s via pane ID %d", agentID, paneID)
 			// Still continue with other cleanup methods as fallback
 		}
 	}
@@ -388,30 +413,34 @@ func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) erro
 	// PID file contains PowerShell process PID inside the terminal
 	pid, err := s.GetAgentPIDFromFile(agentID)
 	if err == nil && pid > 0 {
-		log.Printf("Killing agent %s (PID: %d) and child processes", agentID, pid)
+		log.Printf("[SPAWNER] Killing agent %s (PID: %d) and child processes", agentID, pid)
 
 		// Kill any claude.exe child processes
 		if err := s.KillChildClaude(pid); err != nil {
-			log.Printf("Warning: Failed to kill claude.exe child: %v", err)
+			log.Printf("[SPAWNER] Warning: Failed to kill claude.exe child for agent %s (PID %d): %v", agentID, pid, err)
 		}
 
 		// Kill the PowerShell process (this closes the terminal tab)
 		if err := instance.KillProcess(pid); err != nil {
-			log.Printf("Warning: Failed to kill PowerShell by PID: %v", err)
+			log.Printf("[SPAWNER] Warning: Failed to kill PowerShell by PID for agent %s (PID %d): %v", agentID, pid, err)
 		}
 
 		// Clean up PID file
-		s.CleanupAgentPIDFile(agentID)
+		if err := s.CleanupAgentPIDFile(agentID); err != nil {
+			log.Printf("[SPAWNER] Warning: Failed to cleanup PID file for agent %s: %v", agentID, err)
+		}
+	} else if err != nil {
+		log.Printf("[SPAWNER] Warning: Failed to get agent PID from file for agent %s: %v", agentID, err)
 	}
 
 	// 8. Also try killing by window title (catches any stragglers)
 	if err := s.KillByWindowTitle(agentID); err != nil {
-		log.Printf("Warning: Failed to kill agent by window title: %v", err)
+		log.Printf("[SPAWNER] Warning: Failed to kill agent %s by window title: %v", agentID, err)
 	}
 
 	// 9. Kill any remaining powershell processes with our temp script
 	if err := s.KillByTempScript(agentID); err != nil {
-		log.Printf("Warning: Failed to kill by temp script: %v", err)
+		log.Printf("[SPAWNER] Warning: Failed to kill agent %s by temp script: %v", agentID, err)
 	}
 
 	return nil
@@ -464,33 +493,6 @@ func (s *ProcessSpawner) CleanupAgentPIDFile(agentID string) error {
 	return nil
 }
 
-// KillHeartbeatFromPIDFile kills the heartbeat process using its PID file
-func (s *ProcessSpawner) KillHeartbeatFromPIDFile(agentID string) error {
-	pidFile := filepath.Join(s.basePath, "data", "pids", agentID+"-heartbeat.pid")
-	data, err := os.ReadFile(pidFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No heartbeat PID file, that's fine
-		}
-		return fmt.Errorf("failed to read heartbeat PID file: %w", err)
-	}
-
-	pidStr := strings.TrimSpace(string(data))
-	pid, err := strconv.Atoi(pidStr)
-	if err != nil {
-		return fmt.Errorf("invalid heartbeat PID in file: %w", err)
-	}
-
-	log.Printf("Killing heartbeat process for %s (PID: %d)", agentID, pid)
-	if err := instance.KillProcess(pid); err != nil {
-		log.Printf("Warning: Failed to kill heartbeat PID %d: %v", pid, err)
-	}
-
-	// Clean up heartbeat PID file
-	os.Remove(pidFile)
-	return nil
-}
-
 // KillByWindowTitle finds and kills a process by its window title (fallback method)
 func (s *ProcessSpawner) KillByWindowTitle(agentID string) error {
 	title := fmt.Sprintf("CLIAIMONITOR-%s", agentID)
@@ -523,6 +525,7 @@ func (s *ProcessSpawner) IsAgentRunning(pid int) bool {
 	cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("PID eq %d", pid), "/NH")
 	output, err := cmd.Output()
 	if err != nil {
+		log.Printf("[SPAWNER] Warning: Failed to check if PID %d is running: %v", pid, err)
 		return false
 	}
 	// If process exists, output contains the PID
@@ -578,15 +581,24 @@ func (s *ProcessSpawner) CleanupAgentFiles(agentID string) error {
 
 // CleanupAllAgentFiles removes all generated config and PID files
 func (s *ProcessSpawner) CleanupAllAgentFiles() error {
+	var lastErr error
+
 	// Clean MCP configs
 	mcpDir := filepath.Join(s.configsPath, "mcp")
 	entries, err := os.ReadDir(mcpDir)
 	if err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), "-mcp.json") {
-				os.Remove(filepath.Join(mcpDir, entry.Name()))
+				filePath := filepath.Join(mcpDir, entry.Name())
+				if removeErr := os.Remove(filePath); removeErr != nil && !os.IsNotExist(removeErr) {
+					log.Printf("[SPAWNER] Warning: Failed to remove MCP config %s: %v", filePath, removeErr)
+					lastErr = removeErr
+				}
 			}
 		}
+	} else if !os.IsNotExist(err) {
+		log.Printf("[SPAWNER] Warning: Failed to read MCP config directory: %v", err)
+		lastErr = err
 	}
 
 	// Clean PID tracking files
@@ -595,12 +607,19 @@ func (s *ProcessSpawner) CleanupAllAgentFiles() error {
 	if err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".pid") {
-				os.Remove(filepath.Join(pidsDir, entry.Name()))
+				filePath := filepath.Join(pidsDir, entry.Name())
+				if removeErr := os.Remove(filePath); removeErr != nil && !os.IsNotExist(removeErr) {
+					log.Printf("[SPAWNER] Warning: Failed to remove PID file %s: %v", filePath, removeErr)
+					lastErr = removeErr
+				}
 			}
 		}
+	} else if !os.IsNotExist(err) {
+		log.Printf("[SPAWNER] Warning: Failed to read PID directory: %v", err)
+		lastErr = err
 	}
 
-	return nil
+	return lastErr
 }
 
 // StopAllAgents stops all running agents
