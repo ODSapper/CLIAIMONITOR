@@ -1509,10 +1509,10 @@ func registerWezTermTools(s *Server) {
 	})
 
 	// wezterm_close_pane - Close a specific pane
-	// Uses centralized WezTerm ops for rate limiting and timeout handling
+	// Uses graceful shutdown: sends Ctrl+C, then exit, then kills pane
 	s.RegisterTool(ToolDefinition{
 		Name:        "wezterm_close_pane",
-		Description: "Close a specific pane by its ID. Uses rate limiting to prevent lockups when closing multiple panes.",
+		Description: "Close a specific pane by its ID. Uses graceful shutdown (sends exit signal first) to prevent WezTerm freezes on Windows.",
 		Parameters: map[string]ParameterDef{
 			"pane_id": {
 				Type:        "string",
@@ -1535,8 +1535,9 @@ func registerWezTermTools(s *Server) {
 				}, nil
 			}
 
-			// Use centralized WezTerm ops with rate limiting and timeout
-			if err := wezterm.Get().KillPane(paneID); err != nil {
+			// Use graceful shutdown: Ctrl+C -> exit -> kill
+			// This prevents Windows conpty hangs
+			if err := wezterm.Get().GracefulKillPane(paneID); err != nil {
 				return map[string]interface{}{
 					"success": false,
 					"error":   err.Error(),
@@ -1549,11 +1550,11 @@ func registerWezTermTools(s *Server) {
 		},
 	})
 
-	// wezterm_close_panes - Close multiple panes with rate limiting
+	// wezterm_close_panes - Close multiple panes with graceful shutdown
 	// CRITICAL: Use this instead of calling wezterm cli via Bash to avoid freezing WezTerm
 	s.RegisterTool(ToolDefinition{
 		Name:        "wezterm_close_panes",
-		Description: "Close multiple panes by their IDs with proper rate limiting (200ms delay between each). ALWAYS use this instead of calling 'wezterm cli kill-pane' via Bash to prevent WezTerm from freezing.",
+		Description: "Close multiple panes by their IDs with graceful shutdown (sends exit signals first, 500ms+ delay between each). ALWAYS use this instead of calling 'wezterm cli kill-pane' via Bash to prevent WezTerm from freezing.",
 		Parameters: map[string]ParameterDef{
 			"pane_ids": {
 				Type:        "array",
@@ -1592,8 +1593,9 @@ func registerWezTermTools(s *Server) {
 				paneIDs = append(paneIDs, paneID)
 			}
 
-			// Use centralized WezTerm ops with rate limiting
-			errors := wezterm.Get().KillPanes(paneIDs)
+			// Use graceful shutdown: Ctrl+C -> exit -> kill for each pane
+			// This prevents Windows conpty hangs
+			errors := wezterm.Get().GracefulKillPanes(paneIDs)
 
 			// Build result with per-pane status
 			results := make([]map[string]interface{}, len(paneIDs))

@@ -202,7 +202,7 @@ func (s *CaptainSupervisor) createCaptainMCPConfig() (string, error) {
 	config := MCPConfig{
 		MCPServers: map[string]MCPServerConfig{
 			"cliaimonitor": {
-				Type: "sse",
+				Type: "http",
 				URL:  mcpServerURL,
 				Headers: map[string]string{
 					"X-Agent-ID":     "Captain",

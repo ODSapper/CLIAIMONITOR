@@ -234,21 +234,18 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		projectPath = s.basePath
 	}
 
-	// Build initial prompt - agent should use MCP tools and start working
-	// Use the MCP server name that was configured for this agent
-	mcpServerName := fmt.Sprintf("cliaimonitor-%s", agentID)
-	mcpInstructions := fmt.Sprintf(
-		"You are agent '%s' with role '%s'. You have an MCP server '%s' connected. "+
-			"Use the available MCP tools to communicate and coordinate. ",
-		agentID, agentConfig.Role, mcpServerName)
+	// Build initial prompt - simplified workflow, no MCP registration needed
+	// Agents just do their work and output completion summary when done
+	initialPrompt := fmt.Sprintf(
+		"You are agent '%s' (%s). Work autonomously on your assigned task. "+
+			"When finished, output a clear summary of what you completed. "+
+			"Do NOT ask clarifying questions - make reasonable decisions and proceed.",
+		agentID, agentConfig.Role)
 
-	initialPrompt := ""
 	if req.Task != "" {
-		initialPrompt = mcpInstructions +
-			fmt.Sprintf("TASK: %s. Work autonomously. Do NOT ask clarifying questions.", req.Task)
+		initialPrompt += fmt.Sprintf(" TASK: %s", req.Task)
 	} else {
-		initialPrompt = mcpInstructions +
-			"Use wait_for_events tool to wait for instructions."
+		initialPrompt += " Await instructions from your terminal."
 	}
 
 	// Spawn agent with initial prompt
@@ -258,14 +255,14 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create agent record
+	// Create agent record - agent is immediately working (no MCP registration needed)
 	agent := &types.Agent{
 		ID:          agentID,
 		ConfigName:  req.ConfigName,
 		Role:        agentConfig.Role,
 		Model:       agentConfig.Model,
 		Color:       agentConfig.Color,
-		Status:      types.StatusStarting,
+		Status:      types.StatusWorking,
 		PID:         pid,
 		ProjectPath: projectPath,
 		SpawnedAt:   time.Now(),
@@ -274,8 +271,7 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 
 	s.store.AddAgent(agent)
 
-	// Agent will register itself via MCP when it connects
-	log.Printf("[SPAWN] Agent %s created, awaiting MCP registration", agentID)
+	log.Printf("[SPAWN] Agent %s spawned and working", agentID)
 
 	s.broadcastState()
 
@@ -405,13 +401,7 @@ func (s *Server) handleAnswerHumanInput(w http.ResponseWriter, r *http.Request) 
 	// Update store
 	s.store.AnswerHumanRequest(requestID, req.Answer)
 
-	// Notify agent via MCP (humanReq already validated above)
-	if humanReq.AgentID != "" {
-		s.mcp.NotifyAgent(humanReq.AgentID, "human_input_response", map[string]string{
-			"request_id": requestID,
-			"answer":     req.Answer,
-		})
-	}
+	// Agent will poll for response via get_pending_human_requests tool
 
 	s.broadcastState()
 	s.respondJSON(w, map[string]bool{"success": true})
@@ -633,14 +623,7 @@ func (s *Server) handleRespondStopRequest(w http.ResponseWriter, r *http.Request
 	// Update store
 	s.store.RespondStopRequest(requestID, req.Approved, req.Response, "human")
 
-	// Notify agent via MCP
-	if stopReq.AgentID != "" {
-		s.mcp.NotifyAgent(stopReq.AgentID, "stop_approval_response", map[string]interface{}{
-			"request_id": requestID,
-			"approved":   req.Approved,
-			"response":   req.Response,
-		})
-	}
+	// Agent will poll for response via appropriate tool
 
 	s.broadcastState()
 	s.respondJSON(w, map[string]interface{}{

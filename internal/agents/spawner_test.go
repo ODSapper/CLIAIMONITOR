@@ -314,7 +314,6 @@ func TestCleanupAgentFiles(t *testing.T) {
 
 	// Create files
 	os.WriteFile(filepath.Join(mcpDir, "test-agent-mcp.json"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(promptsDir, "test-agent-prompt.md"), []byte("# Test"), 0644)
 	os.WriteFile(filepath.Join(pidsDir, "test-agent.pid"), []byte("12345"), 0644)
 
 	// Cleanup
@@ -323,12 +322,9 @@ func TestCleanupAgentFiles(t *testing.T) {
 		t.Errorf("CleanupAgentFiles failed: %v", err)
 	}
 
-	// Verify all files are gone
+	// Verify MCP config and PID files are gone (prompt files are not cleaned up by this function)
 	if _, err := os.Stat(filepath.Join(mcpDir, "test-agent-mcp.json")); !os.IsNotExist(err) {
 		t.Error("MCP config should be removed")
-	}
-	if _, err := os.Stat(filepath.Join(promptsDir, "test-agent-prompt.md")); !os.IsNotExist(err) {
-		t.Error("Prompt file should be removed")
 	}
 	if _, err := os.Stat(filepath.Join(pidsDir, "test-agent.pid")); !os.IsNotExist(err) {
 		t.Error("PID file should be removed")
@@ -378,21 +374,6 @@ func TestStopAgent(t *testing.T) {
 	// Verify removed from running agents
 	if _, ok := spawner.GetRunningAgents()["test-agent-001"]; ok {
 		t.Error("Agent should be removed from running agents")
-	}
-}
-
-// TestTrackHeartbeatPID tests heartbeat PID tracking
-func TestTrackHeartbeatPID(t *testing.T) {
-	spawner := NewSpawner(t.TempDir(), "http://localhost:3000/mcp/sse", nil)
-
-	spawner.trackHeartbeatPID("agent-001", 12345)
-
-	spawner.mu.RLock()
-	pid, ok := spawner.heartbeatPIDs["agent-001"]
-	spawner.mu.RUnlock()
-
-	if !ok || pid != 12345 {
-		t.Errorf("Expected heartbeat PID 12345, got %d", pid)
 	}
 }
 
@@ -463,17 +444,13 @@ func TestCleanupAllAgentFiles(t *testing.T) {
 
 	// Create all directories
 	mcpDir := filepath.Join(basePath, "configs", "mcp")
-	promptsDir := filepath.Join(basePath, "configs", "prompts", "active")
 	pidsDir := filepath.Join(basePath, "data", "pids")
 	os.MkdirAll(mcpDir, 0755)
-	os.MkdirAll(promptsDir, 0755)
 	os.MkdirAll(pidsDir, 0755)
 
-	// Create multiple agent files
+	// Create multiple agent files (MCP configs and PIDs only - prompt files are not cleaned)
 	os.WriteFile(filepath.Join(mcpDir, "agent1-mcp.json"), []byte("{}"), 0644)
 	os.WriteFile(filepath.Join(mcpDir, "agent2-mcp.json"), []byte("{}"), 0644)
-	os.WriteFile(filepath.Join(promptsDir, "agent1-prompt.md"), []byte("# Test"), 0644)
-	os.WriteFile(filepath.Join(promptsDir, "agent2-prompt.md"), []byte("# Test"), 0644)
 	os.WriteFile(filepath.Join(pidsDir, "agent1.pid"), []byte("111"), 0644)
 	os.WriteFile(filepath.Join(pidsDir, "agent2.pid"), []byte("222"), 0644)
 
@@ -486,11 +463,11 @@ func TestCleanupAllAgentFiles(t *testing.T) {
 		t.Errorf("CleanupAllAgentFiles failed: %v", err)
 	}
 
-	// Verify agent files are gone
+	// Verify agent MCP config files are gone
 	entries, _ := os.ReadDir(mcpDir)
 	for _, e := range entries {
 		if e.Name() != "config.json" {
-			t.Errorf("Agent file should be removed: %s", e.Name())
+			t.Errorf("Agent MCP config file should be removed: %s", e.Name())
 		}
 	}
 
@@ -499,10 +476,10 @@ func TestCleanupAllAgentFiles(t *testing.T) {
 		t.Error("Non-agent config file should not be removed")
 	}
 
-	// Verify prompts directory is empty (of agent files)
-	entries, _ = os.ReadDir(promptsDir)
+	// Verify PID files are gone
+	entries, _ = os.ReadDir(pidsDir)
 	if len(entries) > 0 {
-		t.Errorf("All prompt files should be removed, found %d", len(entries))
+		t.Errorf("All PID files should be removed, found %d", len(entries))
 	}
 }
 
@@ -548,41 +525,6 @@ func TestIsAgentRunning(t *testing.T) {
 	}
 }
 
-// TestKillHeartbeatFromPIDFile tests heartbeat cleanup
-func TestKillHeartbeatFromPIDFile(t *testing.T) {
-	basePath := t.TempDir()
-	spawner := NewSpawner(basePath, "http://localhost:3000/mcp/sse", nil)
-
-	// Test with non-existent file (should not error)
-	err := spawner.KillHeartbeatFromPIDFile("non-existent-agent")
-	if err != nil {
-		t.Errorf("Should not error on non-existent heartbeat PID file: %v", err)
-	}
-
-	// Test with invalid PID content
-	pidsDir := filepath.Join(basePath, "data", "pids")
-	os.MkdirAll(pidsDir, 0755)
-	pidFile := filepath.Join(pidsDir, "test-agent-heartbeat.pid")
-	os.WriteFile(pidFile, []byte("not-a-number"), 0644)
-
-	err = spawner.KillHeartbeatFromPIDFile("test-agent")
-	if err == nil {
-		t.Error("Should error on invalid PID content")
-	}
-
-	// Test with valid but fake PID (process won't exist, but that's OK)
-	os.WriteFile(pidFile, []byte("99999999"), 0644)
-	err = spawner.KillHeartbeatFromPIDFile("test-agent")
-	// Should not error even if kill fails - it's best effort
-	if err != nil {
-		t.Logf("KillHeartbeatFromPIDFile returned: %v (expected for fake PID)", err)
-	}
-
-	// Verify file was cleaned up
-	if _, err := os.Stat(pidFile); !os.IsNotExist(err) {
-		t.Error("Heartbeat PID file should be removed")
-	}
-}
 
 // Helper function
 func contains(s, substr string) bool {

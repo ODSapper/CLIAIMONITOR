@@ -44,7 +44,7 @@ var (
 func Get() *Ops {
 	instanceOnce.Do(func() {
 		instance = &Ops{
-			minOpInterval:  200 * time.Millisecond, // 200ms between pane operations
+			minOpInterval:  500 * time.Millisecond, // 500ms between pane operations (increased from 200ms to prevent WezTerm freeze)
 			commandTimeout: 10 * time.Second,       // 10s timeout per command
 		}
 	})
@@ -119,6 +119,88 @@ func (o *Ops) KillPanesContext(ctx context.Context, paneIDs []int) []error {
 		if err := o.KillPaneContext(ctx, paneID); err != nil {
 			log.Printf("[WEZTERM] Warning: Failed to close pane %d: %v", paneID, err)
 			errors = append(errors, err)
+		}
+	}
+
+	return errors
+}
+
+// GracefulKillPane sends an exit signal to the pane before killing it.
+// This helps prevent Windows conpty hangs by allowing the process to clean up.
+func (o *Ops) GracefulKillPane(paneID int) error {
+	return o.GracefulKillPaneContext(context.Background(), paneID)
+}
+
+// GracefulKillPaneContext sends exit signal then kills the pane with context support.
+// Sequence: Send Ctrl+C -> wait 300ms -> Send "exit" -> wait 500ms -> kill pane
+// This gives Windows conpty time to clean up the pseudo-console properly.
+func (o *Ops) GracefulKillPaneContext(ctx context.Context, paneID int) error {
+	log.Printf("[WEZTERM] Gracefully closing pane %d (sending exit signals first)", paneID)
+
+	// Step 1: Send Ctrl+C to interrupt any running process
+	// We don't hold the mutex here since SendTextContext handles its own locking
+	ctrlC := "\x03" // ASCII ETX (Ctrl+C)
+	if err := o.SendTextContext(ctx, paneID, ctrlC, false); err != nil {
+		log.Printf("[WEZTERM] Warning: Failed to send Ctrl+C to pane %d: %v", paneID, err)
+		// Continue anyway - process might already be idle
+	}
+
+	// Wait for interrupt to be processed
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Step 2: Send "exit" command to terminate shell gracefully
+	if err := o.SendTextContext(ctx, paneID, "exit", true); err != nil {
+		log.Printf("[WEZTERM] Warning: Failed to send exit to pane %d: %v", paneID, err)
+		// Continue anyway - we'll force kill
+	}
+
+	// Wait for shell to exit and conpty to clean up
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Step 3: Now kill the pane (process should be gone or exiting)
+	return o.KillPaneContext(ctx, paneID)
+}
+
+// GracefulKillPanes closes multiple panes with graceful shutdown for each.
+// This is the recommended method for closing agent panes to prevent WezTerm freezes.
+func (o *Ops) GracefulKillPanes(paneIDs []int) []error {
+	return o.GracefulKillPanesContext(context.Background(), paneIDs)
+}
+
+// GracefulKillPanesContext closes multiple panes gracefully with context support.
+func (o *Ops) GracefulKillPanesContext(ctx context.Context, paneIDs []int) []error {
+	var errors []error
+
+	for i, paneID := range paneIDs {
+		select {
+		case <-ctx.Done():
+			errors = append(errors, fmt.Errorf("context cancelled while closing pane %d", paneID))
+			return errors
+		default:
+		}
+
+		log.Printf("[WEZTERM] Gracefully closing pane %d/%d", i+1, len(paneIDs))
+
+		if err := o.GracefulKillPaneContext(ctx, paneID); err != nil {
+			log.Printf("[WEZTERM] Warning: Failed to gracefully close pane %d: %v", paneID, err)
+			errors = append(errors, err)
+		}
+
+		// Additional delay between panes to let WezTerm's internal state settle
+		if i < len(paneIDs)-1 {
+			select {
+			case <-ctx.Done():
+				return errors
+			case <-time.After(300 * time.Millisecond):
+			}
 		}
 	}
 

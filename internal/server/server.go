@@ -398,9 +398,8 @@ func (s *Server) setupRoutes() {
 	// WebSocket
 	s.router.HandleFunc("/ws", s.handleWebSocket)
 
-	// MCP endpoints
-	s.router.HandleFunc("/mcp/sse", s.mcp.ServeSSE)
-	s.router.HandleFunc("/mcp/messages/", s.mcp.ServeMessage)
+	// MCP endpoint (POST-only JSON-RPC)
+	s.router.HandleFunc("/mcp", s.mcp.ServeHTTP)
 
 	// Static files
 	staticFS, err := fs.Sub(web.StaticFiles, ".")
@@ -1537,27 +1536,7 @@ func (s *Server) setupMCPCallbacks() {
 
 	mcp.RegisterDefaultTools(s.mcp, callbacks)
 
-	// Set connection callbacks - no-ops since agents use POST-only tool calls
-	// SSE connections are just for keepalive/ping, not meaningful for status tracking
-	s.mcp.SetConnectionCallbacks(
-		func(agentID string) {
-			// No-op: SSE connect events are not meaningful
-			// Agent status is tracked via wezterm pane existence
-		},
-		func(agentID string) {
-			// No-op: SSE disconnect events are not meaningful
-			// Agent status is tracked via wezterm pane existence
-		},
-	)
-
-	// Set shutdown checker
-	s.mcp.SetShutdownChecker(func(agentID string) bool {
-		state := s.store.GetState()
-		if agent, ok := state.Agents[agentID]; ok {
-			return agent.ShutdownRequested
-		}
-		return false
-	})
+	// Agent status is tracked via wezterm pane existence, not SSE connections
 
 	// Set tool call callback for token estimation
 	// Since Claude agents cannot introspect their own token usage,

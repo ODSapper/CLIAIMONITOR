@@ -21,6 +21,12 @@ import (
 	"github.com/CLIAIMONITOR/internal/types"
 )
 
+// ANSI color codes for terminal output
+const (
+	colorGreen = "\033[32m"
+	colorReset = "\033[0m"
+)
+
 func main() {
 	// Parse command line flags
 	port := flag.Int("port", 3000, "HTTP server port")
@@ -119,6 +125,9 @@ func main() {
 	// Currently using basic text search - semantic search can be added when LM Studio is reliably available
 
 	_ = learningDB // learningDB is now available for use in agents/handlers
+
+	// Start green output for server pane
+	fmt.Print(colorGreen)
 	fmt.Println("  Memory system initialized (operational + learning layers)")
 
 	// Discover current repository
@@ -231,6 +240,9 @@ func main() {
 	}
 
 	fmt.Printf("  Dashboard ready at http://localhost:%d ✓\n", *port)
+	fmt.Println()
+	fmt.Println("  The Enrichment Center reminds you that the Weighted Companion Cube")
+	fmt.Println("  will never threaten to stab you and, in fact, cannot speak.")
 
 	// Write PID file NOW (after confirmed bind)
 	if err := instanceMgr.WritePIDFile(os.Getpid(), *port, basePath); err != nil {
