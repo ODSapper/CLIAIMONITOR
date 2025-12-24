@@ -22,6 +22,7 @@ import (
 // Spawner manages agent process lifecycle
 type Spawner interface {
 	SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (pid int, err error)
+	SpawnAgentWithOptions(config types.AgentConfig, agentID string, projectPath string, initialPrompt string, headless bool) (pid int, err error)
 	StopAgent(agentID string) error
 	StopAgentWithReason(agentID string, reason string) error
 	IsAgentRunning(pid int) bool
@@ -41,23 +42,29 @@ type ProcessSpawner struct {
 	agentCounters  map[string]int // agentType -> sequence counter
 	memDB          memory.MemoryDB
 
-	// Agent window: All agents spawn in a dedicated window (separate from Captain)
-	// Each tab in that window holds up to 9 agents in a 3x3 grid
-	agentWindowID int // Window ID for agents (-1 = not created yet)
+	// Headless agents: spawn in dedicated hidden "Agents" workspace
+	agentWindowID int // Window ID for headless agents (-1 = not created yet)
+
+	// Visible agents: spawn as tabs in Captain's window (window 0)
+	// Each tab holds up to 9 agents in a 3x3 grid
+	visibleTabID    int // Current tab ID for visible agents (-1 = no tab yet)
+	visibleTabPanes int // Count of panes in current visible tab
 }
 
 // NewSpawner creates a new process spawner
 func NewSpawner(basePath string, mcpServerURL string, memDB memory.MemoryDB) *ProcessSpawner {
 	return &ProcessSpawner{
-		basePath:      basePath,
-		mcpServerURL:  mcpServerURL,
-		scriptsPath:   filepath.Join(basePath, "scripts"),
-		configsPath:   filepath.Join(basePath, "configs"),
-		runningAgents: make(map[string]int),
-		agentPanes:    make(map[string]int),
-		agentCounters: make(map[string]int),
-		memDB:         memDB,
-		agentWindowID: -1, // No agent window yet
+		basePath:        basePath,
+		mcpServerURL:    mcpServerURL,
+		scriptsPath:     filepath.Join(basePath, "scripts"),
+		configsPath:     filepath.Join(basePath, "configs"),
+		runningAgents:   make(map[string]int),
+		agentPanes:      make(map[string]int),
+		agentCounters:   make(map[string]int),
+		memDB:           memDB,
+		agentWindowID:   -1, // No headless window yet
+		visibleTabID:    -1, // No visible agent tab yet
+		visibleTabPanes: 0,
 	}
 }
 
@@ -175,6 +182,97 @@ func (s *ProcessSpawner) getSpawnTarget() (needsNewWindow, needsNewTab bool, spl
 	}
 }
 
+// getVisibleSpawnTarget determines where to spawn the next visible agent in Captain's window
+// Returns: (needsNewTab, splitFromPaneID, splitDirection)
+func (s *ProcessSpawner) getVisibleSpawnTarget() (needsNewTab bool, splitFromPaneID int, splitDirection string) {
+	// Query all panes to find Captain's window and visible agent tabs
+	cmd := exec.Command("wezterm.exe", "cli", "list", "--format", "json")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("[SPAWNER] Error querying panes for visible spawn: %v", err)
+		return true, 0, "" // Create new tab using pane 0
+	}
+
+	var allPanes []PaneInfo
+	if err := json.Unmarshal(output, &allPanes); err != nil {
+		log.Printf("[SPAWNER] Error parsing panes: %v", err)
+		return true, 0, ""
+	}
+
+	// Find Captain's window (window containing pane 0, typically window 0)
+	var captainWindowID int = -1
+	var captainTabID int = -1
+	for _, p := range allPanes {
+		if p.PaneID == 0 {
+			captainWindowID = p.WindowID
+			captainTabID = p.TabID
+			break
+		}
+	}
+
+	if captainWindowID < 0 {
+		log.Printf("[SPAWNER] Could not find Captain's window, using pane 0")
+		return true, 0, ""
+	}
+
+	// Find tabs in Captain's window that are NOT Captain's tab (those are agent tabs)
+	agentTabPanes := make(map[int][]PaneInfo)
+	for _, p := range allPanes {
+		if p.WindowID == captainWindowID && p.TabID != captainTabID {
+			agentTabPanes[p.TabID] = append(agentTabPanes[p.TabID], p)
+		}
+	}
+
+	// Find a tab with room (< 9 panes)
+	var targetTabID int = -1
+	var panes []PaneInfo
+	for tid, ps := range agentTabPanes {
+		if len(ps) < 9 {
+			targetTabID = tid
+			panes = ps
+			break
+		}
+	}
+
+	// No agent tabs or all full - create new tab
+	if targetTabID < 0 || len(panes) == 0 {
+		// Use pane 0 to create a new tab in Captain's window
+		return true, 0, ""
+	}
+
+	// Sort panes by grid position
+	sort.Slice(panes, func(i, j int) bool {
+		if panes[i].TopRow != panes[j].TopRow {
+			return panes[i].TopRow < panes[j].TopRow
+		}
+		return panes[i].LeftCol < panes[j].LeftCol
+	})
+
+	count := len(panes)
+
+	// Grid: [0][1][2] / [3][4][5] / [6][7][8]
+	switch count {
+	case 1:
+		return false, panes[0].PaneID, "right"
+	case 2:
+		return false, panes[1].PaneID, "right"
+	case 3:
+		return false, panes[0].PaneID, "bottom"
+	case 4:
+		return false, panes[3].PaneID, "right"
+	case 5:
+		return false, panes[4].PaneID, "right"
+	case 6:
+		return false, panes[3].PaneID, "bottom"
+	case 7:
+		return false, panes[6].PaneID, "right"
+	case 8:
+		return false, panes[7].PaneID, "right"
+	default:
+		return true, panes[0].PaneID, ""
+	}
+}
+
 // GenerateAgentID creates a team-compatible agent ID in format: team-{type}{seq}
 // Example: team-opusgreen001, team-sntpurple002, team-snake003
 func (s *ProcessSpawner) GenerateAgentID(agentType string) string {
@@ -218,10 +316,16 @@ func (s *ProcessSpawner) SetAgentPaneID(agentID string, paneID int) {
 }
 
 
-// SpawnAgent launches a team agent in WezTerm
+// SpawnAgent launches a team agent in WezTerm (visible mode - tabs in Captain's window)
 func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, projectPath string, initialPrompt string) (int, error) {
+	return s.SpawnAgentWithOptions(config, agentID, projectPath, initialPrompt, false)
+}
+
+// SpawnAgentWithOptions launches a team agent in WezTerm with visibility control
+// headless=true: spawns in hidden "Agents" workspace with 3x3 grid (Captain monitors via wezterm_get_text)
+// headless=false: spawns as a new tab in Captain's window (visible to user)
+func (s *ProcessSpawner) SpawnAgentWithOptions(config types.AgentConfig, agentID string, projectPath string, initialPrompt string, headless bool) (int, error) {
 	// Serialize spawns to prevent race conditions when determining spawn target
-	// This ensures only one agent spawns at a time, preventing multiple windows
 	s.spawnMu.Lock()
 	defer s.spawnMu.Unlock()
 
@@ -230,8 +334,6 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 	escapedPrompt = strings.ReplaceAll(escapedPrompt, `'`, `''`)
 
 	// Build command: set title and run Claude directly
-	// Captain controls agents via WezTerm pane commands (send-text, get-text)
-	// No per-agent MCP needed - avoids context bloat from stale MCP entries
 	cmdChain := fmt.Sprintf(
 		`title %s && claude --model %s --dangerously-skip-permissions "%s"`,
 		agentID,
@@ -239,78 +341,107 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 		escapedPrompt,
 	)
 
-	// WezTerm only - no fallbacks to other terminals
 	var cmd *exec.Cmd
 	var paneID int
 	var paneIDStr string
 
 	if _, err := exec.LookPath("wezterm.exe"); err == nil {
-		// Dynamic grid layout: query current state and determine spawn target
-		needsNewWindow, needsNewTab, splitFromPaneID, splitDirection := s.getSpawnTarget()
-
 		var output []byte
 		var spawnErr error
 
-		if needsNewWindow {
-			// Create new agent window
-			log.Printf("[SPAWNER] Creating new agent window")
-			cmd = exec.Command("wezterm.exe", "cli", "spawn",
-				"--new-window",
-				"--cwd", projectPath,
-				"--", "cmd.exe")
+		if headless {
+			// HEADLESS MODE: Hidden "Agents" workspace with 3x3 grid
+			needsNewWindow, needsNewTab, splitFromPaneID, splitDirection := s.getSpawnTarget()
 
-			output, spawnErr = cmd.CombinedOutput()
-			if spawnErr != nil {
-				return 0, fmt.Errorf("failed to spawn agent window (output: %s): %w", string(output), spawnErr)
-			}
+			if needsNewWindow {
+				log.Printf("[SPAWNER] Creating headless agent window in Agents workspace")
+				cmd = exec.Command("wezterm.exe", "cli", "spawn",
+					"--new-window",
+					"--workspace", "Agents",
+					"--cwd", projectPath,
+					"--", "cmd.exe")
 
-			// Parse pane ID and extract window ID
-			paneIDStr = strings.TrimSpace(string(output))
-			if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
-				paneID = parsedID
-				// Query to get window ID for this pane
-				listCmd := exec.Command("wezterm.exe", "cli", "list", "--format", "json")
-				if listOut, listErr := listCmd.Output(); listErr == nil {
-					var panes []PaneInfo
-					if json.Unmarshal(listOut, &panes) == nil {
-						for _, p := range panes {
-							if p.PaneID == paneID {
-								s.agentWindowID = p.WindowID
-								log.Printf("[SPAWNER] Agent window created: window_id=%d, first pane=%d", s.agentWindowID, paneID)
-								break
+				output, spawnErr = cmd.CombinedOutput()
+				if spawnErr != nil {
+					return 0, fmt.Errorf("failed to spawn agent window: %w", spawnErr)
+				}
+
+				paneIDStr = strings.TrimSpace(string(output))
+				if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
+					paneID = parsedID
+					listCmd := exec.Command("wezterm.exe", "cli", "list", "--format", "json")
+					if listOut, listErr := listCmd.Output(); listErr == nil {
+						var panes []PaneInfo
+						if json.Unmarshal(listOut, &panes) == nil {
+							for _, p := range panes {
+								if p.PaneID == paneID {
+									s.agentWindowID = p.WindowID
+									log.Printf("[SPAWNER] Headless window created: window_id=%d, pane=%d", s.agentWindowID, paneID)
+									titleCmd := exec.Command("wezterm.exe", "cli", "set-window-title",
+										"--window-id", strconv.Itoa(s.agentWindowID),
+										"Agent Squad (Headless)")
+									titleCmd.Run()
+									break
+								}
 							}
 						}
 					}
 				}
-			}
-		} else if needsNewTab {
-			// Create new tab in agent window
-			log.Printf("[SPAWNER] Creating new tab in agent window (pane %d)", splitFromPaneID)
-			cmd = exec.Command("wezterm.exe", "cli", "spawn",
-				"--pane-id", strconv.Itoa(splitFromPaneID),
-				"--cwd", projectPath,
-				"--", "cmd.exe")
-
-			output, spawnErr = cmd.CombinedOutput()
-			if spawnErr != nil {
-				return 0, fmt.Errorf("failed to spawn new tab (output: %s): %w", string(output), spawnErr)
+			} else if needsNewTab {
+				log.Printf("[SPAWNER] Creating new tab in headless window (pane %d)", splitFromPaneID)
+				cmd = exec.Command("wezterm.exe", "cli", "spawn",
+					"--pane-id", strconv.Itoa(splitFromPaneID),
+					"--cwd", projectPath,
+					"--", "cmd.exe")
+				output, spawnErr = cmd.CombinedOutput()
+				if spawnErr != nil {
+					return 0, fmt.Errorf("failed to spawn new tab: %w", spawnErr)
+				}
+			} else {
+				log.Printf("[SPAWNER] Splitting pane %d %s", splitFromPaneID, splitDirection)
+				cmd = exec.Command("wezterm.exe", "cli", "split-pane",
+					"--pane-id", strconv.Itoa(splitFromPaneID),
+					"--"+splitDirection,
+					"--cwd", projectPath,
+					"--", "cmd.exe")
+				output, spawnErr = cmd.CombinedOutput()
+				if spawnErr != nil {
+					return 0, fmt.Errorf("failed to split pane: %w", spawnErr)
+				}
 			}
 		} else {
-			// Split existing pane in current tab
-			log.Printf("[SPAWNER] Splitting pane %d to the %s", splitFromPaneID, splitDirection)
-			cmd = exec.Command("wezterm.exe", "cli", "split-pane",
-				"--pane-id", strconv.Itoa(splitFromPaneID),
-				"--"+splitDirection,
-				"--cwd", projectPath,
-				"--", "cmd.exe")
+			// VISIBLE MODE: Agents spawn in Captain's window with 3x3 grid per tab
+			needsNewTab, splitFromPaneID, splitDirection := s.getVisibleSpawnTarget()
 
-			output, spawnErr = cmd.CombinedOutput()
-			if spawnErr != nil {
-				return 0, fmt.Errorf("failed to split pane %d (output: %s): %w", splitFromPaneID, string(output), spawnErr)
+			if needsNewTab {
+				// Create new tab in Captain's window (use pane 0 as reference)
+				log.Printf("[SPAWNER] Creating new visible agent tab in Captain window for %s", agentID)
+				cmd = exec.Command("wezterm.exe", "cli", "spawn",
+					"--pane-id", "0",
+					"--cwd", projectPath,
+					"--", "cmd.exe")
+
+				output, spawnErr = cmd.CombinedOutput()
+				if spawnErr != nil {
+					return 0, fmt.Errorf("failed to spawn visible agent tab: %w", spawnErr)
+				}
+			} else {
+				// Split existing pane in visible agent tab
+				log.Printf("[SPAWNER] Splitting visible pane %d %s for %s", splitFromPaneID, splitDirection, agentID)
+				cmd = exec.Command("wezterm.exe", "cli", "split-pane",
+					"--pane-id", strconv.Itoa(splitFromPaneID),
+					"--"+splitDirection,
+					"--cwd", projectPath,
+					"--", "cmd.exe")
+
+				output, spawnErr = cmd.CombinedOutput()
+				if spawnErr != nil {
+					return 0, fmt.Errorf("failed to split visible pane: %w", spawnErr)
+				}
 			}
 		}
 
-		// Parse pane ID from output (for new tab and split cases)
+		// Parse pane ID from output
 		if paneID == 0 {
 			paneIDStr = strings.TrimSpace(string(output))
 			if parsedID, parseErr := strconv.Atoi(paneIDStr); parseErr == nil {
@@ -319,70 +450,57 @@ func (s *ProcessSpawner) SpawnAgent(config types.AgentConfig, agentID string, pr
 		}
 
 		if paneID > 0 {
-			log.Printf("[SPAWNER] Agent %s spawned in pane %d", agentID, paneID)
+			log.Printf("[SPAWNER] Agent %s spawned in pane %d (headless=%v)", agentID, paneID, headless)
 
-			// Apply background color
 			colors := GetAgentColors(config.Name)
-
-			// Small delay to let the cmd.exe prompt appear
 			time.Sleep(300 * time.Millisecond)
 
-			// Clear screen and set background tint using OSC 11
+			// Set background color
 			clearCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
-			// OSC 11 sets terminal default background: ESC ] 11 ; rgb:RR/GG/BB BEL
-			// Using BEL (\x07) as terminator for better compatibility
-			// Also clear screen and move cursor home
 			clearSeq := fmt.Sprintf("\x1b]11;%s\x07\x1b[2J\x1b[H", colors.BgRGB)
 			clearCmd.Stdin = strings.NewReader(clearSeq)
-			if err := clearCmd.Run(); err != nil {
-				log.Printf("[SPAWNER] Warning: Failed to clear and set background for pane %d: %v", paneID, err)
-			}
+			clearCmd.Run()
 
 			time.Sleep(100 * time.Millisecond)
 
-			// Step 3: Send command chain via send-text with --no-paste and \r\n to execute
+			// Send command to start Claude
 			sendCmd := exec.Command("wezterm.exe", "cli", "send-text", "--pane-id", paneIDStr, "--no-paste")
 			sendCmd.Stdin = strings.NewReader(cmdChain + "\r\n")
 			if sendErr := sendCmd.Run(); sendErr != nil {
-				log.Printf("[SPAWNER] Warning: Failed to send command to pane %d for agent %s: %v", paneID, agentID, sendErr)
+				log.Printf("[SPAWNER] Warning: Failed to send command to pane %d: %v", paneID, sendErr)
 			} else {
-				log.Printf("[SPAWNER] Command chain sent to pane %d for agent %s", paneID, agentID)
+				log.Printf("[SPAWNER] Command sent to pane %d for agent %s", paneID, agentID)
+			}
+
+			// Set tab title for visible agents
+			if !headless {
+				time.Sleep(100 * time.Millisecond)
+				tabTitleCmd := exec.Command("wezterm.exe", "cli", "set-tab-title", "--pane-id", paneIDStr, agentID)
+				tabTitleCmd.Run()
 			}
 		} else {
 			log.Printf("[SPAWNER] Warning: Could not parse pane ID from output: %s", paneIDStr)
 			paneID = -1
 		}
 	} else {
-		return 0, fmt.Errorf("WezTerm not found in PATH - required for agent spawning")
+		return 0, fmt.Errorf("WezTerm not found in PATH")
 	}
 
 	pid := 0
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
-	log.Printf("[SPAWNER] Agent %s launched in WezTerm (PID: %d, Pane: %d)", agentID, pid, paneID)
+	log.Printf("[SPAWNER] Agent %s launched (PID: %d, Pane: %d, headless=%v)", agentID, pid, paneID, headless)
 
-	// Don't wait - let it run independently
 	if cmd != nil && cmd.Process != nil {
 		go func() {
-			if waitErr := cmd.Wait(); waitErr != nil {
-				log.Printf("[SPAWNER] Agent %s process exited with error: %v", agentID, waitErr)
-			}
+			cmd.Wait()
 		}()
 	}
 
-	// Store the pane ID for later use (cleanup, etc.)
 	if paneID > 0 {
 		s.SetAgentPaneID(agentID, paneID)
-		log.Printf("[SPAWNER] Stored pane ID %d for agent %s", paneID, agentID)
 	}
-
-	// Note: We can't reliably track the agent PID since it runs in Windows Terminal.
-	// Agents register themselves via MCP when they connect.
-
-	// Register in DB with "pending" status (Phase 1 of two-phase registration)
-	// Agent will transition to "connected" when it establishes MCP SSE connection
-	log.Printf("[SPAWNER] Agent %s spawned with 'pending' status, awaiting MCP connection", agentID)
 
 	return pid, nil
 }

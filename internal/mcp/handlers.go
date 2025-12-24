@@ -1,7 +1,10 @@
 package mcp
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -1726,6 +1729,88 @@ func registerWezTermTools(s *Server) {
 				"success": true,
 				"text":    text,
 				"pane_id": paneIDStr,
+			}, nil
+		},
+	})
+
+	// spawn_agent - Spawn a new agent via the API (preferred over wezterm_spawn_pane)
+	// This properly initializes agents with workspace, title, and Claude CLI
+	s.RegisterTool(ToolDefinition{
+		Name:        "spawn_agent",
+		Description: "Spawn a new Claude agent in a WezTerm pane. This is the preferred way to spawn agents as it properly sets up workspaces, window titles, and runs Claude CLI. Use this instead of wezterm_spawn_pane for agent spawning.",
+		Parameters: map[string]ParameterDef{
+			"config_name": {
+				Type:        "string",
+				Description: "Agent configuration name from teams.yaml (e.g., 'SNTGreen', 'HaikuPurple', 'Snake')",
+				Required:    true,
+			},
+			"project_path": {
+				Type:        "string",
+				Description: "Working directory path for the agent",
+				Required:    true,
+			},
+			"task": {
+				Type:        "string",
+				Description: "Initial task/prompt for the agent to work on",
+				Required:    true,
+			},
+		},
+		Handler: func(agentID string, params map[string]interface{}) (interface{}, error) {
+			configName, _ := params["config_name"].(string)
+			projectPath, _ := params["project_path"].(string)
+			task, _ := params["task"].(string)
+
+			if configName == "" || projectPath == "" || task == "" {
+				return map[string]interface{}{
+					"success": false,
+					"error":   "config_name, project_path, and task are all required",
+				}, nil
+			}
+
+			// Call the spawn API
+			reqBody := map[string]string{
+				"config_name":  configName,
+				"project_path": projectPath,
+				"task":         task,
+			}
+			jsonBody, err := json.Marshal(reqBody)
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to marshal request: %v", err),
+				}, nil
+			}
+
+			resp, err := http.Post("http://localhost:3000/api/agents/spawn", "application/json", bytes.NewBuffer(jsonBody))
+			if err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to call spawn API: %v", err),
+				}, nil
+			}
+			defer resp.Body.Close()
+
+			var result map[string]interface{}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("failed to decode response: %v", err),
+				}, nil
+			}
+
+			if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+				errMsg, _ := result["error"].(string)
+				return map[string]interface{}{
+					"success": false,
+					"error":   fmt.Sprintf("spawn API error: %s", errMsg),
+				}, nil
+			}
+
+			return map[string]interface{}{
+				"success":   true,
+				"agent_id":  result["agent_id"],
+				"pane_id":   result["pane_id"],
+				"config":    configName,
 			}, nil
 		},
 	})

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -100,6 +101,9 @@ func main() {
 	}
 	defer instanceMgr.ReleaseLock()
 
+
+	// Set Captain window title and workspace for WezTerm styling
+	setCaptainWindowTitle()
 	// Initialize memory database
 	dataDir := filepath.Join(basePath, "data")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
@@ -510,6 +514,17 @@ func stopInstance(statePath string, force bool) {
 			fmt.Println("Try: cliaimonitor.exe -force-stop")
 		}
 	}
+}
+
+// setCaptainWindowTitle sets the WezTerm window title and workspace to CLITCOMMANDER
+func setCaptainWindowTitle() {
+	// Set window title
+	cmd := exec.Command("wezterm.exe", "cli", "set-window-title", "CLITCOMMANDER")
+	_ = cmd.Run() // Ignore error - non-fatal
+
+	// Rename workspace for per-workspace styling in wezterm.lua
+	renameCmd := exec.Command("wezterm.exe", "cli", "rename-workspace", "CLITCOMMANDER")
+	_ = renameCmd.Run() // Ignore error - non-fatal
 }
 
 func printBanner() {
