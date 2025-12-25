@@ -1,0 +1,139 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Login - MAH</title><link rel="icon" href="/static/favicon.ico"><link rel="stylesheet" href="/static/css/tailwind.min.css"><script src="/static/js/htmx.min.js"></script><script src="/static/js/alpine.min.js" defer></script><link rel="stylesheet" href="/static/css/theme.css"><script src="/static/js/theme.js"></script><link rel="stylesheet" href="/static/css/command-palette.css"><script src="/static/js/command-palette.js" defer></script><link rel="stylesheet" href="/static/css/help.css"><script src="/static/js/help.js" defer></script><style type="text/css">:root { --color-primary: #3b82f6; --color-primary-hover: #2563eb; --color-primary-light: #1e3a5f; --color-secondary: #94a3b8; --color-secondary-hover: #475569; --color-sidebar-bg: #1e293b; --color-sidebar-text: #e2e8f0; --color-sidebar-hover: #334155; --color-success: #22c55e; --color-warning: #f59e0b; --color-error: #ef4444; --color-info: #3b82f6; --color-page-bg: #f3f4f6; --color-card-bg: #ffffff; --color-header-bg: #ffffff; --color-neon-cyan: #00f0ff; --color-neon-magenta: #ff00ff; --color-neon-green: #00ff88; --color-bg-primary: #0f172a; --color-bg-secondary: #1e293b; --color-bg-elevated: #334155; --color-text-primary: #e2e8f0; --color-text-secondary: #94a3b8; --color-text-muted: #64748b }</style><style type="text/css">
+		:root {
+			/* MSS Cyberpunk variables */
+			--neon-cyan: #00f0ff;
+			--neon-magenta: #ff00ff;
+			--neon-green: #00ff88;
+			--bg-primary: #0f172a;
+			--bg-secondary: #1e293b;
+			--bg-elevated: #334155;
+			--text-primary: #e2e8f0;
+			--text-secondary: #94a3b8;
+			--text-muted: #64748b;
+
+			/* Glow effects */
+			--glow-cyan: 0 0 10px rgba(0, 240, 255, 0.5), 0 0 20px rgba(0, 240, 255, 0.3);
+			--glow-blue: 0 0 10px rgba(59, 130, 246, 0.5), 0 0 20px rgba(59, 130, 246, 0.3);
+		}
+
+		/* CRITICAL FALLBACK CSS - Works without Tailwind CDN */
+		html, body {
+			background-color: #0f172a !important;
+			color: #e2e8f0 !important;
+			min-height: 100vh;
+			margin: 0;
+			padding: 0;
+		}
+
+		/* Sidebar fallback */
+		aside, .sidebar, [class*="sidebar"] {
+			background-color: #1e293b !important;
+			color: #e2e8f0 !important;
+		}
+
+		/* Main content area */
+		main {
+			background-color: #0f172a !important;
+		}
+
+		/* Links */
+		a {
+			color: #00f0ff;
+		}
+		a:hover {
+			color: #3b82f6;
+		}
+
+		/* Form inputs */
+		input, textarea, select {
+			background-color: #1e293b !important;
+			border-color: #334155 !important;
+			color: #e2e8f0 !important;
+		}
+		input:focus, textarea:focus, select:focus {
+			border-color: #00f0ff !important;
+			outline: none;
+		}
+
+		/* Buttons */
+		button[type="submit"], .btn-primary {
+			background: linear-gradient(to right, #00f0ff, #3b82f6) !important;
+			color: #0f172a !important;
+			border: none;
+			padding: 0.75rem 1.5rem;
+			border-radius: 0.5rem;
+			font-weight: bold;
+			cursor: pointer;
+		}
+
+		/* Cards */
+		.card, [class*="card"] {
+			background-color: #1e293b !important;
+			border: 1px solid #334155 !important;
+		}
+
+		/* Text colors */
+		h1, h2, h3, h4, h5, h6 {
+			color: #e2e8f0;
+		}
+
+		label {
+			color: #94a3b8;
+		}
+
+		/* Cyber card styling */
+		.cyber-card {
+			background: var(--bg-secondary);
+			border: 1px solid var(--bg-elevated);
+			position: relative;
+			overflow: hidden;
+		}
+
+		.cyber-card::before {
+			content: '';
+			position: absolute;
+			top: 0;
+			left: -100%;
+			width: 100%;
+			height: 2px;
+			background: linear-gradient(90deg, transparent, var(--neon-cyan), transparent);
+			animation: scan-line 3s linear infinite;
+		}
+
+		@keyframes scan-line {
+			to { left: 100%; }
+		}
+
+		/* Corner accents */
+		.cyber-corners { position: relative; }
+		.cyber-corners::before,
+		.cyber-corners::after {
+			content: '';
+			position: absolute;
+			width: 20px;
+			height: 20px;
+			border: 2px solid var(--neon-cyan);
+		}
+		.cyber-corners::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+		.cyber-corners::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+		/* Reduced motion */
+		@media (prefers-reduced-motion: reduce) {
+			.cyber-card::before { animation: none; }
+		}
+	</style></head><body class="bg-[#0f172a] min-h-screen text-[#e2e8f0]"><main class="min-h-screen flex items-center justify-center bg-[#0f172a]"><link rel="stylesheet" href="/static/css/validation.css"><div class="min-h-screen bg-[#0f172a] flex items-center justify-center p-4 relative overflow-hidden"><!-- Grid Background --><div class="absolute inset-0 pointer-events-none" style="background-image: repeating-linear-gradient(0deg, transparent, transparent 50px, rgba(0, 240, 255, 0.03) 50px, rgba(0, 240, 255, 0.03) 51px), repeating-linear-gradient(90deg, transparent, transparent 50px, rgba(0, 240, 255, 0.03) 50px, rgba(0, 240, 255, 0.03) 51px);"></div><!-- Floating Particles --><div class="absolute inset-0 overflow-hidden pointer-events-none"><div class="particle particle-1"></div><div class="particle particle-2"></div><div class="particle particle-3"></div><div class="particle particle-4"></div><div class="particle particle-5"></div></div><!-- Glow Orbs --><div class="absolute top-1/4 left-1/4 w-96 h-96 bg-[#00f0ff] rounded-full filter blur-[150px] opacity-10 animate-pulse"></div><div class="absolute bottom-1/4 right-1/4 w-80 h-80 bg-[#ff00ff] rounded-full filter blur-[150px] opacity-10 animate-pulse" style="animation-delay: 1s;"></div><!-- Login Card --><div class="relative w-full max-w-md"><div class="absolute -inset-1 bg-gradient-to-r from-[#00f0ff] via-[#3b82f6] to-[#ff00ff] rounded-lg blur opacity-20"></div><div class="relative bg-[#1e293b]/90 backdrop-blur-xl rounded-lg border border-[#334155] p-8 overflow-hidden"><div class="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-[#00f0ff] to-transparent animate-scan"></div><div class="absolute top-0 left-0 w-6 h-6 border-t-2 border-l-2 border-[#00f0ff]"></div><div class="absolute top-0 right-0 w-6 h-6 border-t-2 border-r-2 border-[#00f0ff]"></div><div class="absolute bottom-0 left-0 w-6 h-6 border-b-2 border-l-2 border-[#00f0ff]"></div><div class="absolute bottom-0 right-0 w-6 h-6 border-b-2 border-r-2 border-[#00f0ff]"></div><div class="flex justify-center mb-6"><svg width="60" height="60" viewBox="0 0 60 60" class="drop-shadow-[0_0_10px_rgba(0,240,255,0.5)]"><defs><linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#00f0ff"></stop><stop offset="100%" style="stop-color:#3b82f6"></stop></linearGradient></defs> <polygon points="30,5 55,20 55,50 30,65 5,50 5,20" fill="none" stroke="url(#logoGrad)" stroke-width="2"></polygon> <polygon points="30,15 45,25 45,45 30,55 15,45 15,25" fill="url(#logoGrad)" opacity="0.3"></polygon> <text x="30" y="38" text-anchor="middle" fill="#00f0ff" font-size="16" font-weight="bold">M</text></svg></div><h2 class="text-2xl font-bold text-center text-[#00f0ff] mb-2 tracking-wider">SIGN IN</h2><p class="text-center text-[#64748b] text-sm mb-6">Access your hosting control panel</p><form id="loginForm" method="POST" action="/login" class="space-y-5" data-validate-form><input type="hidden" name="csrf_token" value="XMrt6dv2S1hk5kwU0_qujI15txfTcAWxEXOT3-gXV3c="><div><label class="block text-[#94a3b8] text-sm mb-2 font-medium">Email Address</label> <input type="email" name="email" required maxlength="255" placeholder="you@example.com" data-validate="required email maxLength:255" class="w-full px-4 py-3 bg-[#0f172a]/80 border-2 border-[#334155] rounded-lg text-[#e2e8f0] placeholder-[#4a5568] focus:border-[#00f0ff] focus:outline-none focus:shadow-[0_0_15px_rgba(0,240,255,0.3)] transition-all"></div><div><label class="block text-[#94a3b8] text-sm mb-2 font-medium">Password</label> <input type="password" name="password" required maxlength="128" placeholder="Enter your password" data-validate="required maxLength:128" class="w-full px-4 py-3 bg-[#0f172a]/80 border-2 border-[#334155] rounded-lg text-[#e2e8f0] placeholder-[#4a5568] focus:border-[#00f0ff] focus:outline-none focus:shadow-[0_0_15px_rgba(0,240,255,0.3)] transition-all"></div><div class="flex items-center justify-between text-sm"><label class="flex items-center gap-2 text-[#94a3b8] cursor-pointer"><input type="checkbox" name="remember" class="w-4 h-4 rounded"><span>Remember me</span></label> <a href="/forgot-password" class="text-[#00f0ff] hover:underline">Forgot Password?</a></div><button type="submit" class="w-full py-3 mt-2 bg-gradient-to-r from-[#00f0ff] to-[#3b82f6] text-[#0f172a] rounded-lg font-bold uppercase tracking-wider hover:shadow-[0_0_30px_rgba(0,240,255,0.5)] transition-all">Sign In</button></form><div class="mt-6 pt-6 border-t border-[#334155]"><p class="text-center text-sm text-[#64748b]">Don't have an account? <a href="/register" class="text-[#00f0ff] hover:underline ml-1 font-medium">Create Account</a></p></div></div></div><style>
+				@keyframes scan { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+				.animate-scan { animation: scan 3s linear infinite; }
+				@keyframes float { 0%, 100% { transform: translateY(0); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translateY(-100vh); opacity: 0; } }
+				.particle { position: absolute; width: 4px; height: 4px; background: #00f0ff; border-radius: 50%; box-shadow: 0 0 10px #00f0ff; }
+				.particle-1 { left: 10%; bottom: -10px; animation: float 8s infinite; }
+				.particle-2 { left: 30%; bottom: -10px; animation: float 12s infinite 2s; }
+				.particle-3 { left: 50%; bottom: -10px; animation: float 10s infinite 4s; }
+				.particle-4 { left: 70%; bottom: -10px; animation: float 14s infinite 1s; }
+				.particle-5 { left: 90%; bottom: -10px; animation: float 9s infinite 3s; }
+			</style><script src="/static/js/validation.js"></script><script>
+				// Initialize validation for login form
+				document.addEventListener('DOMContentLoaded', function() {
+					const validator = new ValidationManager('#loginForm');
+				});
+			</script></div></main><!-- Theme Toggle Button --><button id="theme-toggle" onclick="ThemeManager.toggle()" title="Toggle theme" aria-label="Toggle dark/light mode">🌙</button></body></html>

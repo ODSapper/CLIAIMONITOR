@@ -18,6 +18,7 @@ import (
 	"github.com/CLIAIMONITOR/internal/memory"
 	"github.com/CLIAIMONITOR/internal/metrics"
 	"github.com/CLIAIMONITOR/internal/persistence"
+	"github.com/CLIAIMONITOR/internal/quotes"
 	"github.com/CLIAIMONITOR/internal/server"
 	"github.com/CLIAIMONITOR/internal/types"
 )
@@ -129,6 +130,9 @@ func main() {
 	// Currently using basic text search - semantic search can be added when LM Studio is reliably available
 
 	_ = learningDB // learningDB is now available for use in agents/handlers
+
+	// Initialize quotes system (RTS-style spawn/shutdown quotes)
+	quotes.Init(basePath)
 
 	// Start green output for server pane
 	fmt.Print(colorGreen)
@@ -293,6 +297,20 @@ func main() {
 		fmt.Println("  Captain terminal spawned ✓")
 	}
 	fmt.Println()
+
+	// Start hourly uptime announcement ticker
+	startTime := time.Now()
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			uptime := time.Since(startTime).Round(time.Minute)
+			hours := int(uptime.Hours())
+			fmt.Printf("  [UPTIME] %s - Running for %d hour(s). %s\n",
+				time.Now().Format("15:04"), hours, quotes.HourlyQuote())
+		}
+	}()
 
 	// Wait for shutdown signal, API shutdown request, Captain clean exit, or server error
 	select {

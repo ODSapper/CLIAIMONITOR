@@ -296,15 +296,15 @@ func (s *CaptainSupervisor) spawnCaptain() error {
 
 	if weztermPane != "" {
 		// We're inside WezTerm - split pane to put Captain ABOVE server
-		// Layout: Captain (top, 95%) | Server (bottom, ~2-3 lines)
+		// Layout: Captain (top, 85%) | Server (bottom, 15%)
 		fmt.Printf("[SUPERVISOR] Running inside WezTerm (pane %s), splitting for Captain above\n", weztermPane)
 
 		// Split the current pane to create Captain's pane ABOVE (server stays at bottom)
 		// Using --top means new pane (Captain) goes above, server pane stays below
-		// --percent 95 gives Captain 95% of space, leaving ~2-3 lines for server
+		// --percent 85 gives Captain 85%, server gets 15% for logs
 		splitCmd := exec.Command("wezterm.exe", "cli", "split-pane",
 			"--top",
-			"--percent", "95",
+			"--percent", "85",
 			"--cwd", s.basePath,
 			"--", "cmd.exe")
 

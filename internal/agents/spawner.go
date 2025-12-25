@@ -15,6 +15,7 @@ import (
 
 	"github.com/CLIAIMONITOR/internal/instance"
 	"github.com/CLIAIMONITOR/internal/memory"
+	"github.com/CLIAIMONITOR/internal/quotes"
 	"github.com/CLIAIMONITOR/internal/types"
 	"github.com/CLIAIMONITOR/internal/wezterm"
 )
@@ -159,7 +160,11 @@ func (s *ProcessSpawner) getSpawnTarget() (needsNewWindow, needsNewTab bool, spl
 	})
 
 	// Determine split target based on current count
-	// Grid: [0][1][2] / [3][4][5] / [6][7][8]
+	// Grid layout (3x3): Row 0 created by splitting right,
+	// Rows 1-2 created by splitting the row above downward
+	//   [0][1][2]  Ã¢â€ Â split right
+	//   [3][4][5]  Ã¢â€ Â split row 0 bottom
+	//   [6][7][8]  Ã¢â€ Â split row 1 bottom
 	switch count {
 	case 1:
 		return false, false, panes[0].PaneID, "right"
@@ -168,15 +173,15 @@ func (s *ProcessSpawner) getSpawnTarget() (needsNewWindow, needsNewTab bool, spl
 	case 3:
 		return false, false, panes[0].PaneID, "bottom"
 	case 4:
-		return false, false, panes[3].PaneID, "right"
+		return false, false, panes[1].PaneID, "bottom" // Split top-middle
 	case 5:
-		return false, false, panes[4].PaneID, "right"
+		return false, false, panes[2].PaneID, "bottom" // Split top-right
 	case 6:
 		return false, false, panes[3].PaneID, "bottom"
 	case 7:
-		return false, false, panes[6].PaneID, "right"
+		return false, false, panes[4].PaneID, "bottom" // Split mid-middle
 	case 8:
-		return false, false, panes[7].PaneID, "right"
+		return false, false, panes[5].PaneID, "bottom" // Split mid-right
 	default:
 		return false, true, panes[0].PaneID, ""
 	}
@@ -250,7 +255,7 @@ func (s *ProcessSpawner) getVisibleSpawnTarget() (needsNewTab bool, splitFromPan
 
 	count := len(panes)
 
-	// Grid: [0][1][2] / [3][4][5] / [6][7][8]
+	// Grid layout (3x3): Row 0 by splitting right, rows 1-2 by splitting down
 	switch count {
 	case 1:
 		return false, panes[0].PaneID, "right"
@@ -259,15 +264,15 @@ func (s *ProcessSpawner) getVisibleSpawnTarget() (needsNewTab bool, splitFromPan
 	case 3:
 		return false, panes[0].PaneID, "bottom"
 	case 4:
-		return false, panes[3].PaneID, "right"
+		return false, panes[1].PaneID, "bottom" // Split top-middle
 	case 5:
-		return false, panes[4].PaneID, "right"
+		return false, panes[2].PaneID, "bottom" // Split top-right
 	case 6:
 		return false, panes[3].PaneID, "bottom"
 	case 7:
-		return false, panes[6].PaneID, "right"
+		return false, panes[4].PaneID, "bottom" // Split mid-middle
 	case 8:
-		return false, panes[7].PaneID, "right"
+		return false, panes[5].PaneID, "bottom" // Split mid-right
 	default:
 		return true, panes[0].PaneID, ""
 	}
@@ -490,7 +495,7 @@ func (s *ProcessSpawner) SpawnAgentWithOptions(config types.AgentConfig, agentID
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
-	log.Printf("[SPAWNER] Agent %s launched (PID: %d, Pane: %d, headless=%v)", agentID, pid, paneID, headless)
+	log.Printf("\"%s\" - %s", quotes.SpawnQuote(), agentID)
 
 	if cmd != nil && cmd.Process != nil {
 		go func() {
@@ -512,7 +517,7 @@ func (s *ProcessSpawner) StopAgent(agentID string) error {
 
 // StopAgentWithReason terminates an agent process with a specific reason
 func (s *ProcessSpawner) StopAgentWithReason(agentID string, reason string) error {
-	log.Printf("[SPAWNER] Stopping agent %s with reason: %s", agentID, reason)
+	log.Printf("\"%s\" - %s", quotes.ShutdownQuote(), agentID)
 
 	// 1. Remove from running agents map
 	s.mu.Lock()

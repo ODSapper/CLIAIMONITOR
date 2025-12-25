@@ -3,17 +3,7 @@
 ## Project Overview
 AI agent orchestration system using Claude via MCP (Model Context Protocol).
 
-## Quick Start
-```bash
-# Build
-go build -o cliaimonitor.exe ./cmd/cliaimonitor/
-
-# Run
-./cliaimonitor.exe
-
-# Health check
-curl http://localhost:3000/api/health
-```
+Use spawned agents unless directed specifically to use subagents (sonnet for most things. Opus is for planning and esclations). Save your DB context when completing milestones or making plans. Prefer to use the db over creating extra .md documents. Only documents for end users should be left in production dirs. When you make a plan you should always include a code review and debugging phase(you can use agents to review code while the next phase of a plan is being written. Plan in parallel). We prefer quality over speed when producing code. 
 
 ## Current Status (2025-12-08)
 
@@ -40,19 +30,7 @@ Captain can now save and restore context across restarts using `memory.db`.
 
 **At Startup**: Call `get_all_context` MCP tool to restore previous session state.
 
-### Previous Work: Captain Card Redesign
-**Completed**:
-1. Captain card with embedded chat at top of agent grid (2-column span)
-2. Captain health check - sets `captain_connected=true` on startup when NATS running
-3. Removed New Task button/modal - use Captain Chat instead
-4. Fixed missing `updateConnectionStatus()` method
-5. Bottom row now 2 columns (Alerts + Metrics)
-6. Tested spawner - agents spawn via API, register via MCP, send NATS heartbeats
 
-**Dashboard shows**:
-- Captain card at top with chat
-- Agent cards below in grid
-- Green dots for NATS/Captain when connected
 
 ## Key Directories
 - `cmd/cliaimonitor/` - Main entry point
@@ -87,26 +65,11 @@ curl -X POST http://localhost:3000/api/agents/spawn \
 - `Snake` - Reconnaissance & Special Ops
 
 ## Architecture
-```
-Browser Dashboard ←→ WebSocket Hub ←→ Server State
-                                    ↓
-NATS Server (embedded, port 4222) ←→ Captain/Agents
-                                    ↓
-                            MCP SSE Endpoints (/mcp/sse)
-```
 
-**Agent Connection Flow**:
-1. Agent spawned via `/api/agents/spawn` (creates terminal window)
-2. Agent connects to MCP SSE endpoint
-3. Agent calls `register_agent` MCP tool
-4. Agent sends heartbeats via NATS (`agent.{id}.heartbeat`)
-5. Dashboard updates via WebSocket broadcast
 
 ## Debug Tips
 - Browser console: Look for `[DASHBOARD]` prefixed logs
 - Server logs: Look for `[NATS-BRIDGE]` and `[CAPTAIN]` prefixed logs
 - API test: `curl http://localhost:3000/api/state`
 
-## Session Context Files
-- `docs/context/2025-12-08-captain-card-session.md` - Current session details
-- `docs/plans/2025-12-08-captain-card-redesign.md` - Implementation plan
+
