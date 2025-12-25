@@ -176,7 +176,8 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ConfigName  string `json:"config_name"`
 		ProjectPath string `json:"project_path"`
-		Task        string `json:"task"` // Optional initial task for agent
+		Task        string `json:"task"`     // Optional initial task for agent
+		Headless    *bool  `json:"headless"` // true=hidden workspace (default), false=visible tab
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.respondError(w, http.StatusBadRequest, "Invalid request body")
@@ -248,8 +249,14 @@ func (s *Server) handleSpawnAgent(w http.ResponseWriter, r *http.Request) {
 		initialPrompt += " Await instructions from your terminal."
 	}
 
-	// Spawn agent with initial prompt
-	pid, err := s.spawner.SpawnAgent(*agentConfig, agentID, projectPath, initialPrompt)
+	// Determine headless mode (default: false = visible in Captain's window)
+	headless := false
+	if req.Headless != nil {
+		headless = *req.Headless
+	}
+
+	// Spawn agent with options
+	pid, err := s.spawner.SpawnAgentWithOptions(*agentConfig, agentID, projectPath, initialPrompt, headless)
 	if err != nil {
 		s.respondError(w, http.StatusInternalServerError, err.Error())
 		return
