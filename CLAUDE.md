@@ -3,7 +3,7 @@
 ## Project Overview
 AI agent orchestration system using Claude via MCP (Model Context Protocol).
 
-Use spawned agents unless directed specifically to use subagents (sonnet for most things. Opus is for planning and esclations). Save your DB context when completing milestones or making plans. Prefer to use the db over creating extra .md documents. Only documents for end users should be left in production dirs. When you make a plan you should always include a code review and debugging phase(you can use agents to review code while the next phase of a plan is being written. Plan in parallel). We prefer quality over speed when producing code. 
+Use spawned agents unless directed specifically to use subagents (sonnet for most things. Opus is for planning and esclations). Save your DB context when completing milestones or making plans. Prefer to use the db over creating extra .md documents. Only documents for end users should be left in production dirs. When you make a plan you should always include a code review and debugging phase(you can use agents to review code while the next phase of a plan is being written. Plan in parallel). We prefer quality over speed when producing code. Try to remember to close agents when they are done working. 
 
 ## Current Status (2025-12-08)
 
